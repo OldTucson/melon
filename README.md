@@ -1,4 +1,4 @@
-# Pattern Library
+# melon
 
 面向图案设计师的私有 Web 图案资料库，使用 Next.js 和阿里云 OSS 管理 PSD、AI、JPG、PNG 与 Procreate 原文件。
 
@@ -6,7 +6,7 @@
 
 ## 文档
 
-- [产品与技术设计](docs/superpowers/specs/2026-10-08-pattern-library-web-design.md)
+- [产品与技术设计](docs/superpowers/specs/2026-10-08-melon-web-design.md)
 
 ## 已确认方向
 
