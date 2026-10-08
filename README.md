@@ -7,6 +7,7 @@
 ## 文档
 
 - [产品与技术设计](docs/superpowers/specs/2026-10-08-melon-web-design.md)
+- [商业授权与数据看板设计](docs/superpowers/specs/2026-10-08-melon-commercial-authorization-dashboard-design.md)
 
 ## 已确认方向
 
@@ -14,4 +15,6 @@
 - Next.js 全栈单体、PostgreSQL、私有阿里云 OSS。
 - 浏览器直传 OSS，支持分片进度、取消和重选文件续传。
 - 支持预览、下载、标签、筛选、离线元数据与标签同步。
+- 每张图案可记录多次商业授权，并提供授权收入与图库状态看板。
+- 浅色以白色为主体，夜间模式以近黑色为主体，采用石墨靛蓝设计语言。
 - 私有账号体系，不开放公开注册。
