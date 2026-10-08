@@ -4,7 +4,12 @@ import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   plugins: [react()],
-  resolve: { alias: { "@": path.resolve(process.cwd(), "src") } },
+  resolve: {
+    alias: {
+      "@": path.resolve(process.cwd(), "src"),
+      "server-only": path.resolve(process.cwd(), "src/test/server-only.ts"),
+    },
+  },
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
