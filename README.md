@@ -8,6 +8,7 @@
 
 - [产品与技术设计](docs/superpowers/specs/2026-10-08-melon-web-design.md)
 - [商业授权与数据看板设计](docs/superpowers/specs/2026-10-08-melon-commercial-authorization-dashboard-design.md)
+- [MVP 实施路线图](docs/superpowers/plans/2026-10-08-melon-mvp-roadmap.md)
 
 ## 已确认方向
 
