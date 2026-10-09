@@ -1,0 +1,217 @@
+import "server-only";
+
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  exists,
+  gt,
+  getTableColumns,
+  inArray,
+  lt,
+  ne,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
+
+import { db, type DbTransaction } from "@/lib/db/client";
+import { patterns, patternTags } from "@/lib/db/schema";
+
+import type { PatternPatch, PatternQuery } from "./contracts";
+import type { PatternCursor } from "./pattern-cursor";
+
+export type PatternRow = typeof patterns.$inferSelect;
+
+const escapeLike = (value: string) => value.replace(/[\\%_]/g, "\\$&");
+
+function cursorPredicate(cursor: PatternCursor): SQL {
+  if (cursor.sort === "updated_desc") {
+    return or(
+      sql`${patterns.updatedAt} < ${cursor.value}::timestamptz`,
+      and(
+        sql`${patterns.updatedAt} = ${cursor.value}::timestamptz`,
+        lt(patterns.id, cursor.id),
+      ),
+    )!;
+  }
+  if (cursor.sort === "created_desc") {
+    return or(
+      sql`${patterns.createdAt} < ${cursor.value}::timestamptz`,
+      and(
+        sql`${patterns.createdAt} = ${cursor.value}::timestamptz`,
+        lt(patterns.id, cursor.id),
+      ),
+    )!;
+  }
+  if (cursor.sort === "name_asc") {
+    return or(
+      gt(patterns.name, cursor.value),
+      and(eq(patterns.name, cursor.value), gt(patterns.id, cursor.id)),
+    )!;
+  }
+
+  const value = BigInt(cursor.value);
+  return or(
+    lt(patterns.sizeBytes, value),
+    and(eq(patterns.sizeBytes, value), lt(patterns.id, cursor.id)),
+  )!;
+}
+
+function sortOrder(sort: PatternQuery["sort"]) {
+  if (sort === "created_desc") {
+    return [desc(patterns.createdAt), desc(patterns.id)] as const;
+  }
+  if (sort === "name_asc") {
+    return [asc(patterns.name), asc(patterns.id)] as const;
+  }
+  if (sort === "size_desc") {
+    return [desc(patterns.sizeBytes), desc(patterns.id)] as const;
+  }
+  return [desc(patterns.updatedAt), desc(patterns.id)] as const;
+}
+
+export async function listPatternRows(
+  ownerId: string,
+  query: PatternQuery,
+  cursor: PatternCursor | undefined,
+) {
+  const predicates: SQL[] = [
+    eq(patterns.ownerId, ownerId),
+    ne(patterns.status, "deleted"),
+  ];
+
+  if (query.q) {
+    const contains = `%${escapeLike(query.q)}%`;
+    predicates.push(
+      or(
+        sql`${patterns.name} ilike ${contains} escape '\\'`,
+        sql`${patterns.originalFilename} ilike ${contains} escape '\\'`,
+      )!,
+    );
+  }
+  if (query.formats.length > 0) {
+    predicates.push(inArray(patterns.extension, query.formats));
+  }
+  if (query.favorite !== undefined) {
+    predicates.push(eq(patterns.isFavorite, query.favorite));
+  }
+  if (query.previewStatus) {
+    predicates.push(eq(patterns.previewStatus, query.previewStatus));
+  }
+  if (query.tagIds.length > 0) {
+    const ownedActiveRelations = and(
+      eq(patternTags.ownerId, ownerId),
+      eq(patternTags.patternId, patterns.id),
+      eq(patternTags.isActive, true),
+      inArray(patternTags.tagId, query.tagIds),
+    );
+
+    if (query.tagMode === "any") {
+      predicates.push(
+        exists(
+          db
+            .select({ value: sql`1` })
+            .from(patternTags)
+            .where(ownedActiveRelations),
+        ),
+      );
+    } else {
+      const allTags = db
+        .select({ patternId: patternTags.patternId })
+        .from(patternTags)
+        .where(ownedActiveRelations)
+        .groupBy(patternTags.patternId)
+        .having(
+          sql`count(distinct ${patternTags.tagId}) = ${query.tagIds.length}`,
+        );
+      predicates.push(inArray(patterns.id, allTags));
+    }
+  }
+  if (cursor) predicates.push(cursorPredicate(cursor));
+
+  return db
+    .select({
+      ...getTableColumns(patterns),
+      updatedCursorValue: sql<string>`to_char(${patterns.updatedAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+      createdCursorValue: sql<string>`to_char(${patterns.createdAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+    })
+    .from(patterns)
+    .where(and(...predicates))
+    .orderBy(...sortOrder(query.sort))
+    .limit(query.limit + 1);
+}
+
+export async function getPatternRow(
+  ownerId: string,
+  patternId: string,
+  tx?: DbTransaction,
+) {
+  const executor = tx ?? db;
+  const [row] = await executor
+    .select()
+    .from(patterns)
+    .where(
+      and(
+        eq(patterns.ownerId, ownerId),
+        eq(patterns.id, patternId),
+        ne(patterns.status, "deleted"),
+      ),
+    )
+    .limit(1);
+  return row;
+}
+
+export async function lockPatternRow(
+  ownerId: string,
+  tx: DbTransaction,
+  patternId: string,
+) {
+  const [row] = await tx
+    .select()
+    .from(patterns)
+    .where(
+      and(
+        eq(patterns.ownerId, ownerId),
+        eq(patterns.id, patternId),
+        ne(patterns.status, "deleted"),
+      ),
+    )
+    .limit(1)
+    .for("update");
+  return row;
+}
+
+export async function updatePatternRow(
+  ownerId: string,
+  tx: DbTransaction,
+  input: {
+    patternId: string;
+    patch: PatternPatch;
+    changeSeq: bigint;
+    updatedAt: Date;
+  },
+) {
+  const [updated] = await tx
+    .update(patterns)
+    .set({
+      ...(input.patch.name === undefined ? {} : { name: input.patch.name }),
+      ...(input.patch.isFavorite === undefined
+        ? {}
+        : { isFavorite: input.patch.isFavorite }),
+      version: sql`${patterns.version} + 1`,
+      changeSeq: input.changeSeq,
+      updatedAt: input.updatedAt,
+    })
+    .where(
+      and(
+        eq(patterns.ownerId, ownerId),
+        eq(patterns.id, input.patternId),
+        eq(patterns.version, input.patch.version),
+        ne(patterns.status, "deleted"),
+      ),
+    )
+    .returning();
+  return updated;
+}
