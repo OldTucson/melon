@@ -18,6 +18,6 @@ describe("LoginForm", () => {
       "type",
       "submit",
     );
-    expect(screen.queryByRole("link", { name: /注册/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("form", { name: "登录" })).toBeInTheDocument();
   });
 });
