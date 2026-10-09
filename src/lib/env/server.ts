@@ -2,6 +2,12 @@ import "server-only";
 
 import { z } from "zod";
 
+const optionalNonBlankString = z.preprocess(
+  (value) =>
+    typeof value === "string" && value.trim() === "" ? undefined : value,
+  z.string().min(1).optional(),
+);
+
 const serverEnvSchema = z
   .object({
     NODE_ENV: z
@@ -20,8 +26,8 @@ const serverEnvSchema = z
       .transform((value) => value === "true"),
     ALIYUN_STS_ROLE_ARN: z.string().startsWith("acs:ram::"),
     OSS_ADAPTER: z.enum(["real", "fake"]).default("real"),
-    ALIBABA_CLOUD_ACCESS_KEY_ID: z.string().min(1).optional(),
-    ALIBABA_CLOUD_ACCESS_KEY_SECRET: z.string().min(1).optional(),
+    ALIBABA_CLOUD_ACCESS_KEY_ID: optionalNonBlankString,
+    ALIBABA_CLOUD_ACCESS_KEY_SECRET: optionalNonBlankString,
   })
   .superRefine((value, context) => {
     if (

@@ -35,6 +35,27 @@ describe("parseServerEnv", () => {
     ).toThrow(/provided together/);
   });
 
+  it("normalizes a blank AccessKey pair to undefined", () => {
+    const parsed = parseServerEnv({
+      ...validEnv,
+      ALIBABA_CLOUD_ACCESS_KEY_ID: "",
+      ALIBABA_CLOUD_ACCESS_KEY_SECRET: "",
+    });
+
+    expect(parsed.ALIBABA_CLOUD_ACCESS_KEY_ID).toBeUndefined();
+    expect(parsed.ALIBABA_CLOUD_ACCESS_KEY_SECRET).toBeUndefined();
+  });
+
+  it("rejects a nonblank AccessKey paired with a blank secret", () => {
+    expect(() =>
+      parseServerEnv({
+        ...validEnv,
+        ALIBABA_CLOUD_ACCESS_KEY_ID: "id-only",
+        ALIBABA_CLOUD_ACCESS_KEY_SECRET: "   ",
+      }),
+    ).toThrow(/provided together/);
+  });
+
   it("accepts a complete AccessKey pair", () => {
     const parsed = parseServerEnv({
       ...validEnv,
@@ -45,6 +66,21 @@ describe("parseServerEnv", () => {
     expect(parsed.ALIBABA_CLOUD_ACCESS_KEY_ID).toBe("test-access-key-id");
     expect(parsed.ALIBABA_CLOUD_ACCESS_KEY_SECRET).toBe(
       "test-access-key-secret",
+    );
+  });
+
+  it("preserves nonblank AccessKey values exactly", () => {
+    const parsed = parseServerEnv({
+      ...validEnv,
+      ALIBABA_CLOUD_ACCESS_KEY_ID: "  test-access-key-id  ",
+      ALIBABA_CLOUD_ACCESS_KEY_SECRET: "  test-access-key-secret  ",
+    });
+
+    expect(parsed.ALIBABA_CLOUD_ACCESS_KEY_ID).toBe(
+      "  test-access-key-id  ",
+    );
+    expect(parsed.ALIBABA_CLOUD_ACCESS_KEY_SECRET).toBe(
+      "  test-access-key-secret  ",
     );
   });
 
