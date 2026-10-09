@@ -167,6 +167,42 @@ describe("AuthenticatedThemeProvider", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps the saved confirmation when setTheme identity changes", async () => {
+    const queue = queuedFetch();
+    vi.stubGlobal("fetch", queue.fetchMock);
+    const latestSetTheme = vi.fn();
+    let activeSetTheme = setTheme;
+    vi.mocked(useTheme).mockImplementation(
+      () =>
+        ({
+          setTheme: activeSetTheme,
+        }) as unknown as ReturnType<typeof useTheme>,
+    );
+    const user = userEvent.setup();
+
+    render(workspace("user-a", "light"));
+
+    await user.click(screen.getByRole("radio", { name: "夜间" }));
+    await settle(queue.requests[0]!, 200);
+    expect(screen.getByRole("radio", { name: "夜间" })).toBeChecked();
+
+    activeSetTheme = latestSetTheme;
+    await user.click(screen.getByRole("radio", { name: "跟随系统" }));
+    expect(queue.requests).toHaveLength(2);
+    await settle(queue.requests[1]!, 500);
+
+    expect(queue.requests.map(({ body }) => body)).toEqual([
+      { themePreference: "dark" },
+      { themePreference: "system" },
+    ]);
+    expect(queue.maxActiveRequests).toBe(1);
+    expect(screen.getByRole("radio", { name: "夜间" })).toBeChecked();
+    expect(latestSetTheme).toHaveBeenLastCalledWith("dark");
+    expect(
+      screen.getByRole("alert", { name: "主题保存失败" }),
+    ).toBeInTheDocument();
+  });
+
   it("isolates an old user's failed request and queued intent after account switch", async () => {
     const queue = queuedFetch();
     vi.stubGlobal("fetch", queue.fetchMock);

@@ -58,6 +58,11 @@ function AuthenticatedThemeCoordinator({
   const latestIntent = useRef(serverPreference);
   const mounted = useRef(true);
   const pendingPreference = useRef<ThemePreference | null>(null);
+  const setThemeRef = useRef(setTheme);
+
+  useEffect(() => {
+    setThemeRef.current = setTheme;
+  }, [setTheme]);
 
   useEffect(() => {
     confirmedPreference.current = serverPreference;
@@ -69,8 +74,8 @@ function AuthenticatedThemeCoordinator({
     latestIntent.current = serverPreference;
     setError(false);
     setPreference(serverPreference);
-    setTheme(serverPreference);
-  }, [serverPreference, setTheme]);
+    setThemeRef.current(serverPreference);
+  }, [serverPreference]);
 
   useEffect(() => {
     mounted.current = true;
@@ -123,7 +128,7 @@ function AuthenticatedThemeCoordinator({
     if (!saved && latestIntent.current === targetPreference) {
       const rollbackPreference = confirmedPreference.current;
       setPreference(rollbackPreference);
-      setTheme(rollbackPreference);
+      setThemeRef.current(rollbackPreference);
       setError(true);
     }
   };
@@ -132,7 +137,7 @@ function AuthenticatedThemeCoordinator({
     latestIntent.current = nextPreference;
     setError(false);
     setPreference(nextPreference);
-    setTheme(nextPreference);
+    setThemeRef.current(nextPreference);
 
     if (inFlight.current) {
       pendingPreference.current = nextPreference;
