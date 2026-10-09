@@ -4,7 +4,10 @@ import OSS from "ali-oss";
 import { describe, expect, it, vi } from "vitest";
 
 import { sourceObjectKey } from "./object-keys";
-import { createAlibabaOssAdapter } from "./oss-adapter";
+import {
+  createAlibabaOssAdapter,
+  createDefaultCredentialResolver,
+} from "./oss-adapter";
 
 const key = sourceObjectKey({
   ownerId: randomUUID(),
@@ -91,6 +94,10 @@ describe("createAlibabaOssAdapter", () => {
     "https://assets.example.test?mode=unsafe",
     "https://assets.example.test#",
     "https://assets.example.test#fragment",
+    "https://[::1]",
+    "https://[2001:db8::1]:8443",
+    "https://assets.example.test:0",
+    "https://assets.example.test:65536",
   ])("rejects non-origin real OSS endpoint %s before client creation", (endpoint) => {
     const createClient = vi.fn();
 
@@ -132,6 +139,80 @@ describe("createAlibabaOssAdapter", () => {
       contentType: "image/png",
     });
     expect(createClient).toHaveBeenCalledTimes(2);
+  });
+
+  it("rebuilds the default credential provider after its full chain fails", async () => {
+    const events: string[] = [];
+    const createCredentialProvider = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        events.push("factory:first");
+        return {
+          async getCredential() {
+            events.push("first:primary");
+            events.push("first:fallback");
+            throw new Error("credential chain exhausted");
+          },
+        };
+      })
+      .mockImplementationOnce(() => {
+        events.push("factory:second");
+        return {
+          async getCredential() {
+            events.push("second:primary");
+            return freshCredential;
+          },
+        };
+      });
+    const resolveCredential = createDefaultCredentialResolver(
+      createCredentialProvider,
+    );
+
+    await expect(resolveCredential()).rejects.toThrow(
+      "credential chain exhausted",
+    );
+    await expect(resolveCredential()).resolves.toEqual(freshCredential);
+    await expect(resolveCredential()).resolves.toEqual(freshCredential);
+
+    expect(createCredentialProvider).toHaveBeenCalledTimes(2);
+    expect(events).toEqual([
+      "factory:first",
+      "first:primary",
+      "first:fallback",
+      "factory:second",
+      "second:primary",
+      "second:primary",
+    ]);
+  });
+
+  it("shares concurrent credential initialization and caches a successful provider", async () => {
+    let resolveFirst!: (credential: typeof freshCredential) => void;
+    const firstCredential = new Promise<typeof freshCredential>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const getCredential = vi
+      .fn()
+      .mockImplementationOnce(() => firstCredential)
+      .mockResolvedValue(freshCredential);
+    const createCredentialProvider = vi.fn(() => ({ getCredential }));
+    const resolveCredential = createDefaultCredentialResolver(
+      createCredentialProvider,
+    );
+    const first = resolveCredential();
+    const concurrent = resolveCredential();
+    await Promise.resolve();
+
+    expect(createCredentialProvider).toHaveBeenCalledOnce();
+    expect(getCredential).toHaveBeenCalledOnce();
+    resolveFirst(freshCredential);
+    await expect(Promise.all([first, concurrent])).resolves.toEqual([
+      freshCredential,
+      freshCredential,
+    ]);
+
+    await expect(resolveCredential()).resolves.toEqual(freshCredential);
+    expect(createCredentialProvider).toHaveBeenCalledOnce();
+    expect(getCredential).toHaveBeenCalledTimes(2);
   });
 
   it("performs an inclusive HTTP range read and returns an isolated byte view", async () => {
@@ -208,6 +289,39 @@ describe("createAlibabaOssAdapter", () => {
 
     expect(createClient).not.toHaveBeenCalled();
     expect(sdk.deleteMulti).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a later delete failure and safely retries the full idempotent list", async () => {
+    const sdk = createSdk();
+    const keys = createObjectKeys(1_001);
+    const deleted = new Set<string>();
+    let failSecondBatch = true;
+    sdk.deleteMulti.mockImplementation(async (batch) => {
+      if (batch.length === 1 && failSecondBatch) {
+        failSecondBatch = false;
+        throw new Error("second delete batch failed");
+      }
+      batch.forEach((item: string) => deleted.add(item));
+      return { deleted: batch };
+    });
+    const adapter = createAlibabaOssAdapter(config, {
+      createClient: async () => sdk,
+    });
+
+    await expect(adapter.deleteObjects(keys)).rejects.toThrow(
+      "second delete batch failed",
+    );
+    expect(deleted.size).toBe(1_000);
+    expect(deleted.has(keys[1_000]!)).toBe(false);
+
+    await expect(adapter.deleteObjects(keys)).resolves.toBeUndefined();
+    expect(deleted.size).toBe(1_001);
+    expect(sdk.deleteMulti.mock.calls.map(([batch]) => batch.length)).toEqual([
+      1_000,
+      1,
+      1_000,
+      1,
+    ]);
   });
 
   it("creates a short signed GET with an encoded download disposition", async () => {
@@ -334,6 +448,34 @@ describe("createAlibabaOssAdapter", () => {
     }
   });
 
+  it.each([
+    ["Kid's Pattern.psd", "Kid%27s%20Pattern.psd", "Kid%2527s%2520Pattern.psd"],
+    ['"Bloom".ai', "%22Bloom%22.ai", "%2522Bloom%2522.ai"],
+  ])(
+    "accepts and RFC 5987-encodes quoted filename %j",
+    async (filename, encodedFilename, encodedUrlFilename) => {
+      const adapter = createAlibabaOssAdapter(config, {
+        getCredential: async () => freshCredential,
+      });
+
+      const signedUrl = await adapter.createSignedGet({
+        key,
+        filename,
+        expiresSeconds: 60,
+      });
+      const disposition = new URL(signedUrl).searchParams.get(
+        "response-content-disposition",
+      );
+
+      expect(disposition).toBe(
+        `attachment; filename*=UTF-8''${encodedFilename}`,
+      );
+      expect(signedUrl).toContain(encodedUrlFilename);
+      expect(signedUrl).not.toContain(filename);
+      expect(signedUrl).not.toMatch(/[\r\n]/);
+    },
+  );
+
   it("rejects malformed keys and header injection before signing", async () => {
     const sdk = createSdk();
     const createClient = vi.fn().mockResolvedValue(sdk);
@@ -360,8 +502,6 @@ describe("createAlibabaOssAdapter", () => {
     "bad\u0001name.png",
     "folder/name.png",
     "folder\\name.png",
-    'bad"name.png',
-    "bad'name.png",
   ])("rejects unsafe signed GET filename %j", async (filename) => {
     const createClient = vi.fn();
     const getCredential = vi.fn();

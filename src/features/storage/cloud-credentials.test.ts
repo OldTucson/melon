@@ -153,6 +153,10 @@ describe("createAlibabaBrowserCredentialIssuer", () => {
     "https://assets.example.test?mode=unsafe",
     "https://assets.example.test#",
     "https://assets.example.test#fragment",
+    "https://[::1]",
+    "https://[2001:db8::1]:8443",
+    "https://assets.example.test:0",
+    "https://assets.example.test:65536",
   ])(
     "rejects non-origin production endpoint %s without contacting STS",
     async (endpoint) => {

@@ -33,10 +33,25 @@ describe("parseServerEnv", () => {
     "https://assets.example.test?mode=unsafe",
     "https://assets.example.test#",
     "https://assets.example.test#fragment",
+    "https://[::1]",
+    "https://[2001:db8::1]:8443",
+    "https://assets.example.test:0",
+    "https://assets.example.test:65536",
   ])("rejects non-origin OSS endpoint %s", (ALIYUN_OSS_ENDPOINT) => {
     expect(() =>
       parseServerEnv({ ...validEnv, ALIYUN_OSS_ENDPOINT }),
     ).toThrow(/HTTPS origin/i);
+  });
+
+  it.each([
+    "https://assets.example.test",
+    "https://assets.example.test:1",
+    "https://assets.example.test:65535",
+  ])("accepts hostname OSS origin %s", (ALIYUN_OSS_ENDPOINT) => {
+    expect(
+      parseServerEnv({ ...validEnv, ALIYUN_OSS_ENDPOINT })
+        .ALIYUN_OSS_ENDPOINT,
+    ).toBe(ALIYUN_OSS_ENDPOINT);
   });
 
   it("rejects an authentication secret shorter than 32 characters", () => {

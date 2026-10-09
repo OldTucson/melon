@@ -119,8 +119,6 @@ describe("FakeOssAdapter", () => {
     "bad\u0001name.psd",
     "folder/name.psd",
     "folder\\name.psd",
-    'bad"name.psd',
-    "bad'name.psd",
   ])("rejects unsafe signed GET filename %j", async (filename) => {
     const fake = new FakeOssAdapter();
     fake.putObject(key, Uint8Array.from([1]));
@@ -130,6 +128,28 @@ describe("FakeOssAdapter", () => {
     ).rejects.toThrow(/filename/i);
     expect(fake.signedGets).toHaveLength(0);
   });
+
+  it.each([
+    ["Kid's Pattern.psd", "Kid%27s+Pattern.psd"],
+    ['"Bloom".ai', "%22Bloom%22.ai"],
+  ])(
+    "accepts and URL-encodes quoted filename %j",
+    async (filename, encodedFilename) => {
+      const fake = new FakeOssAdapter();
+      fake.putObject(key, Uint8Array.from([1]));
+
+      const signedUrl = await fake.createSignedGet({
+        key,
+        filename,
+        expiresSeconds: 60,
+      });
+
+      expect(signedUrl).toContain(`filename=${encodedFilename}`);
+      expect(signedUrl).not.toMatch(/["']/);
+      expect(signedUrl).not.toMatch(/[\r\n]/);
+      expect(new URL(signedUrl).searchParams.get("filename")).toBe(filename);
+    },
+  );
 
   it.each([0, 3_601])("rejects signed GET expiry %i", async (expiresSeconds) => {
     const fake = new FakeOssAdapter();

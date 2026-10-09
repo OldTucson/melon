@@ -6,14 +6,21 @@ import { parseObjectKey } from "./object-keys";
 export const OSS_DELETE_BATCH_SIZE = 1_000;
 
 const httpsOriginPattern =
-  /^https:\/\/(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?)(?::[0-9]{1,5})?$/;
+  /^https:\/\/([A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?)(?::([0-9]{1,5}))?$/;
 
 export const httpsOriginSchema = z
   .string()
   .transform((value, context) => {
     let url: URL;
 
-    if (!httpsOriginPattern.test(value)) {
+    const match = httpsOriginPattern.exec(value);
+    const explicitPort = match?.[2];
+
+    if (
+      !match ||
+      (explicitPort !== undefined &&
+        (Number(explicitPort) < 1 || Number(explicitPort) > 65_535))
+    ) {
       context.addIssue({
         code: "custom",
         message: "OSS endpoint must be an HTTPS origin",
@@ -63,7 +70,7 @@ const signedGetInputSchema = z.object({
     .string()
     .min(1)
     .max(255)
-    .refine((value) => !/[\u0000-\u001f\u007f/\\'\"]/.test(value), {
+    .refine((value) => !/[\u0000-\u001f\u002f\u005c\u007f]/.test(value), {
       message: "Invalid download filename",
     }),
   expiresSeconds: z.number().int().min(1).max(3_600),

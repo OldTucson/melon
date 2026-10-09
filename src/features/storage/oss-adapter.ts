@@ -40,6 +40,10 @@ type OssSignerClientFactory = (
 ) => Pick<OSS, "signatureUrlV4">;
 
 type OssCredentialResolver = () => Promise<unknown>;
+type OssCredentialProvider = {
+  getCredential(): Promise<unknown>;
+};
+type OssCredentialProviderFactory = () => OssCredentialProvider;
 
 function encodeDispositionFilename(filename: string) {
   return encodeURIComponent(filename).replace(/[!'()*]/g, (character) =>
@@ -47,12 +51,33 @@ function encodeDispositionFilename(filename: string) {
   );
 }
 
-function createDefaultCredentialResolver(): OssCredentialResolver {
-  let credentialProvider: Credential | undefined;
+export function createDefaultCredentialResolver(
+  createCredentialProvider: OssCredentialProviderFactory = () =>
+    new Credential(),
+): OssCredentialResolver {
+  let credentialProvider: OssCredentialProvider | undefined;
+  let inFlight: Promise<unknown> | undefined;
 
   return async () => {
-    credentialProvider ??= new Credential();
-    return credentialProvider.getCredential();
+    if (inFlight) return inFlight;
+
+    const currentProvider = (credentialProvider ??=
+      createCredentialProvider());
+    const attempt = Promise.resolve().then(() =>
+      currentProvider.getCredential(),
+    );
+    inFlight = attempt;
+
+    try {
+      return await attempt;
+    } catch (error) {
+      if (credentialProvider === currentProvider) {
+        credentialProvider = undefined;
+      }
+      throw error;
+    } finally {
+      if (inFlight === attempt) inFlight = undefined;
+    }
   };
 }
 

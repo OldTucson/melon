@@ -29,6 +29,7 @@ users/{OWNER_UUID}/patterns/{PATTERN_UUID}/derived/{ASSET_UUID}.{psd|ai|jpg|jpeg
 
 - ACL 设为 `private`，保持 Block Public Access 开启；对象 ACL 使用继承 Bucket 的默认值，不创建公开对象。参见[OSS 权限与访问控制概览](https://www.alibabacloud.com/help/en/oss/user-guide/permissions-and-access-control-overview)。
 - 开启 Bucket 默认服务端加密。当前方案使用 SSE-OSS / AES256；它不需要把 KMS 权限加入浏览器角色。注意 Bucket 默认加密只覆盖启用后写入的对象。参见[OSS 服务端加密](https://www.alibabacloud.com/help/en/oss/user-guide/server-side-encryption-8)。
+- 版本控制保持关闭（`Disabled`，不要先启用再暂停）。当前删除接口只按 key 删除；若未来开启版本控制，必须先扩展接口以列举并按 `versionId` 永久删除对象版本和 delete marker，并补充 `oss:DeleteObjectVersion` 权限。参见[OSS 版本控制](https://www.alibabacloud.com/help/en/oss/user-guide/overview-78/)和[管理版本对象](https://www.alibabacloud.com/help/en/oss/user-guide/manage-objects-in-a-versioning-enabled-bucket)。
 - 应用和 Bucket 使用同一地域。`ALIYUN_OSS_REGION`、Bucket 所在地域和 endpoint 必须一致。
 - 不开启静态网站托管，也不允许匿名访问。
 
@@ -58,7 +59,7 @@ users/{OWNER_UUID}/patterns/{PATTERN_UUID}/derived/{ASSET_UUID}.{psd|ai|jpg|jpeg
 - `ALIYUN_OSS_CNAME=true`。
 - CORS 的 origin 仍是 Web 应用的精确 origin，不是 OSS 域名。
 
-`ALIYUN_OSS_ENDPOINT` 只接受 HTTPS origin，即 hostname 和可选 port；拒绝 userinfo、path、query 和 fragment。不要在未绑定证书时把 endpoint 降级为 HTTP。参见[OSS 访问域名与网络概览](https://www.alibabacloud.com/help/en/oss/user-guide/access-and-network-overview)和[绑定自定义域名](https://www.alibabacloud.com/help/en/oss/user-guide/access-buckets-via-custom-domain-names)。
+`ALIYUN_OSS_ENDPOINT` 只接受 HTTPS origin，即 hostname 和可选 port；显式 port 必须在 `1..65535`，不接受 port `0`。当前 `ali-oss` 6.23 客户端构造不支持 IPv6 literal endpoint，因此也拒绝 `[::1]` 这类地址。配置同时拒绝 userinfo、path、query 和 fragment。不要在未绑定证书时把 endpoint 降级为 HTTP。参见[OSS 访问域名与网络概览](https://www.alibabacloud.com/help/en/oss/user-guide/access-and-network-overview)和[绑定自定义域名](https://www.alibabacloud.com/help/en/oss/user-guide/access-buckets-via-custom-domain-names)。
 
 ## 浏览器上传角色
 
@@ -99,7 +100,7 @@ users/{OWNER_UUID}/patterns/{PATTERN_UUID}/derived/{ASSET_UUID}.{psd|ai|jpg|jpeg
 - 对 `melon` 对象树的 `oss:GetObject`，用于 `HEAD`、Range 验证和签名 GET。
 - 对同一对象树的 `oss:DeleteObject`，用于批量回收确认删除的资产。
 
-`HeadObject` 对应 `oss:GetObject`，`DeleteMultipleObjects` 对应 `oss:DeleteObject`；参见[HeadObject 权限](https://www.alibabacloud.com/help/en/oss/developer-reference/headobject)、[DeleteMultipleObjects 权限和单请求 1000 对象上限](https://www.alibabacloud.com/help/en/oss/developer-reference/deletemultipleobjects)和[签名下载权限](https://www.alibabacloud.com/help/en/oss/user-guide/how-to-obtain-the-url-of-a-single-object-or-the-urls-of-multiple-objects)。适配器会先验证完整 key 列表，再按最多 1000 个对象分块删除，避免后段非法 key 导致先前批次被部分删除。服务端身份不需要 Bucket 列举或 OSS 管理权限。
+`HeadObject` 对应 `oss:GetObject`，`DeleteMultipleObjects` 对应 `oss:DeleteObject`；参见[HeadObject 权限](https://www.alibabacloud.com/help/en/oss/developer-reference/headobject)、[DeleteMultipleObjects 权限和单请求 1000 对象上限](https://www.alibabacloud.com/help/en/oss/developer-reference/deletemultipleobjects)和[签名下载权限](https://www.alibabacloud.com/help/en/oss/user-guide/how-to-obtain-the-url-of-a-single-object-or-the-urls-of-multiple-objects)。适配器会先验证完整 key 列表，再按最多 1000 个对象分块删除，避免后段非法 key 导致先前批次被部分删除。多个分块请求不是事务：如果后续批次失败，早先批次可能已经完成。在上述版本控制保持关闭的基线下，调用方可对完整 key 列表重试，已经删除的 key 可以安全重复提交；版本控制开启或暂停的 Bucket 不满足这项契约。服务端身份不需要 Bucket 列举或 OSS 管理权限。
 
 ### 本地开发
 
@@ -140,6 +141,7 @@ OSS_ADAPTER=real
 
 - Bucket 和对象均不可匿名读取。
 - SSE-OSS/AES256 已启用，并用新上传对象确认响应头。
+- Bucket 版本控制保持关闭，状态为 `Disabled`。
 - 生产和开发 CORS 都是精确 origin，无通配 origin/header。
 - 中国大陆受影响账号的自定义域名、ICP 和 HTTPS 证书均生效。
 - 浏览器 STS 有效期为 900 秒，策略只有当前 owner/pattern 前缀和三项 action。
