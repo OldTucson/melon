@@ -30,9 +30,13 @@ describe("workspace layout", () => {
     mocks.redirect.mockReset();
     mocks.requireUser.mockReset();
     mocks.setTheme.mockReset();
+    vi.stubGlobal("fetch", vi.fn());
   });
 
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
 
   it("redirects users who must replace their password", async () => {
     mocks.requireUser.mockResolvedValue({
@@ -54,6 +58,7 @@ describe("workspace layout", () => {
 
     expect(mocks.requireUser).toHaveBeenCalledTimes(1);
     expect(mocks.setTheme).toHaveBeenCalledWith(sessionUser.themePreference);
+    expect(fetch).not.toHaveBeenCalled();
     expect(screen.getByText("Private workspace")).toBeInTheDocument();
   });
 });

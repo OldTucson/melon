@@ -2,7 +2,7 @@ import { requireUser } from "@/features/auth/session";
 import { ThemeControl } from "@/features/theme/theme-control";
 
 export default async function SettingsPage() {
-  const user = await requireUser();
+  await requireUser();
 
   return (
     <main className="settings-page">
@@ -12,7 +12,7 @@ export default async function SettingsPage() {
       </header>
       <section className="settings-section" aria-labelledby="appearance-title">
         <h2 id="appearance-title">外观</h2>
-        <ThemeControl serverPreference={user.themePreference} />
+        <ThemeControl />
       </section>
     </main>
   );

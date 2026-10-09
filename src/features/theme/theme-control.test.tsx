@@ -3,6 +3,10 @@ import userEvent from "@testing-library/user-event";
 import { useTheme } from "next-themes";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  AuthenticatedThemeProvider,
+  type ThemePreference,
+} from "@/features/theme/authenticated-theme-provider";
 import { ThemeControl } from "@/features/theme/theme-control";
 
 vi.mock("next-themes", () => ({
@@ -67,6 +71,21 @@ const settle = async (
   });
 };
 
+const themeControl = (
+  serverPreference: ThemePreference,
+  children: React.ReactNode = <ThemeControl />,
+) => (
+  <AuthenticatedThemeProvider
+    userId="20b64d24-5e18-4127-b69a-5eb76a67960a"
+    serverPreference={serverPreference}
+  >
+    {children}
+  </AuthenticatedThemeProvider>
+);
+
+const renderThemeControl = (serverPreference: ThemePreference) =>
+  render(themeControl(serverPreference));
+
 describe("ThemeControl", () => {
   beforeEach(() => {
     setTheme.mockReset();
@@ -88,7 +107,7 @@ describe("ThemeControl", () => {
 
   it("uses the server preference initially and persists one selected change", async () => {
     const user = userEvent.setup();
-    render(<ThemeControl serverPreference="light" />);
+    renderThemeControl("light");
 
     expect(setTheme).toHaveBeenCalledWith("light");
 
@@ -111,7 +130,7 @@ describe("ThemeControl", () => {
       }),
     );
     const user = userEvent.setup();
-    render(<ThemeControl serverPreference="light" />);
+    renderThemeControl("light");
 
     await user.click(screen.getByRole("radio", { name: "夜间" }));
 
@@ -128,7 +147,7 @@ describe("ThemeControl", () => {
     const queue = queuedFetch();
     vi.stubGlobal("fetch", queue.fetchMock);
     const user = userEvent.setup();
-    render(<ThemeControl serverPreference="light" />);
+    renderThemeControl("light");
 
     await user.click(screen.getByRole("radio", { name: "夜间" }));
     await user.click(screen.getByRole("radio", { name: "跟随系统" }));
@@ -152,7 +171,7 @@ describe("ThemeControl", () => {
     const queue = queuedFetch();
     vi.stubGlobal("fetch", queue.fetchMock);
     const user = userEvent.setup();
-    render(<ThemeControl serverPreference="light" />);
+    renderThemeControl("light");
 
     await user.click(screen.getByRole("radio", { name: "夜间" }));
     await user.click(screen.getByRole("radio", { name: "跟随系统" }));
@@ -173,7 +192,7 @@ describe("ThemeControl", () => {
     const queue = queuedFetch();
     vi.stubGlobal("fetch", queue.fetchMock);
     const user = userEvent.setup();
-    render(<ThemeControl serverPreference="light" />);
+    renderThemeControl("light");
 
     await user.click(screen.getByRole("radio", { name: "夜间" }));
     await user.click(screen.getByRole("radio", { name: "跟随系统" }));
@@ -193,7 +212,7 @@ describe("ThemeControl", () => {
     const queue = queuedFetch();
     vi.stubGlobal("fetch", queue.fetchMock);
     const user = userEvent.setup();
-    render(<ThemeControl serverPreference="system" />);
+    renderThemeControl("system");
 
     await user.click(screen.getByRole("radio", { name: "夜间" }));
     await user.click(screen.getByRole("radio", { name: "浅色" }));
@@ -212,31 +231,43 @@ describe("ThemeControl", () => {
     expect(screen.getByRole("radio", { name: "跟随系统" })).toBeChecked();
   });
 
-  it("does not update theme or start pending work after unmount", async () => {
+  it("continues the queued latest preference after the settings control unmounts", async () => {
     const queue = queuedFetch();
     vi.stubGlobal("fetch", queue.fetchMock);
     const user = userEvent.setup();
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const { unmount } = render(<ThemeControl serverPreference="light" />);
+    const WorkspaceRoute = ({ showSettings }: { showSettings: boolean }) => (
+      <AuthenticatedThemeProvider
+        userId="20b64d24-5e18-4127-b69a-5eb76a67960a"
+        serverPreference="light"
+      >
+        <div>
+          {showSettings ? <ThemeControl /> : <p>Private workspace</p>}
+        </div>
+      </AuthenticatedThemeProvider>
+    );
+    const { rerender } = render(<WorkspaceRoute showSettings />);
 
     await user.click(screen.getByRole("radio", { name: "夜间" }));
     await user.click(screen.getByRole("radio", { name: "跟随系统" }));
     expect(queue.requests).toHaveLength(1);
-    const setThemeCalls = setTheme.mock.calls.length;
 
-    unmount();
+    rerender(<WorkspaceRoute showSettings={false} />);
     await settle(queue.requests[0]!, response("dark"));
+    await waitFor(() => expect(queue.requests).toHaveLength(2));
+    await settle(queue.requests[1]!, response("system"));
 
-    expect(queue.requests).toHaveLength(1);
-    expect(setTheme).toHaveBeenCalledTimes(setThemeCalls);
-    expect(consoleError).not.toHaveBeenCalled();
-    consoleError.mockRestore();
+    expect(queue.requests.map(({ body }) => body)).toEqual([
+      { themePreference: "dark" },
+      { themePreference: "system" },
+    ]);
+    expect(queue.maxActiveRequests).toBe(1);
+    expect(setTheme).toHaveBeenLastCalledWith("system");
   });
 
   it("synchronizes when the authenticated server preference changes", () => {
-    const { rerender } = render(<ThemeControl serverPreference="system" />);
+    const { rerender } = renderThemeControl("system");
 
-    rerender(<ThemeControl serverPreference="dark" />);
+    rerender(themeControl("dark"));
 
     expect(setTheme).toHaveBeenLastCalledWith("dark");
     expect(fetch).not.toHaveBeenCalled();
