@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const storageObjectRoles = ["source", "preview", "thumbnail"] as const;
+export const storageObjectKinds = ["source", "derived"] as const;
 export const storageExtensions = [
   "psd",
   "ai",
@@ -11,10 +12,12 @@ export const storageExtensions = [
 ] as const;
 
 export type StorageObjectRole = (typeof storageObjectRoles)[number];
+export type StorageObjectKind = (typeof storageObjectKinds)[number];
 export type StorageExtension = (typeof storageExtensions)[number];
 
 const uuidSchema = z.string().uuid();
 const roleSchema = z.enum(storageObjectRoles);
+const kindSchema = z.enum(storageObjectKinds);
 const canonicalExtensionSchema = z.enum(storageExtensions);
 const extensionInputSchema = z
   .string()
@@ -33,9 +36,26 @@ const objectKeyPartsSchema = z.object({
   ownerId: uuidSchema,
   patternId: uuidSchema,
   assetId: uuidSchema,
-  role: roleSchema,
+  kind: kindSchema,
   extension: canonicalExtensionSchema,
 });
+
+const derivedAssetIdsSchema = z
+  .object({
+    previewAssetId: uuidSchema,
+    thumbnailAssetId: uuidSchema,
+  })
+  .refine(
+    ({ previewAssetId, thumbnailAssetId }) =>
+      previewAssetId !== thumbnailAssetId,
+    { message: "Derived asset IDs must be distinct" },
+  );
+
+const storageKindByRole = {
+  source: "source",
+  preview: "derived",
+  thumbnail: "derived",
+} as const satisfies Record<StorageObjectRole, StorageObjectKind>;
 
 export type ObjectKeyParts = z.output<typeof objectKeyPartsSchema>;
 
@@ -49,9 +69,15 @@ export function storageObjectKey(input: z.input<typeof objectKeyInputSchema>) {
     parsed.ownerId,
     "patterns",
     parsed.patternId,
-    parsed.role,
+    storageKindByRole[parsed.role],
     `${parsed.assetId}.${parsed.extension}`,
   ].join("/");
+}
+
+export function assertDistinctDerivedAssetIds(
+  input: z.input<typeof derivedAssetIdsSchema>,
+) {
+  return derivedAssetIdsSchema.parse(input);
 }
 
 export function sourceObjectKey(input: RoleObjectKeyInput) {
@@ -84,7 +110,7 @@ export function parseObjectKey(key: string): ObjectKeyParts {
     return objectKeyPartsSchema.parse({
       ownerId: segments[1],
       patternId: segments[3],
-      role: segments[4],
+      kind: segments[4],
       assetId: filename?.slice(0, separator),
       extension: filename?.slice(separator + 1),
     });

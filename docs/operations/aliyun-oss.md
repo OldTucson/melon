@@ -12,13 +12,14 @@ Bucket 必须是 `melon` 专用的私有 Bucket。浏览器不持有长期 Acces
 4. 浏览器使用临时凭证直传 OSS。上传完成后，服务端通过 `HEAD` 和 Range GET 验证对象。
 5. 预览和下载只由服务端完成归属校验后生成短期 OSS V4 签名 GET URL。签名 URL 不入库、不写日志。
 
-对象键只允许以下规范结构，其中所有 ID 都是 UUID，扩展名固定为小写：
+对象键只允许以下两种规范结构，其中所有 ID 都是 UUID，扩展名固定为小写：
 
 ```text
-users/{OWNER_UUID}/patterns/{PATTERN_UUID}/{source|preview|thumbnail}/{ASSET_UUID}.{psd|ai|jpg|jpeg|png|procreate}
+users/{OWNER_UUID}/patterns/{PATTERN_UUID}/source/{ASSET_UUID}.{psd|ai|jpg|jpeg|png|procreate}
+users/{OWNER_UUID}/patterns/{PATTERN_UUID}/derived/{ASSET_UUID}.{psd|ai|jpg|jpeg|png|procreate}
 ```
 
-对象键不包含邮箱、用户名、图案名或原始文件名。
+`source` 保存原始资产，`derived` 保存 preview 和 thumbnail 等派生资产。派生角色由数据库记录和调用方区分，不编码进对象键。每个派生对象必须使用自己的资产 UUID；preview 和 thumbnail 禁止复用同一资产 UUID，否则会解析为同一个 OSS key。应用使用 `assertDistinctDerivedAssetIds` 在生成这两个派生键前验证这一约束。对象键不包含邮箱、用户名、图案名或原始文件名。
 
 ## Bucket 基线
 
@@ -38,12 +39,12 @@ users/{OWNER_UUID}/patterns/{PATTERN_UUID}/{source|preview|thumbnail}/{ASSET_UUI
 | 配置项 | 值 |
 | --- | --- |
 | Allowed origins | 精确的 `APP_ORIGIN` |
-| Allowed methods | `GET`, `PUT`, `POST`, `DELETE` |
+| Allowed methods | `GET`, `HEAD`, `PUT`, `POST`, `DELETE` |
 | Allowed headers | `authorization`, `content-type`, `content-md5`, `x-oss-date`, `x-oss-security-token`, `x-oss-content-sha256`, `x-oss-forbid-overwrite`, `x-oss-user-agent` |
 | Exposed headers | `ETag`, `x-oss-request-id` |
 | Max age | `600` 秒 |
 
-`GET` 只用于带 UploadId 的 `ListParts`；CORS 本身不授予 `GetObject`。`PUT` 上传 part，`POST` 初始化和完成 multipart，`DELETE` 放弃 multipart。上线前从实际浏览器抓取一次预检请求；若 SDK 版本新增请求头，只将确认需要的头加入规则，不扩大为通配符。参见[OSS CORS 官方配置说明](https://www.alibabacloud.com/help/en/oss/user-guide/configure-cross-origin-resource-sharing)和[Browser.js 临时授权](https://www.alibabacloud.com/help/en/oss/developer-reference/authorize-access-6)。
+`GET` 只用于带 UploadId 的 `ListParts`；`HEAD` 允许浏览器或 SDK 发起对象元数据、缓存和上传结果校验请求。服务端上传完成校验也使用 `HEAD`，但服务端到 OSS 的请求不受浏览器 CORS 约束。CORS 只允许浏览器发送这些方法，本身不授予 `GetObject`，浏览器 STS 策略仍然没有读取权限。`PUT` 上传 part，`POST` 初始化和完成 multipart，`DELETE` 放弃 multipart。上线前从实际浏览器抓取一次预检请求；若 SDK 版本新增请求头，只将确认需要的头加入规则，不扩大为通配符。参见[OSS CORS 官方配置说明](https://www.alibabacloud.com/help/en/oss/user-guide/configure-cross-origin-resource-sharing)和[Browser.js 临时授权](https://www.alibabacloud.com/help/en/oss/developer-reference/authorize-access-6)。
 
 ## 中国大陆自定义域名
 

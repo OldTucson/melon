@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import {
+  assertDistinctDerivedAssetIds,
   assertObjectKeyBelongsToPattern,
   objectKeyBelongsToPattern,
   parseObjectKey,
@@ -14,6 +15,8 @@ import {
 const ownerId = randomUUID();
 const patternId = randomUUID();
 const assetId = randomUUID();
+const previewAssetId = randomUUID();
+const thumbnailAssetId = randomUUID();
 
 describe("OSS object keys", () => {
   it("builds a lowercase source key from UUID-only identity fields", () => {
@@ -24,17 +27,45 @@ describe("OSS object keys", () => {
     );
   });
 
-  it("builds the exact preview and thumbnail paths", () => {
-    expect(
-      previewObjectKey({ ownerId, patternId, assetId, extension: "PNG" }),
-    ).toBe(
-      `users/${ownerId}/patterns/${patternId}/preview/${assetId}.png`,
+  it("maps preview and thumbnail roles to distinct derived object keys", () => {
+    const previewKey = previewObjectKey({
+      ownerId,
+      patternId,
+      assetId: previewAssetId,
+      extension: "PNG",
+    });
+    const thumbnailKey = thumbnailObjectKey({
+      ownerId,
+      patternId,
+      assetId: thumbnailAssetId,
+      extension: "JpEg",
+    });
+
+    expect(previewKey).toBe(
+      `users/${ownerId}/patterns/${patternId}/derived/${previewAssetId}.png`,
     );
-    expect(
-      thumbnailObjectKey({ ownerId, patternId, assetId, extension: "JpEg" }),
-    ).toBe(
-      `users/${ownerId}/patterns/${patternId}/thumbnail/${assetId}.jpeg`,
+    expect(thumbnailKey).toBe(
+      `users/${ownerId}/patterns/${patternId}/derived/${thumbnailAssetId}.jpeg`,
     );
+    expect(previewKey).not.toBe(thumbnailKey);
+  });
+
+  it("requires preview and thumbnail to use distinct asset UUIDs", () => {
+    expect(
+      assertDistinctDerivedAssetIds({ previewAssetId, thumbnailAssetId }),
+    ).toEqual({ previewAssetId, thumbnailAssetId });
+    expect(() =>
+      assertDistinctDerivedAssetIds({
+        previewAssetId,
+        thumbnailAssetId: previewAssetId,
+      }),
+    ).toThrow(/distinct/i);
+    expect(() =>
+      assertDistinctDerivedAssetIds({
+        previewAssetId: "not-a-uuid",
+        thumbnailAssetId,
+      }),
+    ).toThrow();
   });
 
   it.each(["ownerId", "patternId", "assetId"] as const)(
@@ -62,23 +93,44 @@ describe("OSS object keys", () => {
   );
 
   it("parses only canonical storage keys", () => {
-    const key = previewObjectKey({
+    const sourceKey = sourceObjectKey({
       ownerId,
       patternId,
       assetId,
+      extension: "ai",
+    });
+    const derivedKey = previewObjectKey({
+      ownerId,
+      patternId,
+      assetId: previewAssetId,
       extension: "png",
     });
 
-    expect(parseObjectKey(key)).toEqual({
+    expect(parseObjectKey(sourceKey)).toEqual({
       ownerId,
       patternId,
       assetId,
-      role: "preview",
+      kind: "source",
+      extension: "ai",
+    });
+    expect(parseObjectKey(derivedKey)).toEqual({
+      ownerId,
+      patternId,
+      assetId: previewAssetId,
+      kind: "derived",
       extension: "png",
     });
-    expect(() => parseObjectKey(`/${key}`)).toThrow();
-    expect(() => parseObjectKey(`${key}/extra`)).toThrow();
-    expect(() => parseObjectKey(key.replace(".png", ".PNG"))).toThrow();
+    expect(() => parseObjectKey(`/${derivedKey}`)).toThrow();
+    expect(() => parseObjectKey(`${derivedKey}/extra`)).toThrow();
+    expect(() =>
+      parseObjectKey(derivedKey.replace(".png", ".PNG")),
+    ).toThrow();
+    expect(() =>
+      parseObjectKey(derivedKey.replace("/derived/", "/preview/")),
+    ).toThrow();
+    expect(() =>
+      parseObjectKey(derivedKey.replace("/derived/", "/thumbnail/")),
+    ).toThrow();
   });
 
   it("does not accept another owner or pattern through prefix similarity", () => {
@@ -106,11 +158,11 @@ describe("OSS object keys", () => {
   });
 
   it("fails closed when asserting a malformed or cross-pattern key", () => {
-    const key = sourceObjectKey({
+    const key = thumbnailObjectKey({
       ownerId,
       patternId,
-      assetId,
-      extension: "procreate",
+      assetId: thumbnailAssetId,
+      extension: "png",
     });
 
     expect(
