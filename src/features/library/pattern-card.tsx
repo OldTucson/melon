@@ -1,0 +1,112 @@
+"use client";
+
+import { Download, Eye, FileImage, Heart } from "lucide-react";
+
+import type { PatternItem } from "./library-types";
+import { IconButton } from "./icon-button";
+import type { LibraryViewMode } from "./library-toolbar";
+import type { SelectionModifiers } from "./selection-store";
+
+export function FormatPlaceholder({
+  extension,
+  previewStatus,
+}: Pick<PatternItem, "extension" | "previewStatus">) {
+  const status =
+    previewStatus === "unsupported"
+      ? "暂不支持预览"
+      : previewStatus === "failed"
+        ? "预览生成失败"
+        : previewStatus === "pending"
+          ? "正在准备预览"
+          : "格式预览";
+  return (
+    <div className="format-placeholder" data-format={extension.toLowerCase()}>
+      <FileImage aria-hidden="true" />
+      <strong>{extension.toUpperCase()}</strong>
+      <span>{status}</span>
+    </div>
+  );
+}
+
+export function PatternCard({
+  item,
+  mode,
+  onFavorite,
+  onOpenPreview,
+  onSelect,
+  selected,
+}: {
+  item: PatternItem;
+  mode: LibraryViewMode;
+  onFavorite: (item: PatternItem) => void;
+  onOpenPreview: (id: string) => void;
+  onSelect: (id: string, modifiers: SelectionModifiers) => void;
+  selected: boolean;
+}) {
+  return (
+    <div
+      className="pattern-card"
+      data-mode={mode}
+      data-selected={selected ? "true" : undefined}
+      role="option"
+      aria-label={`${item.name}, ${item.extension.toUpperCase()}`}
+      aria-selected={selected}
+      tabIndex={0}
+      onClick={(event) =>
+        onSelect(item.id, {
+          metaKey: event.metaKey,
+          shiftKey: event.shiftKey,
+        })
+      }
+      onDoubleClick={() => onOpenPreview(item.id)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") onSelect(item.id, {});
+      }}
+    >
+      <div className="pattern-media" aria-hidden="true">
+        <FormatPlaceholder
+          extension={item.extension}
+          previewStatus={item.previewStatus}
+        />
+      </div>
+      <div className="pattern-card-copy">
+        <strong title={item.name}>{item.name}</strong>
+        <span>
+          {item.extension.toUpperCase()} · {formatBytes(item.sizeBytes)}
+        </span>
+      </div>
+      <div className="pattern-card-actions">
+        <IconButton
+          label={item.isFavorite ? "取消收藏" : "收藏"}
+          pressed={item.isFavorite}
+          onClick={(event) => {
+            event.stopPropagation();
+            onFavorite(item);
+          }}
+        >
+          <Heart aria-hidden="true" fill={item.isFavorite ? "currentColor" : "none"} />
+        </IconButton>
+        <IconButton
+          label="预览"
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenPreview(item.id);
+          }}
+        >
+          <Eye aria-hidden="true" />
+        </IconButton>
+        <IconButton disabled label="下载将在存储接入后开放">
+          <Download aria-hidden="true" />
+        </IconButton>
+      </div>
+    </div>
+  );
+}
+
+function formatBytes(rawBytes: string) {
+  const bytes = Number(rawBytes);
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+}

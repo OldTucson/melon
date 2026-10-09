@@ -1,0 +1,269 @@
+"use client";
+
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import { useQuery } from "@tanstack/react-query";
+import {
+  Check,
+  Grid2X2,
+  Heart,
+  List,
+  PanelRightOpen,
+  RotateCcw,
+  Tags,
+} from "lucide-react";
+import { useRef, useState } from "react";
+
+import {
+  patternFormats,
+  patternSorts,
+  type PatternQuery,
+} from "@/features/patterns/contracts";
+import { readApiResponse } from "@/lib/query/client";
+import { queryKeys } from "@/lib/query/keys";
+
+import { IconButton } from "./icon-button";
+import type { TagItem } from "./library-types";
+
+const sortLabels: Record<(typeof patternSorts)[number], string> = {
+  updated_desc: "最近更新",
+  created_desc: "最近创建",
+  name_asc: "名称 A-Z",
+  size_desc: "文件最大",
+};
+
+export type LibraryViewMode = "grid" | "list";
+
+async function loadTags() {
+  return readApiResponse<TagItem[]>(await fetch("/api/tags"));
+}
+
+export function LibraryToolbar({
+  inspectorHidden,
+  onQueryChange,
+  onShowInspector,
+  onViewModeChange,
+  query,
+  resultCount,
+  selectedCount,
+  viewMode,
+}: {
+  inspectorHidden: boolean;
+  onQueryChange: (query: PatternQuery) => void;
+  onShowInspector: () => void;
+  onViewModeChange: (mode: LibraryViewMode) => void;
+  query: PatternQuery;
+  resultCount: number;
+  selectedCount: number;
+  viewMode: LibraryViewMode;
+}) {
+  const tagsQuery = useQuery({ queryKey: queryKeys.tags, queryFn: loadTags });
+  const [visibleTagIds, setVisibleTagIds] = useState(query.tagIds);
+  const tagIdsRef = useRef(query.tagIds);
+  const patchQuery = (patch: Partial<PatternQuery>) =>
+    onQueryChange({
+      ...query,
+      tagIds: tagIdsRef.current,
+      ...patch,
+      cursor: undefined,
+    });
+  const toggleTag = (tagId: string) => {
+    const current = tagIdsRef.current;
+    const tagIds = current.includes(tagId)
+      ? current.filter((id) => id !== tagId)
+      : [...current, tagId];
+    tagIdsRef.current = tagIds;
+    setVisibleTagIds(tagIds);
+    patchQuery({ tagIds });
+  };
+
+  return (
+    <div className="library-toolbar" aria-label="图库工具栏">
+      <div className="toolbar-filters">
+        <label className="compact-field">
+          <span>格式</span>
+          <select
+            aria-label="按格式筛选"
+            value={query.formats[0] ?? ""}
+            onChange={(event) =>
+              patchQuery({
+                formats: event.target.value
+                  ? [event.target.value as PatternQuery["formats"][number]]
+                  : [],
+              })
+            }
+          >
+            <option value="">全部</option>
+            {patternFormats.map((format) => (
+              <option key={format} value={format}>
+                {format.toUpperCase()}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          className="toolbar-toggle"
+          type="button"
+          aria-pressed={query.favorite === true}
+          onClick={() =>
+            patchQuery({
+              favorite: query.favorite === true ? undefined : true,
+            })
+          }
+        >
+          <Heart aria-hidden="true" />
+          收藏
+        </button>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger asChild>
+            <button
+              className="toolbar-toggle"
+              type="button"
+              aria-label="筛选标签"
+              aria-pressed={visibleTagIds.length > 0}
+            >
+              <Tags aria-hidden="true" />
+              标签{visibleTagIds.length > 0 ? ` ${visibleTagIds.length}` : ""}
+            </button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              align="start"
+              className="filter-menu-content"
+              sideOffset={6}
+            >
+              <DropdownMenu.Label className="filter-menu-label">
+                按标签筛选
+              </DropdownMenu.Label>
+              {tagsQuery.isPending ? (
+                <DropdownMenu.Item className="filter-menu-message" disabled>
+                  正在读取标签...
+                </DropdownMenu.Item>
+              ) : tagsQuery.isError ? (
+                <DropdownMenu.Item className="filter-menu-message" disabled>
+                  标签暂时无法载入
+                </DropdownMenu.Item>
+              ) : tagsQuery.data.length === 0 ? (
+                <DropdownMenu.Item className="filter-menu-message" disabled>
+                  还没有标签
+                </DropdownMenu.Item>
+              ) : (
+                tagsQuery.data.map((tag) => (
+                  <DropdownMenu.CheckboxItem
+                    checked={visibleTagIds.includes(tag.id)}
+                    className="filter-menu-item"
+                    key={tag.id}
+                    onCheckedChange={() => toggleTag(tag.id)}
+                    onSelect={(event) => event.preventDefault()}
+                  >
+                    <span className="filter-menu-check" aria-hidden="true">
+                      <DropdownMenu.ItemIndicator>
+                        <Check />
+                      </DropdownMenu.ItemIndicator>
+                    </span>
+                    <span
+                      className="tag-swatch"
+                      data-color-token={tag.colorToken}
+                      aria-hidden="true"
+                    />
+                    <span>{tag.name}</span>
+                  </DropdownMenu.CheckboxItem>
+                ))
+              )}
+              {visibleTagIds.length > 1 ? (
+                <>
+                  <DropdownMenu.Separator className="filter-menu-separator" />
+                  <DropdownMenu.Label className="filter-menu-label">
+                    多标签匹配
+                  </DropdownMenu.Label>
+                  <DropdownMenu.RadioGroup
+                    value={query.tagMode}
+                    onValueChange={(tagMode) =>
+                      patchQuery({ tagMode: tagMode as PatternQuery["tagMode"] })
+                    }
+                  >
+                    <DropdownMenu.RadioItem
+                      className="filter-menu-item filter-menu-radio"
+                      value="all"
+                    >
+                      <DropdownMenu.ItemIndicator>
+                        <Check aria-hidden="true" />
+                      </DropdownMenu.ItemIndicator>
+                      全部匹配
+                    </DropdownMenu.RadioItem>
+                    <DropdownMenu.RadioItem
+                      className="filter-menu-item filter-menu-radio"
+                      value="any"
+                    >
+                      <DropdownMenu.ItemIndicator>
+                        <Check aria-hidden="true" />
+                      </DropdownMenu.ItemIndicator>
+                      任一匹配
+                    </DropdownMenu.RadioItem>
+                  </DropdownMenu.RadioGroup>
+                </>
+              ) : null}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+        <label className="compact-field">
+          <span>排序</span>
+          <select
+            aria-label="排序图案"
+            value={query.sort}
+            onChange={(event) =>
+              patchQuery({ sort: event.target.value as PatternQuery["sort"] })
+            }
+          >
+            {patternSorts.map((sort) => (
+              <option key={sort} value={sort}>
+                {sortLabels[sort]}
+              </option>
+            ))}
+          </select>
+        </label>
+        {(query.formats.length > 0 ||
+          query.tagIds.length > 0 ||
+          query.favorite !== undefined) && (
+          <IconButton
+            label="清除筛选"
+            onClick={() => {
+              tagIdsRef.current = [];
+              setVisibleTagIds([]);
+              patchQuery({ formats: [], tagIds: [], favorite: undefined });
+            }}
+          >
+            <RotateCcw aria-hidden="true" />
+          </IconButton>
+        )}
+      </div>
+      <div className="toolbar-summary" aria-live="polite">
+        {selectedCount > 0
+          ? `已选择 ${selectedCount} 项`
+          : `已载入 ${resultCount} 项`}
+      </div>
+      <div className="toolbar-view-controls">
+        {inspectorHidden && selectedCount > 0 ? (
+          <IconButton label="显示检查器" onClick={onShowInspector}>
+            <PanelRightOpen aria-hidden="true" />
+          </IconButton>
+        ) : null}
+        <div className="segmented-icons" aria-label="显示方式">
+          <IconButton
+            label="网格视图"
+            pressed={viewMode === "grid"}
+            onClick={() => onViewModeChange("grid")}
+          >
+            <Grid2X2 aria-hidden="true" />
+          </IconButton>
+          <IconButton
+            label="列表视图"
+            pressed={viewMode === "list"}
+            onClick={() => onViewModeChange("list")}
+          >
+            <List aria-hidden="true" />
+          </IconButton>
+        </div>
+      </div>
+    </div>
+  );
+}

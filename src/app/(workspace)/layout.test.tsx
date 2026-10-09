@@ -7,7 +7,12 @@ const mocks = vi.hoisted(() => ({
   setTheme: vi.fn(),
 }));
 
-vi.mock("next/navigation", () => ({ redirect: mocks.redirect }));
+vi.mock("next/navigation", () => ({
+  redirect: mocks.redirect,
+  usePathname: () => "/library",
+  useRouter: () => ({ replace: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
+}));
 vi.mock("@/features/auth/session", () => ({
   requireUser: mocks.requireUser,
 }));

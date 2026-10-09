@@ -7,7 +7,6 @@ export default async function SettingsPage() {
   return (
     <main className="settings-page">
       <header className="settings-header">
-        <p className="wordmark">melon</p>
         <h1>设置</h1>
       </header>
       <section className="settings-section" aria-labelledby="appearance-title">

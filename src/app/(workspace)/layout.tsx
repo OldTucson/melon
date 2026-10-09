@@ -1,7 +1,9 @@
 import { redirect } from "next/navigation";
 
 import { requireUser } from "@/features/auth/session";
+import { WorkspaceShell } from "@/features/library/workspace-shell";
 import { AuthenticatedThemeProvider } from "@/features/theme/authenticated-theme-provider";
+import { QueryProvider } from "@/lib/query/provider";
 
 export default async function WorkspaceLayout({
   children,
@@ -17,7 +19,13 @@ export default async function WorkspaceLayout({
       userId={user.id}
       serverPreference={user.themePreference}
     >
-      <div className="workspace-shell">{children}</div>
+      <QueryProvider>
+        <WorkspaceShell
+          user={{ displayName: user.displayName, email: user.email }}
+        >
+          {children}
+        </WorkspaceShell>
+      </QueryProvider>
     </AuthenticatedThemeProvider>
   );
 }
