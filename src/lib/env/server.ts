@@ -2,6 +2,8 @@ import "server-only";
 
 import { z } from "zod";
 
+import { httpsOriginSchema } from "@/features/storage/validation";
+
 const optionalNonBlankString = z.preprocess(
   (value) =>
     typeof value === "string" && value.trim() === "" ? undefined : value,
@@ -20,7 +22,7 @@ const serverEnvSchema = z
     ALIYUN_OSS_BUCKET: z
       .string()
       .regex(/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/),
-    ALIYUN_OSS_ENDPOINT: z.string().url(),
+    ALIYUN_OSS_ENDPOINT: httpsOriginSchema,
     ALIYUN_OSS_CNAME: z
       .enum(["true", "false"])
       .transform((value) => value === "true"),

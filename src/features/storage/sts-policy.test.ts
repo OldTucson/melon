@@ -1,11 +1,9 @@
-import { randomUUID } from "node:crypto";
-
 import { describe, expect, it } from "vitest";
 
 import { createUploadPolicy } from "./sts-policy";
 
-const ownerId = randomUUID();
-const patternId = randomUUID();
+const ownerId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const patternId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
 describe("createUploadPolicy", () => {
   it("grants only the three multipart actions to one owned pattern prefix", () => {
@@ -71,6 +69,26 @@ describe("createUploadPolicy", () => {
       ["oss", "CompleteMultipartUpload"].join(":"),
     );
     expect(statement?.Resource).not.toContain(["users", "*"].join("/"));
+  });
+
+  it("normalizes policy UUIDs to the lowercase PostgreSQL text form", () => {
+    const policy = JSON.parse(
+      createUploadPolicy({
+        bucket: "melon-test-assets",
+        ownerId: ownerId.toUpperCase(),
+        patternId: patternId.toUpperCase(),
+      }),
+    ) as { Statement: Array<{ Resource: string }> };
+
+    expect(policy.Statement[0]?.Resource).toBe(
+      [
+        "acs",
+        "oss",
+        "*",
+        "*",
+        `melon-test-assets/users/${ownerId}/patterns/${patternId}/*`,
+      ].join(":"),
+    );
   });
 
   it.each([

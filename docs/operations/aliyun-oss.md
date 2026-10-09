@@ -8,7 +8,7 @@ Bucket 必须是 `melon` 专用的私有 Bucket。浏览器不持有长期 Acces
 
 1. 已登录浏览器向同源 Next.js API 初始化上传。
 2. 服务端先验证当前账号和图案归属，再用默认凭证提供链调用 STS `AssumeRole`。
-3. 每次签发 900 秒临时凭证，并用 session policy 限制到当前用户、当前图案的唯一前缀。
+3. 每次签发 900 秒临时凭证，并用 session policy 限制到当前用户、当前图案的唯一前缀。STS 返回的 expiration 必须是 UTC `Z` 结尾的规范 ISO-8601 时间，且至少晚于服务端当前时间 30 秒；否则拒绝凭证响应。
 4. 浏览器使用临时凭证直传 OSS。上传完成后，服务端通过 `HEAD` 和 Range GET 验证对象。
 5. 预览和下载只由服务端完成归属校验后生成短期 OSS V4 签名 GET URL。签名 URL 不入库、不写日志。
 
@@ -20,6 +20,8 @@ users/{OWNER_UUID}/patterns/{PATTERN_UUID}/derived/{ASSET_UUID}.{psd|ai|jpg|jpeg
 ```
 
 `source` 保存原始资产，`derived` 保存 preview 和 thumbnail 等派生资产。派生角色由数据库记录和调用方区分，不编码进对象键。每个派生对象必须使用自己的资产 UUID；preview 和 thumbnail 禁止复用同一资产 UUID，否则会解析为同一个 OSS key。应用使用 `assertDistinctDerivedAssetIds` 在生成这两个派生键前验证这一约束。对象键不包含邮箱、用户名、图案名或原始文件名。
+
+生成对象键、STS policy 和归属校验时，合法 UUID 输入会先规范为与 PostgreSQL `uuid` 文本输出一致的小写形式。解析已存在的对象键时不做宽松修复：只接受完整的小写规范 key，大写 UUID 或其他等价写法一律 fail closed。这样数据库值、policy resource 与归属比较只有一种文本表示。
 
 ## Bucket 基线
 
@@ -56,7 +58,7 @@ users/{OWNER_UUID}/patterns/{PATTERN_UUID}/derived/{ASSET_UUID}.{psd|ai|jpg|jpeg
 - `ALIYUN_OSS_CNAME=true`。
 - CORS 的 origin 仍是 Web 应用的精确 origin，不是 OSS 域名。
 
-不要在未绑定证书时把 endpoint 降级为 HTTP。参见[OSS 访问域名与网络概览](https://www.alibabacloud.com/help/en/oss/user-guide/access-and-network-overview)和[绑定自定义域名](https://www.alibabacloud.com/help/en/oss/user-guide/access-buckets-via-custom-domain-names)。
+`ALIYUN_OSS_ENDPOINT` 只接受 HTTPS origin，即 hostname 和可选 port；拒绝 userinfo、path、query 和 fragment。不要在未绑定证书时把 endpoint 降级为 HTTP。参见[OSS 访问域名与网络概览](https://www.alibabacloud.com/help/en/oss/user-guide/access-and-network-overview)和[绑定自定义域名](https://www.alibabacloud.com/help/en/oss/user-guide/access-buckets-via-custom-domain-names)。
 
 ## 浏览器上传角色
 
@@ -97,7 +99,7 @@ users/{OWNER_UUID}/patterns/{PATTERN_UUID}/derived/{ASSET_UUID}.{psd|ai|jpg|jpeg
 - 对 `melon` 对象树的 `oss:GetObject`，用于 `HEAD`、Range 验证和签名 GET。
 - 对同一对象树的 `oss:DeleteObject`，用于批量回收确认删除的资产。
 
-`HeadObject` 对应 `oss:GetObject`，`DeleteMultipleObjects` 对应 `oss:DeleteObject`；参见[HeadObject 权限](https://www.alibabacloud.com/help/en/oss/developer-reference/headobject)、[DeleteMultipleObjects 权限](https://www.alibabacloud.com/help/en/oss/developer-reference/deletemultipleobjects)和[签名下载权限](https://www.alibabacloud.com/help/en/oss/user-guide/how-to-obtain-the-url-of-a-single-object-or-the-urls-of-multiple-objects)。服务端身份不需要 Bucket 列举或 OSS 管理权限。
+`HeadObject` 对应 `oss:GetObject`，`DeleteMultipleObjects` 对应 `oss:DeleteObject`；参见[HeadObject 权限](https://www.alibabacloud.com/help/en/oss/developer-reference/headobject)、[DeleteMultipleObjects 权限和单请求 1000 对象上限](https://www.alibabacloud.com/help/en/oss/developer-reference/deletemultipleobjects)和[签名下载权限](https://www.alibabacloud.com/help/en/oss/user-guide/how-to-obtain-the-url-of-a-single-object-or-the-urls-of-multiple-objects)。适配器会先验证完整 key 列表，再按最多 1000 个对象分块删除，避免后段非法 key 导致先前批次被部分删除。服务端身份不需要 Bucket 列举或 OSS 管理权限。
 
 ### 本地开发
 

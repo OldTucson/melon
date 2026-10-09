@@ -9,36 +9,43 @@ import type {
   BrowserCredentialIssuer,
   BrowserCredentialIssuerConfig,
 } from "./contracts";
+import { normalizedUuidSchema } from "./identifiers";
 import { createUploadPolicy } from "./sts-policy";
+import { ossConnectionConfigSchema } from "./validation";
 
 const STS_DURATION_SECONDS = 900;
+const STS_EXPIRATION_CLOCK_SKEW_MS = 30_000;
 
-const issuerConfigSchema = z.object({
-  region: z.string().regex(/^oss-[a-z0-9-]+$/),
-  bucket: z.string().regex(/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/),
-  endpoint: z
-    .string()
-    .url()
-    .refine((value) => new URL(value).protocol === "https:"),
-  cname: z.boolean(),
+const issuerConfigSchema = ossConnectionConfigSchema.extend({
   roleArn: z
     .string()
     .regex(/^acs:ram::[0-9]+:role\/[A-Za-z0-9.@_-]{1,64}$/),
 });
 
 const issueInputSchema = z.object({
-  ownerId: z.string().uuid(),
-  patternId: z.string().uuid(),
+  ownerId: normalizedUuidSchema,
+  patternId: normalizedUuidSchema,
 });
+
+const utcExpirationSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/)
+  .refine((value) => {
+    const timestamp = Date.parse(value);
+    if (!Number.isFinite(timestamp)) return false;
+    const canonical = new Date(timestamp).toISOString();
+    const normalizedInput = value.includes(".")
+      ? value
+      : value.replace(/Z$/, ".000Z");
+    return canonical === normalizedInput;
+  })
+  .transform((value) => new Date(value).toISOString());
 
 const temporaryCredentialSchema = z.object({
   accessKeyId: z.string().min(1),
   accessKeySecret: z.string().min(1),
   securityToken: z.string().min(1),
-  expiration: z
-    .string()
-    .refine((value) => Number.isFinite(Date.parse(value)))
-    .transform((value) => new Date(value).toISOString()),
+  expiration: utcExpirationSchema,
 });
 
 export interface AssumeRoleInput {
@@ -83,9 +90,13 @@ function createRoleSessionName(ownerId: string, patternId: string) {
 
 export function createAlibabaBrowserCredentialIssuer(
   inputConfig: BrowserCredentialIssuerConfig,
-  dependencies: { assumeRole?: AssumeRoleOperation } = {},
+  dependencies: {
+    assumeRole?: AssumeRoleOperation;
+    now?: () => Date;
+  } = {},
 ): BrowserCredentialIssuer {
   const assumeRole = dependencies.assumeRole ?? assumeRoleWithDefaultCredential;
+  const now = dependencies.now ?? (() => new Date());
 
   return {
     async issue(input) {
@@ -103,7 +114,17 @@ export function createAlibabaBrowserCredentialIssuer(
       });
       const parsed = temporaryCredentialSchema.safeParse(response);
 
-      if (!parsed.success) {
+      const nowMilliseconds = now().getTime();
+      const expirationMilliseconds = parsed.success
+        ? Date.parse(parsed.data.expiration)
+        : Number.NaN;
+
+      if (
+        !parsed.success ||
+        !Number.isFinite(nowMilliseconds) ||
+        expirationMilliseconds <=
+          nowMilliseconds + STS_EXPIRATION_CLOCK_SKEW_MS
+      ) {
         throw new Error("STS_CREDENTIAL_RESPONSE_INVALID");
       }
 

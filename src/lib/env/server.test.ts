@@ -20,6 +20,25 @@ describe("parseServerEnv", () => {
     expect(parseServerEnv(validEnv).ALIYUN_OSS_CNAME).toBe(true);
   });
 
+  it.each([
+    "not-a-url",
+    "http://assets.example.test",
+    "https://@assets.example.test",
+    "https://:@assets.example.test",
+    "https://user:secret@assets.example.test",
+    "https://assets.example.test/objects",
+    "https://assets.example.test/a/..",
+    "https://assets.example.test/%2e",
+    "https://assets.example.test?",
+    "https://assets.example.test?mode=unsafe",
+    "https://assets.example.test#",
+    "https://assets.example.test#fragment",
+  ])("rejects non-origin OSS endpoint %s", (ALIYUN_OSS_ENDPOINT) => {
+    expect(() =>
+      parseServerEnv({ ...validEnv, ALIYUN_OSS_ENDPOINT }),
+    ).toThrow(/HTTPS origin/i);
+  });
+
   it("rejects an authentication secret shorter than 32 characters", () => {
     expect(() =>
       parseServerEnv({ ...validEnv, AUTH_SECRET: "short" }),

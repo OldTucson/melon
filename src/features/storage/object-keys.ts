@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { normalizedUuidSchema } from "./identifiers";
+
 export const storageObjectRoles = ["source", "preview", "thumbnail"] as const;
 export const storageObjectKinds = ["source", "derived"] as const;
 export const storageExtensions = [
@@ -15,7 +17,6 @@ export type StorageObjectRole = (typeof storageObjectRoles)[number];
 export type StorageObjectKind = (typeof storageObjectKinds)[number];
 export type StorageExtension = (typeof storageExtensions)[number];
 
-const uuidSchema = z.string().uuid();
 const roleSchema = z.enum(storageObjectRoles);
 const kindSchema = z.enum(storageObjectKinds);
 const canonicalExtensionSchema = z.enum(storageExtensions);
@@ -25,25 +26,25 @@ const extensionInputSchema = z
   .pipe(canonicalExtensionSchema);
 
 const objectKeyInputSchema = z.object({
-  ownerId: uuidSchema,
-  patternId: uuidSchema,
-  assetId: uuidSchema,
+  ownerId: normalizedUuidSchema,
+  patternId: normalizedUuidSchema,
+  assetId: normalizedUuidSchema,
   role: roleSchema,
   extension: extensionInputSchema,
 });
 
 const objectKeyPartsSchema = z.object({
-  ownerId: uuidSchema,
-  patternId: uuidSchema,
-  assetId: uuidSchema,
+  ownerId: normalizedUuidSchema,
+  patternId: normalizedUuidSchema,
+  assetId: normalizedUuidSchema,
   kind: kindSchema,
   extension: canonicalExtensionSchema,
 });
 
 const derivedAssetIdsSchema = z
   .object({
-    previewAssetId: uuidSchema,
-    thumbnailAssetId: uuidSchema,
+    previewAssetId: normalizedUuidSchema,
+    thumbnailAssetId: normalizedUuidSchema,
   })
   .refine(
     ({ previewAssetId, thumbnailAssetId }) =>
@@ -61,17 +62,27 @@ export type ObjectKeyParts = z.output<typeof objectKeyPartsSchema>;
 
 type RoleObjectKeyInput = Omit<z.input<typeof objectKeyInputSchema>, "role">;
 
+function formatObjectKey(parts: ObjectKeyParts) {
+  return [
+    "users",
+    parts.ownerId,
+    "patterns",
+    parts.patternId,
+    parts.kind,
+    `${parts.assetId}.${parts.extension}`,
+  ].join("/");
+}
+
 export function storageObjectKey(input: z.input<typeof objectKeyInputSchema>) {
   const parsed = objectKeyInputSchema.parse(input);
 
-  return [
-    "users",
-    parsed.ownerId,
-    "patterns",
-    parsed.patternId,
-    storageKindByRole[parsed.role],
-    `${parsed.assetId}.${parsed.extension}`,
-  ].join("/");
+  return formatObjectKey({
+    ownerId: parsed.ownerId,
+    patternId: parsed.patternId,
+    assetId: parsed.assetId,
+    kind: storageKindByRole[parsed.role],
+    extension: parsed.extension,
+  });
 }
 
 export function assertDistinctDerivedAssetIds(
@@ -107,13 +118,19 @@ export function parseObjectKey(key: string): ObjectKeyParts {
   }
 
   try {
-    return objectKeyPartsSchema.parse({
+    const parsed = objectKeyPartsSchema.parse({
       ownerId: segments[1],
       patternId: segments[3],
       kind: segments[4],
       assetId: filename?.slice(0, separator),
       extension: filename?.slice(separator + 1),
     });
+
+    if (formatObjectKey(parsed) !== key) {
+      throw new Error("Noncanonical OSS object key");
+    }
+
+    return parsed;
   } catch {
     throw new Error("Invalid OSS object key");
   }
@@ -127,7 +144,10 @@ type PatternObjectScope = {
 
 export function objectKeyBelongsToPattern(input: PatternObjectScope) {
   const scope = z
-    .object({ ownerId: uuidSchema, patternId: uuidSchema })
+    .object({
+      ownerId: normalizedUuidSchema,
+      patternId: normalizedUuidSchema,
+    })
     .parse(input);
 
   try {
@@ -150,7 +170,10 @@ export function assertObjectKeyBelongsToPattern(
   }
 
   const scope = z
-    .object({ ownerId: uuidSchema, patternId: uuidSchema })
+    .object({
+      ownerId: normalizedUuidSchema,
+      patternId: normalizedUuidSchema,
+    })
     .parse(input);
 
   if (key.ownerId !== scope.ownerId || key.patternId !== scope.patternId) {

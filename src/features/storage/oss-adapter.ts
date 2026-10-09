@@ -5,35 +5,25 @@ import OSS from "ali-oss";
 import { z } from "zod";
 
 import type { OssAdapter, OssConnectionConfig } from "./contracts";
-import { parseObjectKey } from "./object-keys";
-
-const connectionConfigSchema = z.object({
-  region: z.string().regex(/^oss-[a-z0-9-]+$/),
-  bucket: z.string().regex(/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/),
-  endpoint: z
-    .string()
-    .url()
-    .refine((value) => new URL(value).protocol === "https:"),
-  cname: z.boolean(),
-});
-
-const signedGetSchema = z.object({
-  key: z.string().min(1),
-  filename: z
-    .string()
-    .min(1)
-    .max(255)
-    .refine((value) => !/[\u0000-\u001f\u007f]/.test(value), {
-      message: "Invalid download filename",
-    }),
-  expiresSeconds: z.number().int().min(1).max(3600),
-});
+import {
+  assertCanonicalObjectKey,
+  assertValidObjectRange,
+  OSS_DELETE_BATCH_SIZE,
+  parseDeleteObjectKeys,
+  parseOssConnectionConfig,
+  parseSignedGetInput,
+} from "./validation";
 
 const resolvedCredentialSchema = z.object({
   accessKeyId: z.string().min(1),
   accessKeySecret: z.string().min(1),
   securityToken: z.string().min(1).optional(),
 });
+const resolvedTemporaryCredentialSchema = resolvedCredentialSchema.extend({
+  securityToken: z.string().min(1),
+});
+
+type ResolvedCredential = z.output<typeof resolvedCredentialSchema>;
 
 type OssSdkClient = Pick<
   OSS,
@@ -44,24 +34,38 @@ type OssSdkClientFactory = (
   config: OssConnectionConfig,
 ) => Promise<OssSdkClient>;
 
+type OssSignerClientFactory = (
+  config: OssConnectionConfig,
+  credential: ResolvedCredential,
+) => Pick<OSS, "signatureUrlV4">;
+
+type OssCredentialResolver = () => Promise<unknown>;
+
 function encodeDispositionFilename(filename: string) {
   return encodeURIComponent(filename).replace(/[!'()*]/g, (character) =>
     `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
   );
 }
 
+function createDefaultCredentialResolver(): OssCredentialResolver {
+  let credentialProvider: Credential | undefined;
+
+  return async () => {
+    credentialProvider ??= new Credential();
+    return credentialProvider.getCredential();
+  };
+}
+
 async function createDefaultClient(
   input: OssConnectionConfig,
+  getCredential: () => Promise<ResolvedCredential>,
 ): Promise<OssSdkClient> {
-  const config = connectionConfigSchema.parse(input);
-  const credentialProvider = new Credential();
-  const initial = resolvedCredentialSchema.parse(
-    await credentialProvider.getCredential(),
-  );
+  const config = parseOssConnectionConfig(input);
+  const initial = await getCredential();
   const refreshSTSToken = async () => {
-    const refreshed = resolvedCredentialSchema.extend({
-      securityToken: z.string().min(1),
-    }).parse(await credentialProvider.getCredential());
+    const refreshed = resolvedTemporaryCredentialSchema.parse(
+      await getCredential(),
+    );
 
     return {
       accessKeyId: refreshed.accessKeyId,
@@ -88,6 +92,30 @@ async function createDefaultClient(
   });
 }
 
+function createSnapshotSignerClient(
+  input: OssConnectionConfig,
+  credential: ResolvedCredential,
+) {
+  const config = parseOssConnectionConfig(input);
+
+  return new OSS({
+    accessKeyId: credential.accessKeyId,
+    accessKeySecret: credential.accessKeySecret,
+    ...(credential.securityToken
+      ? {
+          stsToken: credential.securityToken,
+          refreshSTSTokenInterval: 86_400_000,
+        }
+      : {}),
+    region: config.region,
+    bucket: config.bucket,
+    endpoint: config.endpoint,
+    cname: config.cname,
+    secure: true,
+    authorizationV4: true,
+  });
+}
+
 function responseHeader(headers: object, name: string) {
   const match = Object.entries(headers).find(
     ([key]) => key.toLowerCase() === name.toLowerCase(),
@@ -110,10 +138,22 @@ function copyResponseBytes(value: unknown) {
 
 export function createAlibabaOssAdapter(
   inputConfig: OssConnectionConfig,
-  dependencies: { createClient?: OssSdkClientFactory } = {},
+  dependencies: {
+    createClient?: OssSdkClientFactory;
+    getCredential?: OssCredentialResolver;
+    createSignerClient?: OssSignerClientFactory;
+  } = {},
 ): OssAdapter {
-  const config = connectionConfigSchema.parse(inputConfig);
-  const createClient = dependencies.createClient ?? createDefaultClient;
+  const config = parseOssConnectionConfig(inputConfig);
+  const resolveCredential =
+    dependencies.getCredential ?? createDefaultCredentialResolver();
+  const getCredential = async () =>
+    resolvedCredentialSchema.parse(await resolveCredential());
+  const createClient =
+    dependencies.createClient ??
+    ((clientConfig) => createDefaultClient(clientConfig, getCredential));
+  const createSignerClient =
+    dependencies.createSignerClient ?? createSnapshotSignerClient;
   let clientPromise: Promise<OssSdkClient> | undefined;
   const getClient = async () => {
     const attempt = (clientPromise ??= createClient(config));
@@ -127,7 +167,7 @@ export function createAlibabaOssAdapter(
 
   return {
     async headObject(key) {
-      parseObjectKey(key);
+      assertCanonicalObjectKey(key);
       const result = await (await getClient()).head(key);
       const contentLength = responseHeader(result.res.headers, "content-length");
       const sizeBytes = Number(contentLength);
@@ -147,15 +187,8 @@ export function createAlibabaOssAdapter(
     },
 
     async readRange(key, start, endInclusive) {
-      parseObjectKey(key);
-      if (
-        !Number.isSafeInteger(start) ||
-        !Number.isSafeInteger(endInclusive) ||
-        start < 0 ||
-        endInclusive < start
-      ) {
-        throw new Error("OSS_RANGE_INVALID");
-      }
+      assertCanonicalObjectKey(key);
+      assertValidObjectRange(start, endInclusive);
 
       const result = await (await getClient()).get(key, {
         headers: { Range: `bytes=${start}-${endInclusive}` },
@@ -164,15 +197,27 @@ export function createAlibabaOssAdapter(
     },
 
     async deleteObjects(keys) {
-      keys.forEach(parseObjectKey);
-      if (keys.length === 0) return;
-      await (await getClient()).deleteMulti(keys, { quiet: true });
+      const parsedKeys = parseDeleteObjectKeys(keys);
+      if (parsedKeys.length === 0) return;
+      const client = await getClient();
+
+      for (
+        let start = 0;
+        start < parsedKeys.length;
+        start += OSS_DELETE_BATCH_SIZE
+      ) {
+        await client.deleteMulti(
+          parsedKeys.slice(start, start + OSS_DELETE_BATCH_SIZE),
+          { quiet: true },
+        );
+      }
     },
 
     async createSignedGet(input) {
-      const parsed = signedGetSchema.parse(input);
-      parseObjectKey(parsed.key);
-      return (await getClient()).signatureUrlV4(
+      const parsed = parseSignedGetInput(input);
+      const credential = await getCredential();
+      const signerClient = createSignerClient(config, credential);
+      return signerClient.signatureUrlV4(
         "GET",
         parsed.expiresSeconds,
         {

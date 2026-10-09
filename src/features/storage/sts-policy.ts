@@ -1,9 +1,11 @@
 import { z } from "zod";
 
+import { normalizedUuidSchema } from "./identifiers";
+
 const uploadPolicyInputSchema = z.object({
   bucket: z.string().regex(/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/),
-  ownerId: z.string().uuid(),
-  patternId: z.string().uuid(),
+  ownerId: normalizedUuidSchema,
+  patternId: normalizedUuidSchema,
 });
 
 export const uploadActions = [

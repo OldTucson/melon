@@ -5,10 +5,17 @@ import type {
   BrowserOssCredentials,
   OssAdapter,
 } from "@/features/storage/contracts";
+import { normalizedUuidSchema } from "@/features/storage/identifiers";
+import {
+  assertCanonicalObjectKey,
+  assertValidObjectRange,
+  parseDeleteObjectKeys,
+  parseSignedGetInput,
+} from "@/features/storage/validation";
 
 const issueInputSchema = z.object({
-  ownerId: z.string().uuid(),
-  patternId: z.string().uuid(),
+  ownerId: normalizedUuidSchema,
+  patternId: normalizedUuidSchema,
 });
 
 type FakeCredentialIssuerOptions = Partial<
@@ -34,8 +41,9 @@ export class FakeOssAdapter implements OssAdapter {
     bytes: Uint8Array,
     contentType = "application/octet-stream",
   ) {
-    this.objects.set(key, Uint8Array.from(bytes));
-    this.contentTypes.set(key, contentType);
+    const canonicalKey = assertCanonicalObjectKey(key);
+    this.objects.set(canonicalKey, Uint8Array.from(bytes));
+    this.contentTypes.set(canonicalKey, contentType);
   }
 
   async headObject(key: string) {
@@ -48,16 +56,10 @@ export class FakeOssAdapter implements OssAdapter {
   }
 
   async readRange(key: string, start: number, endInclusive: number) {
-    if (
-      !Number.isSafeInteger(start) ||
-      !Number.isSafeInteger(endInclusive) ||
-      start < 0 ||
-      endInclusive < start
-    ) {
-      throw new Error("OSS_RANGE_INVALID");
-    }
+    const canonicalKey = assertCanonicalObjectKey(key);
+    assertValidObjectRange(start, endInclusive);
 
-    const value = this.require(key);
+    const value = this.requireCanonical(canonicalKey);
     if (start >= value.byteLength) {
       throw new Error("OSS_RANGE_NOT_SATISFIABLE");
     }
@@ -65,7 +67,9 @@ export class FakeOssAdapter implements OssAdapter {
   }
 
   async deleteObjects(keys: string[]) {
-    for (const key of keys) {
+    const parsedKeys = parseDeleteObjectKeys(keys);
+
+    for (const key of parsedKeys) {
       this.objects.delete(key);
       this.contentTypes.delete(key);
     }
@@ -76,13 +80,14 @@ export class FakeOssAdapter implements OssAdapter {
     filename: string;
     expiresSeconds: number;
   }) {
-    this.require(input.key);
-    this.signedGets.push({ ...input });
+    const parsed = parseSignedGetInput(input);
+    this.requireCanonical(parsed.key);
+    this.signedGets.push(parsed);
     const query = new URLSearchParams({
-      filename: input.filename,
-      expires: String(input.expiresSeconds),
+      filename: parsed.filename,
+      expires: String(parsed.expiresSeconds),
     });
-    return `http://127.0.0.1/fake-oss/${encodeURIComponent(input.key)}?${query.toString()}`;
+    return `http://127.0.0.1/fake-oss/${encodeURIComponent(parsed.key)}?${query.toString()}`;
   }
 
   reset() {
@@ -92,6 +97,10 @@ export class FakeOssAdapter implements OssAdapter {
   }
 
   private require(key: string) {
+    return this.requireCanonical(assertCanonicalObjectKey(key));
+  }
+
+  private requireCanonical(key: string) {
     const value = this.objects.get(key);
     if (!value) throw new Error("OSS_OBJECT_NOT_FOUND");
     return value;

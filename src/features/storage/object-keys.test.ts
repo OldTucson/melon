@@ -12,11 +12,11 @@ import {
   thumbnailObjectKey,
 } from "./object-keys";
 
-const ownerId = randomUUID();
-const patternId = randomUUID();
-const assetId = randomUUID();
-const previewAssetId = randomUUID();
-const thumbnailAssetId = randomUUID();
+const ownerId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const patternId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const assetId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+const previewAssetId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+const thumbnailAssetId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
 
 describe("OSS object keys", () => {
   it("builds a lowercase source key from UUID-only identity fields", () => {
@@ -25,6 +25,26 @@ describe("OSS object keys", () => {
     ).toBe(
       `users/${ownerId}/patterns/${patternId}/source/${assetId}.psd`,
     );
+  });
+
+  it("normalizes UUID inputs to PostgreSQL lowercase text form", () => {
+    const key = sourceObjectKey({
+      ownerId: ownerId.toUpperCase(),
+      patternId: patternId.toUpperCase(),
+      assetId: assetId.toUpperCase(),
+      extension: "PNG",
+    });
+
+    expect(key).toBe(
+      `users/${ownerId}/patterns/${patternId}/source/${assetId}.png`,
+    );
+    expect(
+      objectKeyBelongsToPattern({
+        key,
+        ownerId: ownerId.toUpperCase(),
+        patternId: patternId.toUpperCase(),
+      }),
+    ).toBe(true);
   });
 
   it("maps preview and thumbnail roles to distinct derived object keys", () => {
@@ -57,6 +77,12 @@ describe("OSS object keys", () => {
     expect(() =>
       assertDistinctDerivedAssetIds({
         previewAssetId,
+        thumbnailAssetId: previewAssetId,
+      }),
+    ).toThrow(/distinct/i);
+    expect(() =>
+      assertDistinctDerivedAssetIds({
+        previewAssetId: previewAssetId.toUpperCase(),
         thumbnailAssetId: previewAssetId,
       }),
     ).toThrow(/distinct/i);
@@ -130,6 +156,15 @@ describe("OSS object keys", () => {
     ).toThrow();
     expect(() =>
       parseObjectKey(derivedKey.replace("/derived/", "/thumbnail/")),
+    ).toThrow();
+    expect(() =>
+      parseObjectKey(sourceKey.replace(ownerId, ownerId.toUpperCase())),
+    ).toThrow();
+    expect(() =>
+      parseObjectKey(sourceKey.replace(patternId, patternId.toUpperCase())),
+    ).toThrow();
+    expect(() =>
+      parseObjectKey(sourceKey.replace(assetId, assetId.toUpperCase())),
     ).toThrow();
   });
 
