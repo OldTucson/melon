@@ -28,18 +28,25 @@ export function Inspector({
   const latestDraft = useRef(pattern.name);
   const pendingName = useRef<string | null>(null);
   const pendingSave = useRef<Promise<void> | null>(null);
+  const mounted = useRef(true);
+  const saveNameRef = useRef<(candidate: string) => Promise<void>>(
+    async () => undefined,
+  );
 
   useEffect(() => {
+    const draftWasClean =
+      pendingName.current === null &&
+      latestDraft.current === latestName.current;
+    const committedNameChanged = pattern.name !== latestName.current;
     latestPattern.current = pattern;
-    if (pendingName.current === null) latestName.current = pattern.name;
+    if (pendingName.current !== null) return;
+    latestName.current = pattern.name;
+    if (draftWasClean) {
+      latestDraft.current = pattern.name;
+      setName(pattern.name);
+      if (committedNameChanged) setSaveError(null);
+    }
   }, [pattern]);
-
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
-    },
-    [],
-  );
 
   const saveName = async (candidate: string): Promise<void> => {
     if (timer.current) {
@@ -50,8 +57,10 @@ export function Inspector({
     if (!nextName) {
       if (pendingSave.current) await pendingSave.current;
       latestDraft.current = latestName.current;
-      setName(latestName.current);
-      setSaveError("empty");
+      if (mounted.current) {
+        setName(latestName.current);
+        setSaveError("empty");
+      }
       return;
     }
     if (
@@ -66,7 +75,7 @@ export function Inspector({
     }
     const previousName = latestName.current;
     pendingName.current = nextName;
-    setSaveError(null);
+    if (mounted.current) setSaveError(null);
     const request = (async () => {
       try {
         const updated = await mutation.mutatePatternAsync({
@@ -80,15 +89,15 @@ export function Inspector({
         latestName.current = updated.name;
         if (latestDraft.current.trim() === nextName) {
           latestDraft.current = updated.name;
-          setName(updated.name);
+          if (mounted.current) setName(updated.name);
         }
       } catch {
         latestName.current = previousName;
         if (latestDraft.current.trim() === nextName) {
           latestDraft.current = previousName;
-          setName(previousName);
+          if (mounted.current) setName(previousName);
         }
-        setSaveError("save");
+        if (mounted.current) setSaveError("save");
       } finally {
         if (pendingName.current === nextName) pendingName.current = null;
       }
@@ -97,6 +106,24 @@ export function Inspector({
     await request;
     if (pendingSave.current === request) pendingSave.current = null;
   };
+
+  useEffect(() => {
+    saveNameRef.current = saveName;
+  });
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      if (timer.current) {
+        clearTimeout(timer.current);
+        timer.current = null;
+      }
+      if (latestDraft.current.trim()) {
+        void saveNameRef.current(latestDraft.current);
+      }
+    };
+  }, []);
 
   const scheduleNameSave = (nextName: string) => {
     if (timer.current) clearTimeout(timer.current);
@@ -127,6 +154,7 @@ export function Inspector({
                 const nextName = event.target.value;
                 latestDraft.current = nextName;
                 setName(nextName);
+                setSaveError(null);
                 scheduleNameSave(nextName);
               }}
             />

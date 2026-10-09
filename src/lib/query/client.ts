@@ -50,10 +50,14 @@ export function createQueryClient() {
   });
 }
 
-let browserQueryClient: QueryClient | undefined;
+let browserQueryClient:
+  | { ownerId: string; queryClient: QueryClient }
+  | undefined;
 
-export function getQueryClient() {
+export function getQueryClient(ownerId: string) {
   if (typeof window === "undefined") return createQueryClient();
-  browserQueryClient ??= createQueryClient();
-  return browserQueryClient;
+  if (!browserQueryClient || browserQueryClient.ownerId !== ownerId) {
+    browserQueryClient = { ownerId, queryClient: createQueryClient() };
+  }
+  return browserQueryClient.queryClient;
 }

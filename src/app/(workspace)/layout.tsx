@@ -19,7 +19,7 @@ export default async function WorkspaceLayout({
       userId={user.id}
       serverPreference={user.themePreference}
     >
-      <QueryProvider>
+      <QueryProvider ownerId={user.id}>
         <WorkspaceShell
           user={{ displayName: user.displayName, email: user.email }}
         >

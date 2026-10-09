@@ -15,6 +15,7 @@ import { usePathname, useSearchParams } from "next/navigation";
 
 import { readApiResponse } from "@/lib/query/client";
 import { queryKeys } from "@/lib/query/keys";
+import { useQueryOwnerId } from "@/lib/query/provider";
 
 import type { TagItem } from "./library-types";
 
@@ -47,7 +48,11 @@ async function loadTags() {
 export function Sidebar() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const tagsQuery = useQuery({ queryKey: queryKeys.tags, queryFn: loadTags });
+  const ownerId = useQueryOwnerId();
+  const tagsQuery = useQuery({
+    queryKey: queryKeys.tags(ownerId),
+    queryFn: loadTags,
+  });
   const activeView = getActiveView(pathname, searchParams);
 
   return (

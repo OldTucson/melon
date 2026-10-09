@@ -16,6 +16,8 @@ import {
 
 const tagA = "00000000-0000-4000-8000-000000000001";
 const tagB = "00000000-0000-4000-8000-000000000002";
+const ownerA = "10000000-0000-4000-8000-000000000001";
+const ownerB = "10000000-0000-4000-8000-000000000002";
 
 describe("library query state", () => {
   it("round-trips the plan's opaque tag tokens in canonical parameter order", () => {
@@ -115,9 +117,26 @@ describe("library query state", () => {
       ),
     );
 
-    expect(queryKeys.patterns(first)).toEqual(["patterns", second]);
-    expect(queryKeys.pattern("pattern-1")).toEqual(["pattern", "pattern-1"]);
-    expect(queryKeys.tags).toEqual(["tags"]);
+    expect(queryKeys.patterns(ownerA, first)).toEqual([
+      "owner",
+      ownerA,
+      "patterns",
+      second,
+    ]);
+    expect(queryKeys.pattern(ownerA, "pattern-1")).toEqual([
+      "owner",
+      ownerA,
+      "pattern",
+      "pattern-1",
+    ]);
+    expect(queryKeys.patternTags(ownerA, "pattern-1")).toEqual([
+      "owner",
+      ownerA,
+      "pattern",
+      "pattern-1",
+      "tags",
+    ]);
+    expect(queryKeys.tags(ownerA)).toEqual(["owner", ownerA, "tags"]);
   });
 });
 
@@ -142,7 +161,15 @@ describe("query client policy", () => {
     expect(client.getDefaultOptions().mutations?.retry).toBe(0);
   });
 
-  it("keeps one query client for the browser session", () => {
-    expect(getQueryClient()).toBe(getQueryClient());
+  it("keeps one client per active browser owner and drops the previous owner cache", () => {
+    const firstOwnerClient = getQueryClient(ownerA);
+    firstOwnerClient.setQueryData(queryKeys.tags(ownerA), ["owner-a-tag"]);
+
+    expect(getQueryClient(ownerA)).toBe(firstOwnerClient);
+
+    const secondOwnerClient = getQueryClient(ownerB);
+    expect(secondOwnerClient).not.toBe(firstOwnerClient);
+    expect(secondOwnerClient.getQueryData(queryKeys.tags(ownerA))).toBeUndefined();
+    expect(secondOwnerClient.getQueryData(queryKeys.tags(ownerB))).toBeUndefined();
   });
 });

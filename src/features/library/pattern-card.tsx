@@ -48,9 +48,8 @@ export function PatternCard({
       className="pattern-card"
       data-mode={mode}
       data-selected={selected ? "true" : undefined}
-      role="option"
-      aria-label={`${item.name}, ${item.extension.toUpperCase()}`}
-      aria-selected={selected}
+      role="listitem"
+      aria-label={`${item.name}, ${item.extension.toUpperCase()}${selected ? ", 已选择" : ""}`}
       tabIndex={0}
       onClick={(event) =>
         onSelect(item.id, {
@@ -58,9 +57,21 @@ export function PatternCard({
           shiftKey: event.shiftKey,
         })
       }
-      onDoubleClick={() => onOpenPreview(item.id)}
+      onDoubleClick={(event) => {
+        if (
+          event.target instanceof Element &&
+          event.target.closest("button, a, input, select, textarea")
+        ) {
+          return;
+        }
+        onOpenPreview(item.id);
+      }}
       onKeyDown={(event) => {
-        if (event.key === "Enter") onSelect(item.id, {});
+        if (event.target !== event.currentTarget) return;
+        if (event.key === "Enter") {
+          event.preventDefault();
+          onSelect(item.id, {});
+        }
       }}
     >
       <div className="pattern-media" aria-hidden="true">

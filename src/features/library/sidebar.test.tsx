@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { TagItem } from "@/features/library/library-types";
 import { queryKeys } from "@/lib/query/keys";
+import { QueryOwnerProvider } from "@/lib/query/provider";
 
 import { Sidebar } from "./sidebar";
 
@@ -11,6 +12,8 @@ const navigation = vi.hoisted(() => ({
   pathname: "/library",
   searchParams: new URLSearchParams(),
 }));
+
+const ownerId = "10000000-0000-4000-8000-000000000001";
 
 vi.mock("next/navigation", () => ({
   usePathname: () => navigation.pathname,
@@ -46,10 +49,12 @@ function renderSidebar(search = "") {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
-  client.setQueryData(queryKeys.tags, tags);
+  client.setQueryData(queryKeys.tags(ownerId), tags);
   return render(
     <QueryClientProvider client={client}>
-      <Sidebar />
+      <QueryOwnerProvider ownerId={ownerId}>
+        <Sidebar />
+      </QueryOwnerProvider>
     </QueryClientProvider>,
   );
 }

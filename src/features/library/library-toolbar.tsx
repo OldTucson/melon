@@ -20,6 +20,7 @@ import {
 } from "@/features/patterns/contracts";
 import { readApiResponse } from "@/lib/query/client";
 import { queryKeys } from "@/lib/query/keys";
+import { useQueryOwnerId } from "@/lib/query/provider";
 
 import { IconButton } from "./icon-button";
 import type { TagItem } from "./library-types";
@@ -56,23 +57,34 @@ export function LibraryToolbar({
   selectedCount: number;
   viewMode: LibraryViewMode;
 }) {
-  const tagsQuery = useQuery({ queryKey: queryKeys.tags, queryFn: loadTags });
-  const [visibleTagIds, setVisibleTagIds] = useState(query.tagIds);
-  const tagIdsRef = useRef(query.tagIds);
-  const patchQuery = (patch: Partial<PatternQuery>) =>
-    onQueryChange({
-      ...query,
-      tagIds: tagIdsRef.current,
-      ...patch,
+  const ownerId = useQueryOwnerId();
+  const tagsQuery = useQuery({
+    queryKey: queryKeys.tags(ownerId),
+    queryFn: loadTags,
+  });
+  const [pendingQuery, setPendingQuery] = useState(query);
+  const pendingQueryRef = useRef(query);
+
+  const patchQuery = (
+    patch:
+      | Partial<PatternQuery>
+      | ((current: PatternQuery) => Partial<PatternQuery>),
+  ) => {
+    const current = pendingQueryRef.current;
+    const next = {
+      ...current,
+      ...(typeof patch === "function" ? patch(current) : patch),
       cursor: undefined,
-    });
+    };
+    pendingQueryRef.current = next;
+    setPendingQuery(next);
+    onQueryChange(next);
+  };
   const toggleTag = (tagId: string) => {
-    const current = tagIdsRef.current;
+    const current = pendingQueryRef.current.tagIds;
     const tagIds = current.includes(tagId)
       ? current.filter((id) => id !== tagId)
       : [...current, tagId];
-    tagIdsRef.current = tagIds;
-    setVisibleTagIds(tagIds);
     patchQuery({ tagIds });
   };
 
@@ -83,7 +95,7 @@ export function LibraryToolbar({
           <span>格式</span>
           <select
             aria-label="按格式筛选"
-            value={query.formats[0] ?? ""}
+            value={pendingQuery.formats[0] ?? ""}
             onChange={(event) =>
               patchQuery({
                 formats: event.target.value
@@ -103,11 +115,11 @@ export function LibraryToolbar({
         <button
           className="toolbar-toggle"
           type="button"
-          aria-pressed={query.favorite === true}
+          aria-pressed={pendingQuery.favorite === true}
           onClick={() =>
-            patchQuery({
-              favorite: query.favorite === true ? undefined : true,
-            })
+            patchQuery((current) => ({
+              favorite: current.favorite === true ? undefined : true,
+            }))
           }
         >
           <Heart aria-hidden="true" />
@@ -119,10 +131,10 @@ export function LibraryToolbar({
               className="toolbar-toggle"
               type="button"
               aria-label="筛选标签"
-              aria-pressed={visibleTagIds.length > 0}
+              aria-pressed={pendingQuery.tagIds.length > 0}
             >
               <Tags aria-hidden="true" />
-              标签{visibleTagIds.length > 0 ? ` ${visibleTagIds.length}` : ""}
+              标签{pendingQuery.tagIds.length > 0 ? ` ${pendingQuery.tagIds.length}` : ""}
             </button>
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
@@ -149,7 +161,7 @@ export function LibraryToolbar({
               ) : (
                 tagsQuery.data.map((tag) => (
                   <DropdownMenu.CheckboxItem
-                    checked={visibleTagIds.includes(tag.id)}
+                    checked={pendingQuery.tagIds.includes(tag.id)}
                     className="filter-menu-item"
                     key={tag.id}
                     onCheckedChange={() => toggleTag(tag.id)}
@@ -169,14 +181,14 @@ export function LibraryToolbar({
                   </DropdownMenu.CheckboxItem>
                 ))
               )}
-              {visibleTagIds.length > 1 ? (
+              {pendingQuery.tagIds.length > 1 ? (
                 <>
                   <DropdownMenu.Separator className="filter-menu-separator" />
                   <DropdownMenu.Label className="filter-menu-label">
                     多标签匹配
                   </DropdownMenu.Label>
                   <DropdownMenu.RadioGroup
-                    value={query.tagMode}
+                    value={pendingQuery.tagMode}
                     onValueChange={(tagMode) =>
                       patchQuery({ tagMode: tagMode as PatternQuery["tagMode"] })
                     }
@@ -209,7 +221,7 @@ export function LibraryToolbar({
           <span>排序</span>
           <select
             aria-label="排序图案"
-            value={query.sort}
+            value={pendingQuery.sort}
             onChange={(event) =>
               patchQuery({ sort: event.target.value as PatternQuery["sort"] })
             }
@@ -221,14 +233,12 @@ export function LibraryToolbar({
             ))}
           </select>
         </label>
-        {(query.formats.length > 0 ||
-          query.tagIds.length > 0 ||
-          query.favorite !== undefined) && (
+        {(pendingQuery.formats.length > 0 ||
+          pendingQuery.tagIds.length > 0 ||
+          pendingQuery.favorite !== undefined) && (
           <IconButton
             label="清除筛选"
             onClick={() => {
-              tagIdsRef.current = [];
-              setVisibleTagIds([]);
               patchQuery({ formats: [], tagIds: [], favorite: undefined });
             }}
           >

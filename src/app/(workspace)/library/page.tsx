@@ -33,7 +33,7 @@ export default async function LibraryPage({
 
   const queryClient = createQueryClient();
   await queryClient.prefetchInfiniteQuery({
-    queryKey: queryKeys.patterns(query),
+    queryKey: queryKeys.patterns(user.id, query),
     queryFn: ({ pageParam }: { pageParam: string | null }) =>
       listPatterns({
         ownerId: user.id,

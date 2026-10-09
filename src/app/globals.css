@@ -931,7 +931,7 @@ textarea:focus-visible,
 }
 
 .inspector-field,
-.tag-create-form label {
+.tag-create-name {
   display: grid;
   gap: 6px;
   color: var(--text-muted);
@@ -939,8 +939,7 @@ textarea:focus-visible,
 }
 
 .inspector-field input,
-.tag-create-form input,
-.tag-create-form select,
+.tag-create-name input,
 .tag-search-field input {
   width: 100%;
   height: 34px;
@@ -1023,13 +1022,64 @@ textarea:focus-visible,
 
 .tag-create-form {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 92px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 9px;
   margin-top: 12px;
   padding: 12px;
   background: var(--canvas);
   border: 1px solid var(--border);
   border-radius: 6px;
+}
+
+.tag-color-field {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.tag-color-field legend {
+  margin-bottom: 6px;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.tag-color-options {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.tag-color-option {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 32px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.tag-color-option:hover {
+  background: var(--canvas);
+}
+
+.tag-color-option[data-selected="true"] {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.tag-color-option:has(input:focus-visible) {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.tag-color-option .tag-swatch {
+  width: 14px;
+  height: 14px;
 }
 
 .tag-create-form .secondary-button {

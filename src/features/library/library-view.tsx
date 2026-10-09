@@ -15,6 +15,7 @@ import {
 } from "@/features/patterns/contracts";
 import { readApiResponse } from "@/lib/query/client";
 import { queryKeys } from "@/lib/query/keys";
+import { useQueryOwnerId } from "@/lib/query/provider";
 
 import { IconButton } from "./icon-button";
 import { Inspector, MultiSelectionInspector } from "./inspector";
@@ -42,7 +43,7 @@ const blocksLibraryShortcut = (target: EventTarget | null) => {
   if (!(target instanceof Element)) return false;
   return Boolean(
     target.closest(
-      'a, button, input, select, textarea, [contenteditable="true"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]',
+      'a, button, input, select, textarea, [contenteditable="true"], [role="dialog"], [role="listbox"], [role="menu"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]',
     ),
   );
 };
@@ -50,6 +51,7 @@ const blocksLibraryShortcut = (target: EventTarget | null) => {
 export function LibraryView({ initialQuery }: { initialQuery: PatternQuery }) {
   const router = useRouter();
   const pathname = usePathname();
+  const ownerId = useQueryOwnerId();
   const [viewMode, setViewMode] = useState<LibraryViewMode>("grid");
   const [collapsedSelectionKey, setCollapsedSelectionKey] = useState<
     string | null
@@ -71,7 +73,7 @@ export function LibraryView({ initialQuery }: { initialQuery: PatternQuery }) {
     ReturnType<typeof queryKeys.patterns>,
     string | null
   >({
-    queryKey: queryKeys.patterns(initialQuery),
+    queryKey: queryKeys.patterns(ownerId, initialQuery),
     queryFn: ({ pageParam }) => fetchPatternPage(initialQuery, pageParam),
     initialPageParam: initialQuery.cursor ?? null,
     getNextPageParam: (lastPage) => lastPage.nextCursor,
@@ -107,8 +109,12 @@ export function LibraryView({ initialQuery }: { initialQuery: PatternQuery }) {
         event.preventDefault();
         togglePreview();
       } else if (event.key === "Escape") {
-        if (previewId) closePreview();
-        else clearSelection();
+        if (previewId) {
+          closePreview();
+          return;
+        }
+        if (blocksLibraryShortcut(event.target)) return;
+        clearSelection();
       }
     };
     document.addEventListener("keydown", onKeyDown);

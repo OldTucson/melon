@@ -15,6 +15,7 @@ import {
 } from "@/features/tags/contracts";
 import { ApiResponseError, readApiResponse } from "@/lib/query/client";
 import { queryKeys } from "@/lib/query/keys";
+import { useQueryOwnerId } from "@/lib/query/provider";
 
 import type {
   PatternTagItem,
@@ -50,6 +51,15 @@ class TagAssociationError extends Error {
 
 const now = () => new Date().toISOString();
 
+const tagColorNames: Record<TagColorToken, string> = {
+  gray: "灰色",
+  blue: "蓝色",
+  green: "绿色",
+  yellow: "黄色",
+  red: "红色",
+  purple: "紫色",
+};
+
 async function loadTags() {
   return readApiResponse<TagItem[]>(await fetch("/api/tags"));
 }
@@ -84,20 +94,27 @@ export function TagPicker({
   patternId: string;
 }) {
   const queryClient = useQueryClient();
+  const ownerId = useQueryOwnerId();
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState<TagColorToken>("gray");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [pendingCreate, setPendingCreate] =
+    useState<CreateTagIntent | null>(null);
   const [pendingAssociation, setPendingAssociation] =
     useState<CreateTagIntent | null>(null);
-  const tagsQuery = useQuery({ queryKey: queryKeys.tags, queryFn: loadTags });
-  const relationsKey = queryKeys.patternTags(patternId);
+  const tagsQuery = useQuery({
+    queryKey: queryKeys.tags(ownerId),
+    queryFn: loadTags,
+  });
+  const relationsKey = queryKeys.patternTags(ownerId, patternId);
   const relationsQuery = useQuery({
     queryKey: relationsKey,
     queryFn: () => loadPatternTags(patternId),
   });
-  const listKey = queryKeys.patterns(activeQuery);
+  const listKey = queryKeys.patterns(ownerId, activeQuery);
+  const canWrite = tagsQuery.isSuccess && relationsQuery.isSuccess;
 
   const relationMutation = useMutation({
     mutationFn: async (intent: RelationIntent) => {
@@ -151,7 +168,7 @@ export function TagPicker({
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: relationsKey, exact: true });
       void queryClient.invalidateQueries({
-        queryKey: queryKeys.pattern(patternId),
+        queryKey: queryKeys.pattern(ownerId, patternId),
         exact: true,
       });
       void queryClient.invalidateQueries({ queryKey: listKey, exact: true });
@@ -191,8 +208,9 @@ export function TagPicker({
     },
     onMutate: () => setErrorMessage(null),
     onSuccess: (created) => {
+      setPendingCreate(null);
       setPendingAssociation(null);
-      queryClient.setQueryData<TagItem[]>(queryKeys.tags, (value) =>
+      queryClient.setQueryData<TagItem[]>(queryKeys.tags(ownerId), (value) =>
         value?.some((tag) => tag.id === created.id)
           ? value
           : [...(value ?? []), created],
@@ -222,7 +240,7 @@ export function TagPicker({
     },
     onError: (error, intent) => {
       if (error instanceof TagAssociationError) {
-        queryClient.setQueryData<TagItem[]>(queryKeys.tags, (value) =>
+        queryClient.setQueryData<TagItem[]>(queryKeys.tags(ownerId), (value) =>
           value?.some((tag) => tag.id === error.createdTag.id)
             ? value
             : [...(value ?? []), error.createdTag],
@@ -241,13 +259,25 @@ export function TagPicker({
         setErrorMessage("标签已创建，但尚未添加到图案");
         return;
       }
+      if (
+        !(error instanceof ApiResponseError) ||
+        error.status >= 500
+      ) {
+        setPendingCreate(intent);
+        setErrorMessage("标签创建结果未知，请重试");
+        return;
+      }
+      setPendingCreate(null);
       setErrorMessage(relationErrorMessage(error));
     },
     onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.tags, exact: true });
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.tags(ownerId),
+        exact: true,
+      });
       void queryClient.invalidateQueries({ queryKey: relationsKey, exact: true });
       void queryClient.invalidateQueries({
-        queryKey: queryKeys.pattern(patternId),
+        queryKey: queryKeys.pattern(ownerId, patternId),
         exact: true,
       });
       void queryClient.invalidateQueries({ queryKey: listKey, exact: true });
@@ -269,6 +299,10 @@ export function TagPicker({
 
   const createTag = (event: React.FormEvent) => {
     event.preventDefault();
+    if (!canWrite) {
+      setErrorMessage("标签数据无法载入，修改已禁用");
+      return;
+    }
     const name = newName.trim();
     if (!name) {
       setErrorMessage("请输入标签名称");
@@ -290,6 +324,7 @@ export function TagPicker({
           className="text-icon-button"
           type="button"
           aria-label={showCreate ? "取消创建标签" : "创建标签"}
+          disabled={!canWrite}
           onClick={() => setShowCreate((value) => !value)}
         >
           {showCreate ? <X aria-hidden="true" /> : <Plus aria-hidden="true" />}
@@ -299,7 +334,7 @@ export function TagPicker({
 
       {showCreate ? (
         <form className="tag-create-form" onSubmit={createTag}>
-          <label>
+          <label className="tag-create-name">
             <span>标签名称</span>
             <input
               aria-label="标签名称"
@@ -308,26 +343,44 @@ export function TagPicker({
               onChange={(event) => setNewName(event.target.value)}
             />
           </label>
-          <label>
-            <span>标签颜色</span>
-            <select
-              aria-label="标签颜色"
-              value={newColor}
-              onChange={(event) =>
-                setNewColor(event.target.value as TagColorToken)
-              }
-            >
+          <fieldset className="tag-color-field">
+            <legend>标签颜色</legend>
+            <div className="tag-color-options" role="radiogroup" aria-label="标签颜色">
               {tagColorTokens.map((token) => (
-                <option key={token} value={token}>
-                  {token}
-                </option>
+                <label
+                  className="tag-color-option"
+                  data-selected={newColor === token ? "true" : "false"}
+                  key={token}
+                  title={tagColorNames[token]}
+                >
+                  <input
+                    className="sr-only"
+                    type="radio"
+                    name="tag-color"
+                    value={token}
+                    aria-label={tagColorNames[token]}
+                    checked={newColor === token}
+                    onChange={() => setNewColor(token)}
+                  />
+                  <span
+                    className="tag-swatch"
+                    data-color-token={token}
+                    aria-hidden="true"
+                  />
+                  <span className="sr-only">{tagColorNames[token]}</span>
+                </label>
               ))}
-            </select>
-          </label>
+            </div>
+          </fieldset>
           <button
             className="secondary-button"
             type="submit"
-            disabled={createMutation.isPending || pendingAssociation !== null}
+            disabled={
+              !canWrite ||
+              createMutation.isPending ||
+              pendingCreate !== null ||
+              pendingAssociation !== null
+            }
           >
             保存并添加标签
           </button>
@@ -345,6 +398,17 @@ export function TagPicker({
         </button>
       ) : null}
 
+      {pendingCreate ? (
+        <button
+          className="secondary-button tag-association-retry"
+          type="button"
+          disabled={createMutation.isPending || !canWrite}
+          onClick={() => createMutation.mutate(pendingCreate)}
+        >
+          重试创建标签
+        </button>
+      ) : null}
+
       <label className="tag-search-field">
         <span className="sr-only">搜索标签</span>
         <input
@@ -352,12 +416,27 @@ export function TagPicker({
           aria-label="搜索标签"
           placeholder="搜索标签"
           value={search}
+          disabled={!canWrite}
           onChange={(event) => setSearch(event.target.value)}
         />
       </label>
 
       {tagsQuery.isPending || relationsQuery.isPending ? (
         <p className="muted-copy">正在读取标签...</p>
+      ) : tagsQuery.isError || relationsQuery.isError ? (
+        <div className="tag-load-error" role="alert">
+          <p>标签数据无法载入，修改已禁用</p>
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={tagsQuery.isFetching || relationsQuery.isFetching}
+            onClick={() => {
+              void Promise.all([tagsQuery.refetch(), relationsQuery.refetch()]);
+            }}
+          >
+            重试读取标签
+          </button>
+        </div>
       ) : (
         <div className="tag-checkbox-list">
           {visibleTags.map((tag) => (

@@ -10,6 +10,7 @@ import {
 import type { PatternPatch, PatternQuery } from "@/features/patterns/contracts";
 import { readApiResponse } from "@/lib/query/client";
 import { queryKeys } from "@/lib/query/keys";
+import { useQueryOwnerId } from "@/lib/query/provider";
 
 import type { PatternItem, PatternPage } from "./library-types";
 
@@ -90,11 +91,12 @@ const updatePatternInPages = (
 
 export function usePatternPatchMutation(activeQuery: PatternQuery) {
   const queryClient = useQueryClient();
-  const listKey = queryKeys.patterns(activeQuery);
+  const ownerId = useQueryOwnerId();
+  const listKey = queryKeys.patterns(ownerId, activeQuery);
   const mutation = useMutation({
     mutationFn: sendPatternPatch,
     onMutate: async (intent: PatternPatchIntent) => {
-      const detailKey = queryKeys.pattern(intent.patternId);
+      const detailKey = queryKeys.pattern(ownerId, intent.patternId);
       await Promise.all([
         queryClient.cancelQueries({ queryKey: detailKey, exact: true }),
         queryClient.cancelQueries({ queryKey: listKey, exact: true }),
@@ -139,7 +141,10 @@ export function usePatternPatchMutation(activeQuery: PatternQuery) {
       }
     },
     onSuccess: (updated, intent) => {
-      queryClient.setQueryData(queryKeys.pattern(intent.patternId), updated);
+      queryClient.setQueryData(
+        queryKeys.pattern(ownerId, intent.patternId),
+        updated,
+      );
       queryClient.setQueryData<InfiniteData<PatternPage, string | null>>(
         listKey,
         (value) =>
@@ -148,7 +153,7 @@ export function usePatternPatchMutation(activeQuery: PatternQuery) {
     },
     onSettled: (_data, _error, intent) => {
       void queryClient.invalidateQueries({
-        queryKey: queryKeys.pattern(intent.patternId),
+        queryKey: queryKeys.pattern(ownerId, intent.patternId),
         exact: true,
       });
       void queryClient.invalidateQueries({ queryKey: listKey, exact: true });
@@ -160,7 +165,7 @@ export function usePatternPatchMutation(activeQuery: PatternQuery) {
     const intent = createPatternPatchIntent(input);
     return enqueuePatternMutation(queryClient, input.patternId, () => {
       const currentDetail = queryClient.getQueryData<PatternItem>(
-        queryKeys.pattern(input.patternId),
+        queryKeys.pattern(ownerId, input.patternId),
       );
       const currentList = queryClient.getQueryData<
         InfiniteData<PatternPage, string | null>

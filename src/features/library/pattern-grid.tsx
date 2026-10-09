@@ -154,8 +154,8 @@ function VirtualPatternCanvas({
   return (
     <div
       className="virtual-pattern-canvas"
-      role="listbox"
-      aria-multiselectable="true"
+      role="list"
+      aria-label="图案列表"
       style={{ height: `${virtualizer.getTotalSize()}px` }}
     >
       {visibleRows.map((virtualRow) => {

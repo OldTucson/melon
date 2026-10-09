@@ -27,6 +27,7 @@ import type {
   PatternPage,
 } from "@/features/library/library-types";
 import { queryKeys } from "@/lib/query/keys";
+import { QueryOwnerProvider } from "@/lib/query/provider";
 
 import { LibraryView } from "./library-view";
 import { usePatternPatchMutation } from "./pattern-mutations";
@@ -44,9 +45,11 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => navigation.searchParams,
 }));
 
+const ownerId = "10000000-0000-4000-8000-000000000000";
+
 const makePattern = (index: number): PatternItem => ({
   id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
-  ownerId: "10000000-0000-4000-8000-000000000000",
+  ownerId,
   name: `Pattern ${index}`,
   originalFilename: `pattern-${index}.psd`,
   extension: index % 2 === 0 ? "psd" : "png",
@@ -77,14 +80,14 @@ function createClient(items: PatternItem[]) {
   });
   const page: PatternPage = { items, nextCursor: null };
   client.setQueryData<InfiniteData<PatternPage, string | null>>(
-    queryKeys.patterns(query),
+    queryKeys.patterns(ownerId, query),
     { pages: [page], pageParams: [null] },
   );
   for (const item of items) {
-    client.setQueryData(queryKeys.pattern(item.id), item);
-    client.setQueryData(queryKeys.patternTags(item.id), { items: [] });
+    client.setQueryData(queryKeys.pattern(ownerId, item.id), item);
+    client.setQueryData(queryKeys.patternTags(ownerId, item.id), { items: [] });
   }
-  client.setQueryData(queryKeys.tags, []);
+  client.setQueryData(queryKeys.tags(ownerId), []);
   return client;
 }
 
@@ -94,9 +97,11 @@ function renderLibrary(items = Array.from({ length: 120 }, (_, i) => makePattern
     client,
     ...render(
       <QueryClientProvider client={client}>
-        <Tooltip.Provider>
-          <LibraryView initialQuery={query} />
-        </Tooltip.Provider>
+        <QueryOwnerProvider ownerId={ownerId}>
+          <Tooltip.Provider>
+            <LibraryView initialQuery={query} />
+          </Tooltip.Provider>
+        </QueryOwnerProvider>
       </QueryClientProvider>,
     ),
   };
@@ -144,11 +149,13 @@ describe("Mac-first workspace", () => {
     const client = createClient([]);
     render(
       <QueryClientProvider client={client}>
-        <WorkspaceShell
-          user={{ displayName: "Lin", email: "lin@example.test" }}
-        >
-          <p>Workspace content</p>
-        </WorkspaceShell>
+        <QueryOwnerProvider ownerId={ownerId}>
+          <WorkspaceShell
+            user={{ displayName: "Lin", email: "lin@example.test" }}
+          >
+            <p>Workspace content</p>
+          </WorkspaceShell>
+        </QueryOwnerProvider>
       </QueryClientProvider>,
     );
 
@@ -178,12 +185,38 @@ describe("Mac-first workspace", () => {
     renderLibrary();
 
     const region = await screen.findByRole("region", { name: "图案结果" });
-    const renderedOptions = screen.getAllByRole("option");
+    const renderedItems = screen.getAllByRole("listitem");
 
     expect(region).toHaveAttribute("data-virtualized", "true");
-    expect(renderedOptions.length).toBeGreaterThan(0);
-    expect(renderedOptions.length).toBeLessThan(120);
+    expect(renderedItems.length).toBeGreaterThan(0);
+    expect(renderedItems.length).toBeLessThan(120);
   });
+
+  it("uses list semantics that permit interactive controls inside each card", async () => {
+    renderLibrary([makePattern(1), makePattern(2)]);
+
+    const list = await screen.findByRole("list", { name: "图案列表" });
+    expect(list).toBeVisible();
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(within(list).queryByRole("option")).not.toBeInTheDocument();
+  });
+
+  it.each(["{Enter}", " "])(
+    "does not select a card when its preview action handles %s",
+    async (key) => {
+      const user = userEvent.setup();
+      renderLibrary([makePattern(1)]);
+
+      const card = await screen.findByRole("listitem", { name: /Pattern 1/ });
+      const preview = within(card).getByRole("button", { name: "预览" });
+      preview.focus();
+      await user.keyboard(key);
+
+      expect(screen.getByRole("dialog", { name: "Pattern 1 预览" })).toBeVisible();
+      expect(card).not.toHaveAttribute("data-selected", "true");
+    },
+  );
 
   it("measures the result region before the first ResizeObserver callback", async () => {
     vi.stubGlobal(
@@ -278,19 +311,19 @@ describe("Mac-first workspace", () => {
     const user = userEvent.setup();
     renderLibrary([makePattern(1), makePattern(2)]);
 
-    const first = await screen.findByRole("option", { name: /Pattern 1/ });
+    const first = await screen.findByRole("listitem", { name: /Pattern 1/ });
     await user.click(first);
-    expect(first).toHaveAttribute("aria-selected", "true");
+    expect(first).toHaveAttribute("data-selected", "true");
     expect(fetchMock).not.toHaveBeenCalled();
 
     await user.keyboard(" ");
     expect(screen.getByRole("dialog", { name: "Pattern 1 预览" })).toBeVisible();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(first).toHaveAttribute("aria-selected", "true");
+    expect(first).toHaveAttribute("data-selected", "true");
 
     await user.keyboard("{Escape}");
-    expect(first).toHaveAttribute("aria-selected", "false");
+    expect(first).not.toHaveAttribute("data-selected", "true");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -298,7 +331,7 @@ describe("Mac-first workspace", () => {
     const user = userEvent.setup();
     renderLibrary([makePattern(1)]);
 
-    await user.click(screen.getByRole("option", { name: /Pattern 1/ }));
+    await user.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
     const listView = screen.getByRole("button", { name: "列表视图" });
     listView.focus();
     await user.keyboard(" ");
@@ -307,15 +340,60 @@ describe("Mac-first workspace", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("does not clear selection when Escape originates from an input or button", async () => {
+    const user = userEvent.setup();
+    renderLibrary([makePattern(1)]);
+
+    const card = screen.getByRole("listitem", { name: /Pattern 1/ });
+    await user.click(card);
+    const nameInput = screen.getByRole("textbox", { name: "图案名称" });
+    nameInput.focus();
+    await user.keyboard("{Escape}");
+    expect(card).toHaveAttribute("data-selected", "true");
+
+    const listView = screen.getByRole("button", { name: "列表视图" });
+    listView.focus();
+    await user.keyboard("{Escape}");
+    expect(card).toHaveAttribute("data-selected", "true");
+  });
+
+  it("lets a Radix menu consume Escape without clearing selection", async () => {
+    const user = userEvent.setup();
+    const { client } = renderLibrary([makePattern(1)]);
+    act(() => {
+      client.setQueryData(queryKeys.tags(ownerId), [
+        {
+          id: "00000000-0000-4000-8000-000000000091",
+          ownerId,
+          name: "花卉",
+          normalizedName: "花卉",
+          colorToken: "green",
+          changeSeq: "1",
+          createdAt: "2026-10-08T00:00:00.000Z",
+          updatedAt: "2026-10-08T00:00:00.000Z",
+        },
+      ]);
+    });
+
+    const card = screen.getByRole("listitem", { name: /Pattern 1/ });
+    await user.click(card);
+    await user.click(screen.getByRole("button", { name: "筛选标签" }));
+    expect(screen.getByRole("menu")).toBeVisible();
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(card).toHaveAttribute("data-selected", "true");
+  });
+
   it("clears selections that disappear after the active result refreshes", async () => {
     const item = makePattern(1);
     const { client } = renderLibrary([item]);
 
-    fireEvent.click(await screen.findByRole("option", { name: /Pattern 1/ }));
+    fireEvent.click(await screen.findByRole("listitem", { name: /Pattern 1/ }));
     expect(screen.getByText("已选择 1 项")).toBeVisible();
     act(() => {
       client.setQueryData<InfiniteData<PatternPage, string | null>>(
-        queryKeys.patterns(query),
+        queryKeys.patterns(ownerId, query),
         { pages: [{ items: [], nextCursor: null }], pageParams: [null] },
       );
     });
@@ -331,7 +409,7 @@ describe("Mac-first workspace", () => {
     const user = userEvent.setup();
     const { client } = renderLibrary([makePattern(1)]);
     act(() => {
-      client.setQueryData(queryKeys.tags, [
+      client.setQueryData(queryKeys.tags(ownerId), [
         {
           id: "00000000-0000-4000-8000-000000000091",
           ownerId: "10000000-0000-4000-8000-000000000000",
@@ -365,11 +443,30 @@ describe("Mac-first workspace", () => {
     );
   });
 
+  it("composes rapid filter patches from the latest pending URL state", async () => {
+    const user = userEvent.setup();
+    renderLibrary([makePattern(1)]);
+
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "按格式筛选" }),
+      "psd",
+    );
+    await user.click(
+      within(screen.getByLabelText("图库工具栏")).getByRole("button", {
+        name: "收藏",
+      }),
+    );
+
+    expect(navigation.replace).toHaveBeenLastCalledWith(
+      "/library?format=psd&favorite=true",
+    );
+  });
+
   it("opens preview on double click and allows the 340 px inspector to collapse", async () => {
     const user = userEvent.setup();
     renderLibrary([makePattern(1)]);
 
-    const first = await screen.findByRole("option", { name: /Pattern 1/ });
+    const first = await screen.findByRole("listitem", { name: /Pattern 1/ });
     await user.click(first);
     expect(screen.getByRole("complementary", { name: "图案检查器" })).toHaveClass(
       "library-inspector",
@@ -382,7 +479,7 @@ describe("Mac-first workspace", () => {
     await user.click(screen.getByRole("button", { name: "显示检查器" }));
     expect(screen.getByRole("complementary", { name: "图案检查器" })).toBeVisible();
 
-    fireEvent.doubleClick(first);
+    fireEvent.doubleClick(first.querySelector(".pattern-media")!);
     expect(screen.getByRole("dialog", { name: "Pattern 1 预览" })).toBeVisible();
   });
 
@@ -400,7 +497,7 @@ describe("Mac-first workspace", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderLibrary([item]);
 
-    fireEvent.click(screen.getByRole("option", { name: /Pattern 1/ }));
+    fireEvent.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
     const input = screen.getByRole("textbox", { name: "图案名称" });
     fireEvent.change(input, { target: { value: "New pattern name" } });
 
@@ -422,6 +519,99 @@ describe("Mac-first workspace", () => {
     ).toBe("New pattern name");
   });
 
+  it("flushes one valid rename when the inspector unmounts before the debounce", async () => {
+    vi.useFakeTimers();
+    const item = makePattern(1);
+    let resolvePatch!: (response: Response) => void;
+    const pendingPatch = new Promise<Response>((resolve) => {
+      resolvePatch = resolve;
+    });
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PATCH") return pendingPatch;
+      throw new Error("Unexpected request");
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal("fetch", fetchMock);
+    const view = renderLibrary([item]);
+
+    fireEvent.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "图案名称" }), {
+      target: { value: "Flush on unmount" },
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(399));
+    view.unmount();
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const patchCalls = fetchMock.mock.calls.filter(
+      ([, init]) => init?.method === "PATCH",
+    );
+    expect(patchCalls).toHaveLength(1);
+    expect(JSON.parse(String(patchCalls[0]![1]?.body)).patch.name).toBe(
+      "Flush on unmount",
+    );
+
+    await act(async () => {
+      resolvePatch(
+        Response.json({ ...item, name: "Flush on unmount", version: 1 }),
+      );
+      await pendingPatch;
+      await vi.runAllTimersAsync();
+    });
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH"))
+      .toHaveLength(1);
+    expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it("syncs external names only while the local draft is clean", async () => {
+    vi.useFakeTimers();
+    const item = makePattern(1);
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      return Response.json({ ...item, ...body.patch, version: 3 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { client } = renderLibrary([item]);
+
+    fireEvent.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
+    const input = screen.getByRole("textbox", { name: "图案名称" });
+    const externallyRenamed = { ...item, name: "Server name", version: 1 };
+    act(() => {
+      client.setQueryData<InfiniteData<PatternPage, string | null>>(
+        queryKeys.patterns(ownerId, query),
+        {
+          pages: [{ items: [externallyRenamed], nextCursor: null }],
+          pageParams: [null],
+        },
+      );
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    expect(input).toHaveValue("Server name");
+
+    fireEvent.change(input, { target: { value: "Local draft" } });
+    const secondServerName = {
+      ...externallyRenamed,
+      name: "Newer server name",
+      version: 2,
+    };
+    act(() => {
+      client.setQueryData<InfiniteData<PatternPage, string | null>>(
+        queryKeys.patterns(ownerId, query),
+        {
+          pages: [{ items: [secondServerName], nextCursor: null }],
+          pageParams: [null],
+        },
+      );
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(0));
+    expect(input).toHaveValue("Local draft");
+
+    fireEvent.blur(input);
+    await act(async () => vi.runAllTimersAsync());
+  });
+
   it("restores the committed name when an automatic rename fails", async () => {
     vi.useFakeTimers();
     const item = makePattern(1);
@@ -441,7 +631,7 @@ describe("Mac-first workspace", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderLibrary([item]);
 
-    fireEvent.click(screen.getByRole("option", { name: /Pattern 1/ }));
+    fireEvent.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
     const input = screen.getByRole("textbox", { name: "图案名称" });
     fireEvent.change(input, { target: { value: "Rejected name" } });
     await act(async () => {
@@ -474,7 +664,7 @@ describe("Mac-first workspace", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderLibrary([item]);
 
-    fireEvent.click(screen.getByRole("option", { name: /Pattern 1/ }));
+    fireEvent.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
     const input = screen.getByRole("textbox", { name: "图案名称" });
     fireEvent.change(input, { target: { value: "   " } });
     await act(async () => vi.advanceTimersByTimeAsync(400));
@@ -501,7 +691,7 @@ describe("Mac-first workspace", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderLibrary([item]);
 
-    fireEvent.click(screen.getByRole("option", { name: /Pattern 1/ }));
+    fireEvent.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
     const input = screen.getByRole("textbox", { name: "图案名称" });
     fireEvent.change(input, { target: { value: "One request" } });
     await act(async () => {
@@ -537,7 +727,7 @@ describe("Mac-first workspace", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderLibrary([item]);
 
-    fireEvent.click(screen.getByRole("option", { name: /Pattern 1/ }));
+    fireEvent.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
     const input = screen.getByRole("textbox", { name: "图案名称" });
     fireEvent.change(input, { target: { value: "First name" } });
     await act(async () => vi.advanceTimersByTimeAsync(400));
@@ -599,13 +789,13 @@ describe("Mac-first workspace", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderLibrary([item]);
 
-    fireEvent.click(screen.getByRole("option", { name: /Pattern 1/ }));
+    fireEvent.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
     fireEvent.change(screen.getByRole("textbox", { name: "图案名称" }), {
       target: { value: "Renamed first" },
     });
     await act(async () => vi.advanceTimersByTimeAsync(400));
     fireEvent.click(
-      within(screen.getByRole("option", { name: /Pattern 1/ })).getByRole(
+      within(screen.getByRole("listitem", { name: /Pattern 1/ })).getByRole(
         "button",
         { name: "收藏" },
       ),
@@ -693,7 +883,9 @@ describe("pattern editor mutation", () => {
 
     render(
       <QueryClientProvider client={client}>
-        <MutationHarness item={item} />
+        <QueryOwnerProvider ownerId={ownerId}>
+          <MutationHarness item={item} />
+        </QueryOwnerProvider>
       </QueryClientProvider>,
     );
 
@@ -701,12 +893,12 @@ describe("pattern editor mutation", () => {
 
     await waitFor(() => {
       expect(
-        client.getQueryData<PatternItem>(queryKeys.pattern(item.id))
+        client.getQueryData<PatternItem>(queryKeys.pattern(ownerId, item.id))
           ?.isFavorite,
       ).toBe(true);
       expect(
         client.getQueryData<InfiniteData<PatternPage, string | null>>(
-          queryKeys.patterns(query),
+          queryKeys.patterns(ownerId, query),
         )?.pages[0]?.items[0]?.isFavorite,
       ).toBe(true);
     });
@@ -723,12 +915,12 @@ describe("pattern editor mutation", () => {
 
     await waitFor(() => {
       expect(
-        client.getQueryData<PatternItem>(queryKeys.pattern(item.id))
+        client.getQueryData<PatternItem>(queryKeys.pattern(ownerId, item.id))
           ?.isFavorite,
       ).toBe(false);
       expect(
         client.getQueryData<InfiniteData<PatternPage, string | null>>(
-          queryKeys.patterns(query),
+          queryKeys.patterns(ownerId, query),
         )?.pages[0]?.items[0]?.isFavorite,
       ).toBe(false);
     });
@@ -755,7 +947,9 @@ describe("pattern editor mutation", () => {
 
     render(
       <QueryClientProvider client={client}>
-        <ConcurrentMutationHarness items={[first, second]} />
+        <QueryOwnerProvider ownerId={ownerId}>
+          <ConcurrentMutationHarness items={[first, second]} />
+        </QueryOwnerProvider>
       </QueryClientProvider>,
     );
 
@@ -769,7 +963,7 @@ describe("pattern editor mutation", () => {
     await waitFor(() => {
       const list = client.getQueryData<
         InfiniteData<PatternPage, string | null>
-      >(queryKeys.patterns(query));
+      >(queryKeys.patterns(ownerId, query));
       expect(list?.pages[0]?.items.map((item) => item.isFavorite)).toEqual([
         true,
         true,
@@ -798,7 +992,7 @@ describe("pattern editor mutation", () => {
     await waitFor(() => {
       const list = client.getQueryData<
         InfiniteData<PatternPage, string | null>
-      >(queryKeys.patterns(query));
+      >(queryKeys.patterns(ownerId, query));
       const firstInList = list?.pages[0]?.items.find(
         (item) => item.id === first.id,
       );
@@ -807,11 +1001,15 @@ describe("pattern editor mutation", () => {
       );
       expect(firstInList).toMatchObject({ isFavorite: false, version: 0 });
       expect(secondInList).toMatchObject({ isFavorite: true, version: 1 });
-      expect(client.getQueryData(queryKeys.pattern(first.id))).toMatchObject({
+      expect(
+        client.getQueryData(queryKeys.pattern(ownerId, first.id)),
+      ).toMatchObject({
         isFavorite: false,
         version: 0,
       });
-      expect(client.getQueryData(queryKeys.pattern(second.id))).toMatchObject({
+      expect(
+        client.getQueryData(queryKeys.pattern(ownerId, second.id)),
+      ).toMatchObject({
         isFavorite: true,
         version: 1,
       });
