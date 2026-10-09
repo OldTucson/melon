@@ -103,6 +103,9 @@ export function usePatternPatchMutation(activeQuery: PatternQuery) {
       const previousList = queryClient.getQueryData<
         InfiniteData<PatternPage, string | null>
       >(listKey);
+      const previousListItem = previousList?.pages
+        .flatMap((page) => page.items)
+        .find((item) => item.id === intent.patternId);
 
       queryClient.setQueryData<PatternItem>(detailKey, (value) =>
         value ? applyPatch(value, intent.patch) : value,
@@ -117,13 +120,23 @@ export function usePatternPatchMutation(activeQuery: PatternQuery) {
       return {
         detailKey,
         previousDetail,
-        previousList,
+        previousListItem,
       };
     },
-    onError: (_error, _intent, context) => {
+    onError: (_error, intent, context) => {
       if (!context) return;
       queryClient.setQueryData(context.detailKey, context.previousDetail);
-      queryClient.setQueryData(listKey, context.previousList);
+      if (context.previousListItem) {
+        queryClient.setQueryData<InfiniteData<PatternPage, string | null>>(
+          listKey,
+          (value) =>
+            updatePatternInPages(
+              value,
+              intent.patternId,
+              () => context.previousListItem!,
+            ),
+        );
+      }
     },
     onSuccess: (updated, intent) => {
       queryClient.setQueryData(queryKeys.pattern(intent.patternId), updated);

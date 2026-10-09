@@ -1,12 +1,20 @@
 "use client";
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 
 import type { PatternItem } from "./library-types";
 import type { LibraryViewMode } from "./library-toolbar";
 import { PatternCard } from "./pattern-card";
 import type { SelectionModifiers } from "./selection-store";
+
+const getRowKey = (index: number) => index;
 
 export function PatternGrid({
   hasNextPage,
@@ -55,29 +63,6 @@ export function PatternGrid({
   const rowCount = Math.ceil(items.length / columns);
   const rowHeight =
     mode === "list" ? 88 : Math.max(196, (width - (columns - 1) * 12) / columns) + 68;
-  // TanStack Virtual is the approved engine; its methods intentionally resist compiler memoization.
-  // eslint-disable-next-line react-hooks/incompatible-library
-  const virtualizer = useVirtualizer({
-    count: rowCount,
-    estimateSize: () => rowHeight,
-    getScrollElement: () => scrollRef.current,
-    getItemKey: (index) => index,
-    initialRect: { width: 900, height: 700 },
-    overscan: 2,
-  });
-  const virtualRows = virtualizer.getVirtualItems();
-  const visibleRows =
-    virtualRows.length > 0 || rowCount === 0
-      ? virtualRows
-      : Array.from(
-          { length: Math.min(rowCount, Math.ceil(700 / rowHeight) + 2) },
-          (_, index) => ({
-            index,
-            key: index,
-            size: rowHeight,
-            start: index * rowHeight,
-          }),
-        );
 
   return (
     <div
@@ -97,46 +82,110 @@ export function PatternGrid({
         }
       }}
     >
-      <div
-        className="virtual-pattern-canvas"
-        role="listbox"
-        aria-multiselectable="true"
-        style={{ height: `${virtualizer.getTotalSize()}px` }}
-      >
-        {visibleRows.map((virtualRow) => {
-          const start = virtualRow.index * columns;
-          const rowItems = items.slice(start, start + columns);
-          return (
-            <div
-              className="virtual-pattern-row"
-              data-mode={mode}
-              key={virtualRow.key}
-              style={{
-                gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-                height: `${virtualRow.size}px`,
-                transform: `translateY(${virtualRow.start}px)`,
-              }}
-            >
-              {rowItems.map((item) => (
-                <PatternCard
-                  item={item}
-                  key={item.id}
-                  mode={mode}
-                  onFavorite={onFavorite}
-                  onOpenPreview={onOpenPreview}
-                  onSelect={onSelect}
-                  selected={selectedIds.has(item.id)}
-                />
-              ))}
-            </div>
-          );
-        })}
-      </div>
+      <VirtualPatternCanvas
+        columns={columns}
+        items={items}
+        key={`${mode}:${columns}:${rowHeight}`}
+        mode={mode}
+        onFavorite={onFavorite}
+        onOpenPreview={onOpenPreview}
+        onSelect={onSelect}
+        rowCount={rowCount}
+        rowHeight={rowHeight}
+        scrollRef={scrollRef}
+        selectedIds={selectedIds}
+      />
       {isFetchingNextPage ? (
         <p className="load-more-status" aria-live="polite">
           正在载入更多图案...
         </p>
       ) : null}
+    </div>
+  );
+}
+
+function VirtualPatternCanvas({
+  columns,
+  items,
+  mode,
+  onFavorite,
+  onOpenPreview,
+  onSelect,
+  rowCount,
+  rowHeight,
+  scrollRef,
+  selectedIds,
+}: {
+  columns: number;
+  items: PatternItem[];
+  mode: LibraryViewMode;
+  onFavorite: (item: PatternItem) => void;
+  onOpenPreview: (id: string) => void;
+  onSelect: (id: string, modifiers: SelectionModifiers) => void;
+  rowCount: number;
+  rowHeight: number;
+  scrollRef: RefObject<HTMLDivElement | null>;
+  selectedIds: ReadonlySet<string>;
+}) {
+  // TanStack Virtual is the approved engine; its methods intentionally resist compiler memoization.
+  // eslint-disable-next-line react-hooks/incompatible-library
+  const virtualizer = useVirtualizer({
+    count: rowCount,
+    estimateSize: () => rowHeight,
+    getScrollElement: () => scrollRef.current,
+    getItemKey: getRowKey,
+    initialRect: { width: 900, height: 700 },
+    overscan: 2,
+  });
+  const virtualRows = virtualizer.getVirtualItems();
+  const visibleRows =
+    virtualRows.length > 0 || rowCount === 0
+      ? virtualRows
+      : Array.from(
+          { length: Math.min(rowCount, Math.ceil(700 / rowHeight) + 2) },
+          (_, index) => ({
+            index,
+            key: index,
+            size: rowHeight,
+            start: index * rowHeight,
+          }),
+        );
+
+  return (
+    <div
+      className="virtual-pattern-canvas"
+      role="listbox"
+      aria-multiselectable="true"
+      style={{ height: `${virtualizer.getTotalSize()}px` }}
+    >
+      {visibleRows.map((virtualRow) => {
+        const start = virtualRow.index * columns;
+        const rowItems = items.slice(start, start + columns);
+        return (
+          <div
+            className="virtual-pattern-row"
+            data-mode={mode}
+            key={virtualRow.key}
+            style={{
+              gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+              height: `${virtualRow.size}px`,
+              transform: `translateY(${virtualRow.start}px)`,
+            }}
+          >
+            {rowItems.map((item) => (
+              <PatternCard
+                item={item}
+                key={item.id}
+                mode={mode}
+                onFavorite={onFavorite}
+                onOpenPreview={onOpenPreview}
+                onSelect={onSelect}
+                selected={selectedIds.has(item.id)}
+              />
+            ))}
+          </div>
+        );
+      })}
     </div>
   );
 }

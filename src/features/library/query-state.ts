@@ -9,6 +9,7 @@ export type LibrarySearchState = {
   formats: string[];
   tagIds: string[];
   tagMode: string;
+  untagged?: string | boolean;
   favorite?: string | boolean;
   previewStatus?: string;
   sort: string;
@@ -48,6 +49,7 @@ export function parseLibrarySearchParams(
     formats: canonicalFormats(formats),
     tagIds: canonicalTags(tagIds),
     tagMode: scalar("tagMode") ?? "all",
+    untagged: scalar("untagged"),
     favorite: scalar("favorite"),
     previewStatus: scalar("previewStatus"),
     sort: scalar("sort") ?? "updated_desc",
@@ -77,6 +79,9 @@ export function serializeLibrarySearchParams(
     result.append("tag", tagId);
   }
   if (state.tagIds.length > 0) result.set("tagMode", state.tagMode);
+  if (state.untagged !== undefined) {
+    result.set("untagged", String(state.untagged));
+  }
   if (state.favorite !== undefined) {
     result.set("favorite", String(state.favorite));
   }

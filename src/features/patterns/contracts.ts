@@ -29,6 +29,7 @@ export const patternQuerySchema = z.object({
   formats: z.array(z.enum(patternFormats)).max(6).default([]),
   tagIds: z.array(z.string().uuid()).max(20).default([]),
   tagMode: z.enum(["all", "any"]).default("all"),
+  untagged: queryBoolean.optional(),
   favorite: queryBoolean.optional(),
   previewStatus: z
     .enum(["pending", "ready", "unsupported", "failed", "manual"])
@@ -79,6 +80,7 @@ export function parsePatternSearchParams(searchParams: URLSearchParams) {
     formats: formats.length > 0 ? formats : undefined,
     tagIds: tagIds.length > 0 ? tagIds : undefined,
     tagMode: scalar("tagMode"),
+    untagged: scalar("untagged"),
     favorite: scalar("favorite"),
     previewStatus: scalar("previewStatus"),
     sort: scalar("sort"),

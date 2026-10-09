@@ -335,6 +335,32 @@ textarea:focus-visible,
   padding-top: 18px;
 }
 
+.sidebar-tags {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-section-label,
+.sidebar-section-message {
+  margin: 0;
+  padding: 3px 9px 5px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.sidebar-section-label {
+  font-weight: 650;
+}
+
+.sidebar-tag-link {
+  grid-template-columns: 10px minmax(0, 1fr);
+}
+
+.sidebar-tag-link .tag-swatch {
+  flex: 0 0 auto;
+}
+
 .sidebar-link {
   display: flex;
   align-items: center;
@@ -1237,6 +1263,15 @@ textarea:focus-visible,
   .sidebar-link span {
     display: none;
   }
+
+  .sidebar-section-label,
+  .sidebar-section-message {
+    display: none;
+  }
+
+  .sidebar-tag-link .tag-swatch {
+    display: block;
+  }
 }
 
 @media (max-width: 720px) {
@@ -1303,6 +1338,10 @@ textarea:focus-visible,
     flex: 0 0 auto;
     margin: 0;
     padding: 0;
+  }
+
+  .sidebar-tags {
+    display: none;
   }
 
   .sidebar-link {

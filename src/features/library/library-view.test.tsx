@@ -212,6 +212,67 @@ describe("Mac-first workspace", () => {
     );
   });
 
+  it("remeasures cached virtual rows when width changes without changing the column count", async () => {
+    const resizeObservers: Array<{
+      callback: ResizeObserverCallback;
+      observer: ResizeObserver;
+    }> = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class ResizeObserver {
+        constructor(callback: ResizeObserverCallback) {
+          resizeObservers.push({ callback, observer: this });
+        }
+        observe() {}
+        disconnect() {}
+        unobserve() {}
+      },
+    );
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(
+      function clientWidth(this: HTMLElement) {
+        return this.classList.contains("pattern-results") ? 900 : 0;
+      },
+    );
+
+    renderLibrary(Array.from({ length: 12 }, (_, i) => makePattern(i + 1)));
+
+    const initialRow = await waitFor(() => {
+      const row = document.querySelector<HTMLElement>(".virtual-pattern-row");
+      expect(row).not.toBeNull();
+      expect(row!.style.gridTemplateColumns).toBe(
+        "repeat(4, minmax(0, 1fr))",
+      );
+      return row!;
+    });
+    expect(initialRow.style.height).toBe("284px");
+
+    act(() => {
+      for (const { callback, observer } of resizeObservers) {
+        callback(
+          [
+            {
+              target: screen.getByRole("region", { name: "图案结果" }),
+              contentRect: { width: 940, height: 700 } as DOMRectReadOnly,
+            } as unknown as ResizeObserverEntry,
+          ],
+          observer,
+        );
+      }
+    });
+
+    await waitFor(() => {
+      const row = document.querySelector<HTMLElement>(".virtual-pattern-row");
+      expect(row?.style.gridTemplateColumns).toBe(
+        "repeat(4, minmax(0, 1fr))",
+      );
+      expect(row?.style.height).toBe("294px");
+      expect(
+        document.querySelector<HTMLElement>(".virtual-pattern-canvas")?.style
+          .height,
+      ).toBe("882px");
+    });
+  });
+
   it("selects without refetching and opens or closes preview with Space and Escape", async () => {
     const fetchMock = vi.mocked(fetch);
     const user = userEvent.setup();
@@ -406,6 +467,29 @@ describe("Mac-first workspace", () => {
     );
   });
 
+  it("restores the committed name when an empty draft reaches the timer or blur", async () => {
+    vi.useFakeTimers();
+    const item = makePattern(1);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    renderLibrary([item]);
+
+    fireEvent.click(screen.getByRole("option", { name: /Pattern 1/ }));
+    const input = screen.getByRole("textbox", { name: "图案名称" });
+    fireEvent.change(input, { target: { value: "   " } });
+    await act(async () => vi.advanceTimersByTimeAsync(400));
+
+    expect(input).toHaveValue(item.name);
+    expect(screen.getByRole("alert")).toHaveTextContent("名称不能为空");
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.blur(input);
+
+    expect(input).toHaveValue(item.name);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("does not submit the same rename twice when blur follows the timer", async () => {
     vi.useFakeTimers();
     const item = makePattern(1);
@@ -573,6 +657,24 @@ function MutationHarness({ item }: { item: PatternItem }) {
   );
 }
 
+function ConcurrentMutationHarness({ items }: { items: PatternItem[] }) {
+  const mutation = usePatternPatchMutation(query);
+  return items.map((item) => (
+    <button
+      key={item.id}
+      type="button"
+      onClick={() =>
+        mutation.mutatePattern({
+          patternId: item.id,
+          patch: { version: item.version, isFavorite: true },
+        })
+      }
+    >
+      Favorite {item.name}
+    </button>
+  ));
+}
+
 describe("pattern editor mutation", () => {
   afterEach(() => {
     cleanup();
@@ -635,5 +737,84 @@ describe("pattern editor mutation", () => {
     expect(body.operationId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
     );
+  });
+
+  it("rolls back only the failed pattern when another pattern succeeds concurrently", async () => {
+    const first = makePattern(1);
+    const second = makePattern(2);
+    const client = createClient([first, second]);
+    const resolvers = new Map<string, (response: Response) => void>();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) =>
+        new Promise<Response>((resolve) => {
+          resolvers.set(String(input), resolve);
+        }),
+      ),
+    );
+
+    render(
+      <QueryClientProvider client={client}>
+        <ConcurrentMutationHarness items={[first, second]} />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: `Favorite ${first.name}` }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: `Favorite ${second.name}` }),
+    );
+
+    await waitFor(() => {
+      const list = client.getQueryData<
+        InfiniteData<PatternPage, string | null>
+      >(queryKeys.patterns(query));
+      expect(list?.pages[0]?.items.map((item) => item.isFavorite)).toEqual([
+        true,
+        true,
+      ]);
+    });
+
+    const successfulSecond = { ...second, isFavorite: true, version: 1 };
+    await act(async () => {
+      resolvers.get(`/api/patterns/${second.id}`)!(
+        Response.json(successfulSecond),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      resolvers.get(`/api/patterns/${first.id}`)!(
+        Response.json(
+          { error: { code: "PATTERN_STATE_CHANGED", message: "changed" } },
+          { status: 409 },
+        ),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      const list = client.getQueryData<
+        InfiniteData<PatternPage, string | null>
+      >(queryKeys.patterns(query));
+      const firstInList = list?.pages[0]?.items.find(
+        (item) => item.id === first.id,
+      );
+      const secondInList = list?.pages[0]?.items.find(
+        (item) => item.id === second.id,
+      );
+      expect(firstInList).toMatchObject({ isFavorite: false, version: 0 });
+      expect(secondInList).toMatchObject({ isFavorite: true, version: 1 });
+      expect(client.getQueryData(queryKeys.pattern(first.id))).toMatchObject({
+        isFavorite: false,
+        version: 0,
+      });
+      expect(client.getQueryData(queryKeys.pattern(second.id))).toMatchObject({
+        isFavorite: true,
+        version: 1,
+      });
+    });
   });
 });

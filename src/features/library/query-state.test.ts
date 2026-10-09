@@ -68,6 +68,18 @@ describe("library query state", () => {
     ]);
   });
 
+  it("round-trips the untagged library view through the production query", () => {
+    const state = parseLibrarySearchParams(
+      new URLSearchParams("untagged=true"),
+    );
+
+    expect(state.untagged).toBe("true");
+    expect(toPatternQuery(state).untagged).toBe(true);
+    expect(serializeLibrarySearchParams(state).toString()).toBe(
+      "untagged=true",
+    );
+  });
+
   it("separates URL round-trip state from the production Zod boundary", () => {
     expect(() =>
       toPatternQuery(

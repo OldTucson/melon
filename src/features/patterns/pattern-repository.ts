@@ -11,6 +11,7 @@ import {
   inArray,
   lt,
   ne,
+  notExists,
   notInArray,
   or,
   sql,
@@ -100,6 +101,22 @@ export async function listPatternRows(
   }
   if (query.previewStatus) {
     predicates.push(eq(patterns.previewStatus, query.previewStatus));
+  }
+  if (query.untagged) {
+    predicates.push(
+      notExists(
+        db
+          .select({ value: sql`1` })
+          .from(patternTags)
+          .where(
+            and(
+              eq(patternTags.ownerId, ownerId),
+              eq(patternTags.patternId, patterns.id),
+              eq(patternTags.isActive, true),
+            ),
+          ),
+      ),
+    );
   }
   if (query.tagIds.length > 0) {
     const ownedActiveRelations = and(

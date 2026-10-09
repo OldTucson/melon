@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -35,7 +35,7 @@ describe("workspace layout", () => {
     mocks.redirect.mockReset();
     mocks.requireUser.mockReset();
     mocks.setTheme.mockReset();
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json([])));
   });
 
   afterEach(() => {
@@ -63,7 +63,7 @@ describe("workspace layout", () => {
 
     expect(mocks.requireUser).toHaveBeenCalledTimes(1);
     expect(mocks.setTheme).toHaveBeenCalledWith(sessionUser.themePreference);
-    expect(fetch).not.toHaveBeenCalled();
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/tags"));
     expect(screen.getByText("Private workspace")).toBeInTheDocument();
   });
 });

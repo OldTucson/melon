@@ -21,7 +21,7 @@ export function Inspector({
 }) {
   const mutation = usePatternPatchMutation(activeQuery);
   const [name, setName] = useState(pattern.name);
-  const [saveError, setSaveError] = useState(false);
+  const [saveError, setSaveError] = useState<"empty" | "save" | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestPattern = useRef(pattern);
   const latestName = useRef(pattern.name);
@@ -47,8 +47,14 @@ export function Inspector({
       timer.current = null;
     }
     const nextName = candidate.trim();
+    if (!nextName) {
+      if (pendingSave.current) await pendingSave.current;
+      latestDraft.current = latestName.current;
+      setName(latestName.current);
+      setSaveError("empty");
+      return;
+    }
     if (
-      !nextName ||
       nextName === latestName.current ||
       nextName === pendingName.current
     ) {
@@ -60,7 +66,7 @@ export function Inspector({
     }
     const previousName = latestName.current;
     pendingName.current = nextName;
-    setSaveError(false);
+    setSaveError(null);
     const request = (async () => {
       try {
         const updated = await mutation.mutatePatternAsync({
@@ -82,7 +88,7 @@ export function Inspector({
           latestDraft.current = previousName;
           setName(previousName);
         }
-        setSaveError(true);
+        setSaveError("save");
       } finally {
         if (pendingName.current === nextName) pendingName.current = null;
       }
@@ -125,7 +131,13 @@ export function Inspector({
               }}
             />
           </label>
-          {saveError ? <p role="alert">名称未能保存，已恢复原值</p> : null}
+          {saveError ? (
+            <p role="alert">
+              {saveError === "empty"
+                ? "名称不能为空"
+                : "名称未能保存，已恢复原值"}
+            </p>
+          ) : null}
           <button
             className="inspector-favorite"
             type="button"

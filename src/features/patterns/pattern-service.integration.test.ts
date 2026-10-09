@@ -441,6 +441,38 @@ describe("pattern service", () => {
     );
   });
 
+  it("returns only patterns without active tags for the untagged view", async () => {
+    const tagId = await seedTag(ownerA, "Assigned");
+    const inactiveOnly = await seedPattern({
+      ownerId: ownerA,
+      name: "Inactive relation",
+    });
+    const noRelation = await seedPattern({
+      ownerId: ownerA,
+      name: "No relation",
+    });
+    const tagged = await seedPattern({ ownerId: ownerA, name: "Tagged" });
+    await db.insert(patternTags).values([
+      {
+        ownerId: ownerA,
+        patternId: inactiveOnly,
+        tagId,
+        isActive: false,
+      },
+      { ownerId: ownerA, patternId: tagged, tagId },
+    ]);
+
+    const result = await listPatterns({
+      ownerId: ownerA,
+      input: { untagged: true, sort: "name_asc" },
+    });
+
+    expect(result.items.map((item) => item.id)).toEqual([
+      inactiveOnly,
+      noRelation,
+    ]);
+  });
+
   it("patches only owned active rows with optimistic concurrency and one idempotent change", async () => {
     const owned = await seedPattern({ ownerId: ownerA, name: "Before" });
     const otherOwned = await seedPattern({ ownerId: ownerA, name: "Other" });
