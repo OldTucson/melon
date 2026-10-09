@@ -1,0 +1,83 @@
+import { randomUUID } from "node:crypto";
+
+import { describe, expect, it } from "vitest";
+
+import { createUploadPolicy } from "./sts-policy";
+
+const ownerId = randomUUID();
+const patternId = randomUUID();
+
+describe("createUploadPolicy", () => {
+  it("grants only the three multipart actions to one owned pattern prefix", () => {
+    const policy = JSON.parse(
+      createUploadPolicy({
+        bucket: "melon-test-assets",
+        ownerId,
+        patternId,
+      }),
+    ) as {
+      Version: string;
+      Statement: Array<{
+        Effect: string;
+        Action: string[];
+        Resource: string;
+      }>;
+    };
+
+    expect(policy).toEqual({
+      Version: "1",
+      Statement: [
+        {
+          Effect: "Allow",
+          Action: [
+            "oss:AbortMultipartUpload",
+            "oss:ListParts",
+            "oss:PutObject",
+          ],
+          Resource: [
+            "acs",
+            "oss",
+            "*",
+            "*",
+            `melon-test-assets/users/${ownerId}/patterns/${patternId}/*`,
+          ].join(":"),
+        },
+      ],
+    });
+  });
+
+  it("contains no wildcard, read, bucket-list, or invented multipart action", () => {
+    const policy = JSON.parse(
+      createUploadPolicy({
+        bucket: "melon-test-assets",
+        ownerId,
+        patternId,
+      }),
+    ) as { Statement: Array<{ Action: string[]; Resource: string }> };
+    const statement = policy.Statement[0];
+
+    expect(statement).toBeDefined();
+    expect(statement?.Action).not.toContain(["oss", "*"].join(":"));
+    expect(statement?.Action).not.toContain("oss:GetObject");
+    expect(statement?.Action).not.toContain("oss:ListObjects");
+    expect(statement?.Action).not.toContain("oss:ListMultipartUploads");
+    expect(statement?.Action).not.toContain(
+      ["oss", "InitiateMultipartUpload"].join(":"),
+    );
+    expect(statement?.Action).not.toContain(
+      ["oss", "UploadPart"].join(":"),
+    );
+    expect(statement?.Action).not.toContain(
+      ["oss", "CompleteMultipartUpload"].join(":"),
+    );
+    expect(statement?.Resource).not.toContain(["users", "*"].join("/"));
+  });
+
+  it.each([
+    { bucket: "Bad_Bucket", ownerId, patternId },
+    { bucket: "melon-test-assets", ownerId: "not-a-uuid", patternId },
+    { bucket: "melon-test-assets", ownerId, patternId: "not-a-uuid" },
+  ])("rejects invalid scope input %#", (input) => {
+    expect(() => createUploadPolicy(input)).toThrow();
+  });
+});
