@@ -5,7 +5,11 @@ import { z, ZodError } from "zod";
 import { db } from "@/lib/db/client";
 import { nextChangeSeq } from "@/lib/db/change-seq";
 import { changeLog } from "@/lib/db/schema";
-import { claimOperation, storeOperationResult } from "@/lib/db/operation";
+import {
+  claimOperation,
+  createOperationKey,
+  storeOperationResult,
+} from "@/lib/db/operation";
 import { AppError, validationError } from "@/lib/http/app-error";
 
 import {
@@ -120,15 +124,19 @@ export async function updatePattern(input: {
   const patch = parseOrValidationError(() =>
     patternPatchSchema.parse(input.patch),
   );
+  const operationKey = createOperationKey("pattern.update", {
+    patternId: identity.patternId,
+    patch,
+  });
 
   return db.transaction(async (tx) => {
     const operation = await claimOperation(
       input.ownerId,
       tx,
       identity.operationId,
-      "pattern.update",
+      operationKey,
     );
-    if (!operation.claimed) return operation.result as PatternDto;
+    if (operation.state === "replay") return operation.result as PatternDto;
 
     const existing = await lockPatternRow(
       input.ownerId,
@@ -137,6 +145,13 @@ export async function updatePattern(input: {
     );
     if (!existing) {
       throw new AppError("NOT_FOUND", 404, "Pattern not found");
+    }
+    if (operation.state === "mismatch") {
+      throw new AppError(
+        "OPERATION_ID_REUSED",
+        409,
+        "Operation ID was already used",
+      );
     }
     if (existing.version !== patch.version) {
       throw new AppError(

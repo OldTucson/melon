@@ -103,15 +103,19 @@ describe("pattern Route Handlers", () => {
 
   it("maps Zod failures to a stable 400 response", async () => {
     const { GET } = await import("./route");
-    const response = await GET(
-      new Request(`http://localhost/api/patterns?q=${"x".repeat(101)}`),
-    );
+    for (const q of ["x".repeat(101), "bad\0query"]) {
+      const response = await GET(
+        new Request(
+          `http://localhost/api/patterns?q=${encodeURIComponent(q)}`,
+        ),
+      );
 
-    expect(response.status).toBe(400);
-    expectRequestId(response);
-    await expect(response.json()).resolves.toEqual({
-      error: { code: "VALIDATION_ERROR", message: "Invalid request" },
-    });
+      expect(response.status).toBe(400);
+      expectRequestId(response);
+      await expect(response.json()).resolves.toEqual({
+        error: { code: "VALIDATION_ERROR", message: "Invalid request" },
+      });
+    }
     expect(mocks.listPatterns).not.toHaveBeenCalled();
   });
 
@@ -214,6 +218,10 @@ describe("pattern Route Handlers", () => {
       JSON.stringify({
         operationId: randomUUID(),
         patch: { version: 0, originalFilename: "stolen.psd" },
+      }),
+      JSON.stringify({
+        operationId: randomUUID(),
+        patch: { version: 0, name: "bad\0name" },
       }),
     ]) {
       const response = await PATCH(

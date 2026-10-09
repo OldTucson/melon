@@ -77,8 +77,8 @@ describe("tag service", () => {
     const replay = await createTag({
       ownerId: ownerA,
       operationId,
-      name: "Different request body",
-      colorToken: "red",
+      name: "Summer",
+      colorToken: "green",
     });
 
     expect(created).toMatchObject({
@@ -88,13 +88,22 @@ describe("tag service", () => {
       colorToken: "green",
     });
     expect(replay).toEqual(created);
+    await expect(
+      createTag({
+        ownerId: ownerA,
+        operationId,
+        name: "Different request body",
+        colorToken: "red",
+      }),
+    ).rejects.toMatchObject({ code: "OPERATION_ID_REUSED", status: 409 });
     expect(await countOwnerChanges(ownerA)).toHaveLength(1);
-    expect(
-      await db
-        .select()
-        .from(operations)
-        .where(eq(operations.ownerId, ownerA)),
-    ).toHaveLength(1);
+    const storedOperations = await db
+      .select({ kind: operations.kind })
+      .from(operations)
+      .where(eq(operations.ownerId, ownerA));
+    expect(storedOperations).toHaveLength(1);
+    expect(storedOperations[0]?.kind).toMatch(/^tag\.create:[a-f0-9]{64}$/);
+    expect(storedOperations[0]?.kind).not.toContain("Summer");
     const [owner] = await db
       .select({ syncSeq: users.syncSeq })
       .from(users)
@@ -156,6 +165,33 @@ describe("tag service", () => {
     ).resolves.toMatchObject({ ownerId: ownerA, normalizedName: "summer" });
   });
 
+  it("normalizes tag display and uniqueness keys to NFC", async () => {
+    const composed = await createTag({
+      ownerId: ownerA,
+      operationId: randomUUID(),
+      name: "Café",
+      colorToken: "green",
+    });
+    expect(composed).toMatchObject({ name: "Café", normalizedName: "café" });
+
+    await expect(
+      createTag({
+        ownerId: ownerA,
+        operationId: randomUUID(),
+        name: "Cafe\u0301",
+        colorToken: "blue",
+      }),
+    ).rejects.toMatchObject({ code: "TAG_NAME_CONFLICT", status: 409 });
+    await expect(
+      createTag({
+        ownerId: ownerB,
+        operationId: randomUUID(),
+        name: "Cafe\u0301",
+        colorToken: "blue",
+      }),
+    ).resolves.toMatchObject({ name: "Café", normalizedName: "café" });
+  });
+
   it("rejects reuse of one operation ID for a different mutation kind", async () => {
     const operationId = randomUUID();
     const tag = await createTag({
@@ -178,10 +214,122 @@ describe("tag service", () => {
     ]);
   });
 
+  it("binds tag update and delete operation IDs to owned targets and canonical payloads", async () => {
+    const first = await createTag({
+      ownerId: ownerA,
+      operationId: randomUUID(),
+      name: "First target",
+      colorToken: "green",
+    });
+    const second = await createTag({
+      ownerId: ownerA,
+      operationId: randomUUID(),
+      name: "Second target",
+      colorToken: "blue",
+    });
+    const foreign = await createTag({
+      ownerId: ownerB,
+      operationId: randomUUID(),
+      name: "Foreign target",
+      colorToken: "red",
+    });
+    const updateOperationId = randomUUID();
+
+    const updated = await updateTag({
+      ownerId: ownerA,
+      tagId: first.id,
+      operationId: updateOperationId,
+      patch: { name: "Updated target" },
+    });
+    await expect(
+      updateTag({
+        ownerId: ownerA,
+        tagId: first.id,
+        operationId: updateOperationId,
+        patch: { name: "Updated target" },
+      }),
+    ).resolves.toEqual(updated);
+
+    for (const mismatch of [
+      {
+        tagId: first.id,
+        patch: { colorToken: "purple" as const },
+        code: "OPERATION_ID_REUSED",
+        status: 409,
+      },
+      {
+        tagId: second.id,
+        patch: { name: "Other owned" },
+        code: "OPERATION_ID_REUSED",
+        status: 409,
+      },
+      {
+        tagId: foreign.id,
+        patch: { name: "Foreign" },
+        code: "NOT_FOUND",
+        status: 404,
+      },
+      {
+        tagId: randomUUID(),
+        patch: { name: "Unknown" },
+        code: "NOT_FOUND",
+        status: 404,
+      },
+    ]) {
+      await expect(
+        updateTag({
+          ownerId: ownerA,
+          tagId: mismatch.tagId,
+          operationId: updateOperationId,
+          patch: mismatch.patch,
+        }),
+      ).rejects.toMatchObject({ code: mismatch.code, status: mismatch.status });
+    }
+
+    const deleteOperationId = randomUUID();
+    const deleted = await deleteTag({
+      ownerId: ownerA,
+      tagId: first.id,
+      operationId: deleteOperationId,
+    });
+    await expect(
+      deleteTag({
+        ownerId: ownerA,
+        tagId: first.id,
+        operationId: deleteOperationId,
+      }),
+    ).resolves.toEqual(deleted);
+
+    for (const mismatch of [
+      { tagId: second.id, code: "OPERATION_ID_REUSED", status: 409 },
+      { tagId: foreign.id, code: "NOT_FOUND", status: 404 },
+      { tagId: randomUUID(), code: "NOT_FOUND", status: 404 },
+    ]) {
+      await expect(
+        deleteTag({
+          ownerId: ownerA,
+          tagId: mismatch.tagId,
+          operationId: deleteOperationId,
+        }),
+      ).rejects.toMatchObject({ code: mismatch.code, status: mismatch.status });
+    }
+
+    await expect(listTags({ ownerId: ownerA })).resolves.toMatchObject([
+      { id: second.id, name: "Second target" },
+    ]);
+    expect(await countOwnerChanges(ownerA)).toHaveLength(4);
+    const [owner] = await db
+      .select({ syncSeq: users.syncSeq })
+      .from(users)
+      .where(eq(users.id, ownerA));
+    expect(owner?.syncSeq).toBe(4n);
+  });
+
   it("validates the fixed color palette and 1-32 character trimmed tag names", async () => {
     for (const input of [
       { name: "", colorToken: "green" },
       { name: "x".repeat(33), colorToken: "green" },
+      { name: "bad\0name", colorToken: "green" },
       { name: "Valid", colorToken: "chartreuse" },
     ]) {
       await expect(
@@ -399,12 +547,19 @@ describe("tag service", () => {
 
   it("keeps relation mutations tenant-safe, replayable, and independently reversible", async () => {
     const ownedPattern = await seedPattern(ownerA);
+    const secondOwnedPattern = await seedPattern(ownerA);
     const foreignPattern = await seedPattern(ownerB);
     const ownedTag = await createTag({
       ownerId: ownerA,
       operationId: randomUUID(),
       name: "Owned",
       colorToken: "blue",
+    });
+    const secondOwnedTag = await createTag({
+      ownerId: ownerA,
+      operationId: randomUUID(),
+      name: "Second owned",
+      colorToken: "green",
     });
     const foreignTag = await createTag({
       ownerId: ownerB,
@@ -428,13 +583,119 @@ describe("tag service", () => {
     });
     expect(replay).toEqual(added);
 
+    for (const mismatch of [
+      {
+        patternId: secondOwnedPattern,
+        tagId: ownedTag.id,
+        code: "OPERATION_ID_REUSED",
+        status: 409,
+      },
+      {
+        patternId: ownedPattern,
+        tagId: secondOwnedTag.id,
+        code: "OPERATION_ID_REUSED",
+        status: 409,
+      },
+      {
+        patternId: foreignPattern,
+        tagId: ownedTag.id,
+        code: "NOT_FOUND",
+        status: 404,
+      },
+      {
+        patternId: ownedPattern,
+        tagId: foreignTag.id,
+        code: "NOT_FOUND",
+        status: 404,
+      },
+      {
+        patternId: randomUUID(),
+        tagId: ownedTag.id,
+        code: "NOT_FOUND",
+        status: 404,
+      },
+    ]) {
+      await expect(
+        addTagToPattern({
+          ownerId: ownerA,
+          operationId: addOperationId,
+          patternId: mismatch.patternId,
+          tagId: mismatch.tagId,
+        }),
+      ).rejects.toMatchObject({ code: mismatch.code, status: mismatch.status });
+    }
+
+    await addTagToPattern({
+      ownerId: ownerA,
+      patternId: secondOwnedPattern,
+      tagId: secondOwnedTag.id,
+      operationId: randomUUID(),
+    });
+
+    const removeOperationId = randomUUID();
     const removed = await removeTagFromPattern({
       ownerId: ownerA,
       patternId: ownedPattern,
       tagId: ownedTag.id,
-      operationId: randomUUID(),
+      operationId: removeOperationId,
     });
     expect(removed).toMatchObject({ isActive: false, version: 1 });
+    await expect(
+      removeTagFromPattern({
+        ownerId: ownerA,
+        patternId: ownedPattern,
+        tagId: ownedTag.id,
+        operationId: removeOperationId,
+      }),
+    ).resolves.toEqual(removed);
+
+    for (const mismatch of [
+      {
+        patternId: secondOwnedPattern,
+        tagId: secondOwnedTag.id,
+        code: "OPERATION_ID_REUSED",
+        status: 409,
+      },
+      {
+        patternId: foreignPattern,
+        tagId: ownedTag.id,
+        code: "NOT_FOUND",
+        status: 404,
+      },
+      {
+        patternId: ownedPattern,
+        tagId: foreignTag.id,
+        code: "NOT_FOUND",
+        status: 404,
+      },
+      {
+        patternId: randomUUID(),
+        tagId: ownedTag.id,
+        code: "NOT_FOUND",
+        status: 404,
+      },
+    ]) {
+      await expect(
+        removeTagFromPattern({
+          ownerId: ownerA,
+          operationId: removeOperationId,
+          patternId: mismatch.patternId,
+          tagId: mismatch.tagId,
+        }),
+      ).rejects.toMatchObject({ code: mismatch.code, status: mismatch.status });
+    }
+
+    const secondRelation = await db
+      .select({ isActive: patternTags.isActive })
+      .from(patternTags)
+      .where(
+        and(
+          eq(patternTags.ownerId, ownerA),
+          eq(patternTags.patternId, secondOwnedPattern),
+          eq(patternTags.tagId, secondOwnedTag.id),
+        ),
+      );
+    expect(secondRelation).toEqual([{ isActive: true }]);
 
     for (const input of [
       { patternId: foreignPattern, tagId: ownedTag.id },
@@ -450,5 +711,11 @@ describe("tag service", () => {
         }),
       ).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
     }
+    expect(await countOwnerChanges(ownerA)).toHaveLength(5);
+    const [owner] = await db
+      .select({ syncSeq: users.syncSeq })
+      .from(users)
+      .where(eq(users.id, ownerA));
+    expect(owner?.syncSeq).toBe(5n);
   });
 });

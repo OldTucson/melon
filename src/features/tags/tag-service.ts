@@ -6,7 +6,11 @@ import { z, ZodError } from "zod";
 import { db } from "@/lib/db/client";
 import { nextChangeSeq } from "@/lib/db/change-seq";
 import { changeLog } from "@/lib/db/schema";
-import { claimOperation, storeOperationResult } from "@/lib/db/operation";
+import {
+  claimOperation,
+  createOperationKey,
+  storeOperationResult,
+} from "@/lib/db/operation";
 import { AppError, validationError } from "@/lib/http/app-error";
 
 import {
@@ -20,7 +24,9 @@ import {
   countActivePatternTags,
   deactivatePatternTagRow,
   deactivateTagRelations,
+  getTaggablePatternRow,
   insertTagRow,
+  listActivePatternTagRows,
   listTagRows,
   lockPatternTagRow,
   lockTaggablePattern,
@@ -81,7 +87,7 @@ function parseOrValidationError<T>(parse: () => T): T {
 }
 
 function normalizeName(name: string) {
-  return name.toLowerCase();
+  return name.normalize("NFC").toLowerCase();
 }
 
 function isTagNameConflict(error: unknown) {
@@ -105,6 +111,14 @@ function tagNotFound(): never {
   throw new AppError("NOT_FOUND", 404, "Tag not found");
 }
 
+function operationIdReused(): never {
+  throw new AppError(
+    "OPERATION_ID_REUSED",
+    409,
+    "Operation ID was already used",
+  );
+}
+
 async function writeChange(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
   input: {
@@ -124,6 +138,23 @@ export async function listTags(input: { ownerId: string }) {
   return (await listTagRows(input.ownerId)).map(toTagDto);
 }
 
+export async function listPatternTags(input: {
+  ownerId: string;
+  patternId: string;
+}) {
+  const patternId = parseOrValidationError(() =>
+    z.string().uuid().parse(input.patternId),
+  );
+  const pattern = await getTaggablePatternRow(input.ownerId, patternId);
+  if (!pattern) throw new AppError("NOT_FOUND", 404, "Pattern not found");
+
+  return {
+    items: (await listActivePatternTagRows(input.ownerId, patternId)).map(
+      toPatternTagDto,
+    ),
+  };
+}
+
 export async function createTag(input: {
   ownerId: string;
   operationId: string;
@@ -136,6 +167,7 @@ export async function createTag(input: {
   const create = parseOrValidationError(() =>
     tagCreateSchema.parse({ name: input.name, colorToken: input.colorToken }),
   );
+  const operationKey = createOperationKey("tag.create", create);
 
   try {
     return await db.transaction(async (tx) => {
@@ -143,9 +175,12 @@ export async function createTag(input: {
         input.ownerId,
         tx,
         operationId,
-        "tag.create",
+        operationKey,
       );
-      if (!operation.claimed) return operation.result as ReturnType<typeof toTagDto>;
+      if (operation.state === "replay") {
+        return operation.result as ReturnType<typeof toTagDto>;
+      }
+      if (operation.state === "mismatch") operationIdReused();
 
       const seq = await nextChangeSeq(tx, input.ownerId);
       const created = await insertTagRow(input.ownerId, tx, {
@@ -192,6 +227,10 @@ export async function updateTag(input: {
     }),
   );
   const patch = parseOrValidationError(() => tagPatchSchema.parse(input.patch));
+  const operationKey = createOperationKey("tag.update", {
+    tagId: identity.tagId,
+    patch,
+  });
 
   try {
     return await db.transaction(async (tx) => {
@@ -199,12 +238,15 @@ export async function updateTag(input: {
         input.ownerId,
         tx,
         identity.operationId,
-        "tag.update",
+        operationKey,
       );
-      if (!operation.claimed) return operation.result as ReturnType<typeof toTagDto>;
+      if (operation.state === "replay") {
+        return operation.result as ReturnType<typeof toTagDto>;
+      }
 
       const existing = await lockTagRow(input.ownerId, tx, identity.tagId);
       if (!existing) return tagNotFound();
+      if (operation.state === "mismatch") operationIdReused();
 
       const seq = await nextChangeSeq(tx, input.ownerId);
       const updated = await updateTagRow(input.ownerId, tx, {
@@ -254,20 +296,24 @@ export async function deleteTag(input: {
       operationId: input.operationId,
     }),
   );
+  const operationKey = createOperationKey("tag.delete", {
+    tagId: identity.tagId,
+  });
 
   return db.transaction(async (tx) => {
     const operation = await claimOperation(
       input.ownerId,
       tx,
       identity.operationId,
-      "tag.delete",
+      operationKey,
     );
-    if (!operation.claimed) {
+    if (operation.state === "replay") {
       return operation.result as { id: string; deleted: true };
     }
 
     const existing = await lockTagRow(input.ownerId, tx, identity.tagId);
     if (!existing) return tagNotFound();
+    if (operation.state === "mismatch") operationIdReused();
 
     const seq = await nextChangeSeq(tx, input.ownerId);
     const now = new Date();
@@ -328,15 +374,19 @@ export async function addTagToPattern(input: {
   const identity = parseOrValidationError(() =>
     relationIdentitySchema.parse(input),
   );
+  const operationKey = createOperationKey("pattern_tag.add", {
+    patternId: identity.patternId,
+    tagId: identity.tagId,
+  });
 
   return db.transaction(async (tx) => {
     const operation = await claimOperation(
       input.ownerId,
       tx,
       identity.operationId,
-      "pattern_tag.add",
+      operationKey,
     );
-    if (!operation.claimed) {
+    if (operation.state === "replay") {
       return operation.result as ReturnType<typeof toPatternTagDto>;
     }
 
@@ -346,6 +396,7 @@ export async function addTagToPattern(input: {
       identity.patternId,
       identity.tagId,
     );
+    if (operation.state === "mismatch") operationIdReused();
     const existing = await lockPatternTagRow(
       input.ownerId,
       tx,
@@ -405,15 +456,19 @@ export async function removeTagFromPattern(input: {
   const identity = parseOrValidationError(() =>
     relationIdentitySchema.parse(input),
   );
+  const operationKey = createOperationKey("pattern_tag.remove", {
+    patternId: identity.patternId,
+    tagId: identity.tagId,
+  });
 
   return db.transaction(async (tx) => {
     const operation = await claimOperation(
       input.ownerId,
       tx,
       identity.operationId,
-      "pattern_tag.remove",
+      operationKey,
     );
-    if (!operation.claimed) {
+    if (operation.state === "replay") {
       return operation.result as ReturnType<typeof toPatternTagDto>;
     }
 
@@ -423,6 +478,7 @@ export async function removeTagFromPattern(input: {
       identity.patternId,
       identity.tagId,
     );
+    if (operation.state === "mismatch") operationIdReused();
     const existing = await lockPatternTagRow(
       input.ownerId,
       tx,

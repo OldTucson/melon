@@ -1,8 +1,7 @@
 import "server-only";
 
+import { createHash } from "node:crypto";
 import { and, eq } from "drizzle-orm";
-
-import { AppError } from "@/lib/http/app-error";
 
 import type { DbTransaction } from "./client";
 import { operations } from "./schema";
@@ -10,8 +9,32 @@ import { operations } from "./schema";
 type ReplayResult = Record<string, unknown>;
 
 export type OperationClaim =
-  | { claimed: true }
-  | { claimed: false; result: ReplayResult };
+  | { state: "claimed" }
+  | { state: "replay"; result: ReplayResult }
+  | { state: "mismatch" };
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, child]) => child !== undefined)
+        .sort(([left], [right]) =>
+          left < right ? -1 : left > right ? 1 : 0,
+        )
+        .map(([key, child]) => [key, canonicalize(child)]),
+    );
+  }
+  return value;
+}
+
+export function createOperationKey(action: string, payload: unknown) {
+  const canonicalPayload = JSON.stringify(canonicalize(payload)) ?? "null";
+  const fingerprint = createHash("sha256")
+    .update(canonicalPayload)
+    .digest("hex");
+  return `${action}:${fingerprint}`;
+}
 
 export async function claimOperation(
   ownerId: string,
@@ -27,7 +50,7 @@ export async function claimOperation(
     })
     .returning({ operationId: operations.operationId });
 
-  if (claimed) return { claimed: true };
+  if (claimed) return { state: "claimed" };
 
   const [existing] = await tx
     .select({ kind: operations.kind, result: operations.result })
@@ -40,15 +63,9 @@ export async function claimOperation(
     )
     .limit(1);
 
-  if (!existing || existing.kind !== kind) {
-    throw new AppError(
-      "OPERATION_ID_REUSED",
-      409,
-      "Operation ID was already used",
-    );
-  }
+  if (!existing || existing.kind !== kind) return { state: "mismatch" };
 
-  return { claimed: false, result: existing.result };
+  return { state: "replay", result: existing.result };
 }
 
 export async function storeOperationResult(

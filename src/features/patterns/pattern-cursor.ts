@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { patterns } from "@/lib/db/schema";
 import { AppError } from "@/lib/http/app-error";
+import { hasNoNullByte } from "@/lib/validation/text";
 
 import type { PatternQuery } from "./contracts";
 
@@ -12,6 +13,7 @@ const dateValueSchema = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/)
   .refine((value) => {
+    if (value.startsWith("0000-")) return false;
     const millisecondValue = value.replace(/(\.\d{3})\d{3}Z$/, "$1Z");
     const date = new Date(millisecondValue);
     return (
@@ -37,7 +39,7 @@ const cursorSchema = z.discriminatedUnion("sort", [
   z
     .object({
       sort: z.literal("name_asc"),
-      value: z.string(),
+      value: z.string().max(160).refine(hasNoNullByte),
       id: uuidSchema,
     })
     .strict(),

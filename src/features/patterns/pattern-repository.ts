@@ -11,6 +11,7 @@ import {
   inArray,
   lt,
   ne,
+  notInArray,
   or,
   sql,
   type SQL,
@@ -79,7 +80,7 @@ export async function listPatternRows(
 ) {
   const predicates: SQL[] = [
     eq(patterns.ownerId, ownerId),
-    ne(patterns.status, "deleted"),
+    notInArray(patterns.status, ["trashed", "deleted"]),
   ];
 
   if (query.q) {

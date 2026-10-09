@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { hasNoNullByte } from "@/lib/validation/text";
+
 export const tagColorTokens = [
   "gray",
   "blue",
@@ -11,14 +13,20 @@ export const tagColorTokens = [
 
 export const tagColorTokenSchema = z.enum(tagColorTokens);
 
+const tagNameSchema = z
+  .string()
+  .trim()
+  .transform((name) => name.normalize("NFC"))
+  .pipe(z.string().min(1).max(32).refine(hasNoNullByte));
+
 export const tagCreateSchema = z.object({
-  name: z.string().trim().min(1).max(32),
+  name: tagNameSchema,
   colorToken: tagColorTokenSchema,
 });
 
 export const tagPatchSchema = z
   .object({
-    name: z.string().trim().min(1).max(32).optional(),
+    name: tagNameSchema.optional(),
     colorToken: tagColorTokenSchema.optional(),
   })
   .refine(
@@ -36,6 +44,10 @@ export const tagPatchMutationSchema = z.object({
 });
 
 export const tagDeleteMutationSchema = z.object({
+  operationId: z.string().uuid(),
+});
+
+export const patternTagMutationSchema = z.object({
   operationId: z.string().uuid(),
 });
 

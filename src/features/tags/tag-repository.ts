@@ -1,6 +1,14 @@
 import "server-only";
 
-import { and, asc, count, eq, ne, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  count,
+  eq,
+  getTableColumns,
+  ne,
+  sql,
+} from "drizzle-orm";
 
 import { db, type DbTransaction } from "@/lib/db/client";
 import { patterns, patternTags, tags } from "@/lib/db/schema";
@@ -141,6 +149,50 @@ export async function deactivateTagRelations(
         eq(patternTags.isActive, true),
       ),
     );
+}
+
+export async function getTaggablePatternRow(
+  ownerId: string,
+  patternId: string,
+) {
+  const [row] = await db
+    .select({ id: patterns.id })
+    .from(patterns)
+    .where(
+      and(
+        eq(patterns.ownerId, ownerId),
+        eq(patterns.id, patternId),
+        ne(patterns.status, "deleted"),
+      ),
+    )
+    .limit(1);
+  return row;
+}
+
+export async function listActivePatternTagRows(
+  ownerId: string,
+  patternId: string,
+) {
+  return db
+    .select({ ...getTableColumns(patternTags) })
+    .from(patternTags)
+    .innerJoin(
+      tags,
+      and(
+        eq(tags.ownerId, ownerId),
+        eq(tags.ownerId, patternTags.ownerId),
+        eq(tags.id, patternTags.tagId),
+        sql`${tags.deletedAt} is null`,
+      ),
+    )
+    .where(
+      and(
+        eq(patternTags.ownerId, ownerId),
+        eq(patternTags.patternId, patternId),
+        eq(patternTags.isActive, true),
+      ),
+    )
+    .orderBy(asc(patternTags.tagId));
 }
 
 export async function lockTaggablePattern(

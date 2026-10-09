@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { hasNoNullByte } from "@/lib/validation/text";
+
 export const patternFormats = [
   "psd",
   "ai",
@@ -23,7 +25,7 @@ const queryBoolean = z.union([
 ]);
 
 export const patternQuerySchema = z.object({
-  q: z.string().trim().max(100).optional(),
+  q: z.string().trim().max(100).refine(hasNoNullByte).optional(),
   formats: z.array(z.enum(patternFormats)).max(6).default([]),
   tagIds: z.array(z.string().uuid()).max(20).default([]),
   tagMode: z.enum(["all", "any"]).default("all"),
@@ -39,7 +41,13 @@ export const patternQuerySchema = z.object({
 export const patternPatchSchema = z
   .object({
     version: z.number().int().nonnegative(),
-    name: z.string().trim().min(1).max(160).optional(),
+    name: z
+      .string()
+      .trim()
+      .min(1)
+      .max(160)
+      .refine(hasNoNullByte)
+      .optional(),
     isFavorite: z.boolean().optional(),
   })
   .refine(

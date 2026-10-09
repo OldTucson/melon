@@ -259,13 +259,33 @@ describe("pattern service", () => {
         id: randomUUID(),
       }),
     ).toString("base64url");
+    const yearZero = Buffer.from(
+      JSON.stringify({
+        sort: "updated_desc",
+        value: "0000-01-01T00:00:00.000000Z",
+        id: randomUUID(),
+      }),
+    ).toString("base64url");
+    const nulName = Buffer.from(
+      JSON.stringify({ sort: "name_asc", value: "bad\0name", id: randomUUID() }),
+    ).toString("base64url");
+    const oversizedName = Buffer.from(
+      JSON.stringify({
+        sort: "name_asc",
+        value: "x".repeat(161),
+        id: randomUUID(),
+      }),
+    ).toString("base64url");
 
     for (const input of [
       { sort: "updated_desc" as const, cursor: "not-json" },
       { sort: "updated_desc" as const, cursor: wrongValue },
       { sort: "updated_desc" as const, cursor: wrongDate },
+      { sort: "updated_desc" as const, cursor: yearZero },
       { sort: "size_desc" as const, cursor: outOfRangeSize },
       { sort: "name_asc" as const, cursor: wrongId },
+      { sort: "name_asc" as const, cursor: nulName },
+      { sort: "name_asc" as const, cursor: oversizedName },
       { sort: "name_asc" as const, cursor: first.nextCursor! },
     ]) {
       await expect(
@@ -309,6 +329,42 @@ describe("pattern service", () => {
     await expect(
       listPatterns({ ownerId: ownerA, input: { q: "source_name" } }),
     ).resolves.toMatchObject({ items: [{ name: "Filename hit" }] });
+  });
+
+  it("rejects NUL in search and pattern names before reaching PostgreSQL", async () => {
+    const patternId = await seedPattern({ ownerId: ownerA, name: "Safe" });
+
+    await expect(
+      listPatterns({ ownerId: ownerA, input: { q: "bad\0query" } }),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
+    await expect(
+      updatePattern({
+        ownerId: ownerA,
+        patternId,
+        operationId: randomUUID(),
+        patch: { version: 0, name: "bad\0name" },
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
+  });
+
+  it("excludes trashed and deleted patterns from the ordinary list while keeping trashed detail readable", async () => {
+    const ready = await seedPattern({ ownerId: ownerA, name: "Ready" });
+    const trashed = await seedPattern({
+      ownerId: ownerA,
+      name: "Trashed",
+      status: "trashed",
+    });
+    await seedPattern({
+      ownerId: ownerA,
+      name: "Deleted",
+      status: "deleted",
+    });
+
+    const listed = await listPatterns({ ownerId: ownerA, input: {} });
+    expect(listed.items.map((item) => item.id)).toEqual([ready]);
+    await expect(
+      getPattern({ ownerId: ownerA, patternId: trashed }),
+    ).resolves.toMatchObject({ id: trashed, status: "trashed" });
   });
 
   it("combines format, all/any tags, favorite, preview, deleted exclusion, sort, and limit safely", async () => {
@@ -387,6 +443,7 @@ describe("pattern service", () => {
 
   it("patches only owned active rows with optimistic concurrency and one idempotent change", async () => {
     const owned = await seedPattern({ ownerId: ownerA, name: "Before" });
+    const otherOwned = await seedPattern({ ownerId: ownerA, name: "Other" });
     const foreign = await seedPattern({ ownerId: ownerB, name: "Foreign" });
     const operationId = randomUUID();
 
@@ -402,7 +459,7 @@ describe("pattern service", () => {
       ownerId: ownerA,
       patternId: owned,
       operationId,
-      patch: { version: 0, name: "Ignored replay" },
+      patch: { version: 0, name: "After", isFavorite: true },
     });
 
     expect(concurrentReplay).toEqual(first);
@@ -414,6 +471,48 @@ describe("pattern service", () => {
       commercialVersion: 0,
     });
     expect(replay).toEqual(first);
+
+    for (const mismatch of [
+      {
+        patternId: owned,
+        patch: { version: 0, name: "Different payload" },
+        code: "OPERATION_ID_REUSED",
+        status: 409,
+      },
+      {
+        patternId: owned,
+        patch: { version: 1, name: "Different version" },
+        code: "OPERATION_ID_REUSED",
+        status: 409,
+      },
+      {
+        patternId: otherOwned,
+        patch: { version: 0, name: "Different target" },
+        code: "OPERATION_ID_REUSED",
+        status: 409,
+      },
+      {
+        patternId: foreign,
+        patch: { version: 0, name: "Foreign target" },
+        code: "NOT_FOUND",
+        status: 404,
+      },
+      {
+        patternId: randomUUID(),
+        patch: { version: 0, name: "Unknown target" },
+        code: "NOT_FOUND",
+        status: 404,
+      },
+    ]) {
+      await expect(
+        updatePattern({
+          ownerId: ownerA,
+          patternId: mismatch.patternId,
+          operationId,
+          patch: mismatch.patch,
+        }),
+      ).rejects.toMatchObject({ code: mismatch.code, status: mismatch.status });
+    }
     expect(
       await db
         .select()
@@ -431,6 +530,14 @@ describe("pattern service", () => {
       .from(users)
       .where(eq(users.id, ownerA));
     expect(owner?.syncSeq).toBe(1n);
+
+    const [otherOwnedRow] = await db
+      .select({ name: patterns.name, version: patterns.version })
+      .from(patterns)
+      .where(
+        and(eq(patterns.ownerId, ownerA), eq(patterns.id, otherOwned)),
+      );
+    expect(otherOwnedRow).toEqual({ name: "Other", version: 0 });
 
     await expect(
       updatePattern({

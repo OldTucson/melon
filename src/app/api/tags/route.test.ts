@@ -114,21 +114,23 @@ describe("tag Route Handlers", () => {
 
   it("rejects unknown palette tokens before calling the service", async () => {
     const { POST } = await import("./route");
-    const response = await POST(
-      new Request("http://localhost/api/tags", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          operationId: randomUUID(),
-          input: { name: "Summer", colorToken: "chartreuse" },
+    for (const input of [
+      { name: "Summer", colorToken: "chartreuse" },
+      { name: "bad\0name", colorToken: "green" },
+    ]) {
+      const response = await POST(
+        new Request("http://localhost/api/tags", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ operationId: randomUUID(), input }),
         }),
-      }),
-    );
+      );
 
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toEqual({
-      error: { code: "VALIDATION_ERROR", message: "Invalid request" },
-    });
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: { code: "VALIDATION_ERROR", message: "Invalid request" },
+      });
+    }
     expect(mocks.createTag).not.toHaveBeenCalled();
   });
 
