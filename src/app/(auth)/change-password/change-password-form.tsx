@@ -2,10 +2,8 @@
 
 import { useActionState, useEffect, useRef } from "react";
 
-import {
-  changePasswordAction,
-  initialChangePasswordState,
-} from "./actions";
+import { changePasswordAction } from "./actions";
+import { initialChangePasswordState } from "./state";
 
 export function ChangePasswordForm() {
   const [state, formAction, pending] = useActionState(

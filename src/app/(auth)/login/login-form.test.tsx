@@ -2,14 +2,13 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./actions", () => ({
-  initialLoginState: { error: null },
   loginAction: vi.fn(),
 }));
 
 describe("LoginForm", () => {
   afterEach(cleanup);
 
-  it("provides an accessible credentials form without registration", async () => {
+  it("provides an accessible private credentials form", async () => {
     const { LoginForm } = await import("./login-form");
     render(<LoginForm />);
 

@@ -2,7 +2,8 @@
 
 import { useActionState, useEffect, useRef } from "react";
 
-import { initialLoginState, loginAction } from "./actions";
+import { loginAction } from "./actions";
+import { initialLoginState } from "./state";
 
 export function LoginForm() {
   const [state, formAction, pending] = useActionState(

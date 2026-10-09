@@ -7,6 +7,8 @@ import { passwordSchema } from "@/features/auth/password";
 import { requireUser } from "@/features/auth/session";
 import { changeUserPassword } from "@/features/auth/user-admin";
 
+import type { ChangePasswordState } from "./state";
+
 const changePasswordInput = z
   .object({
     currentPassword: z.string().min(1).max(128),
@@ -14,10 +16,6 @@ const changePasswordInput = z
     confirmPassword: z.string(),
   })
   .refine((input) => input.newPassword === input.confirmPassword);
-
-export type ChangePasswordState = { error: string | null };
-
-export const initialChangePasswordState: ChangePasswordState = { error: null };
 
 export async function changePasswordAction(
   _previousState: ChangePasswordState,
@@ -46,5 +44,5 @@ export async function changePasswordAction(
   }
 
   await signOut({ redirectTo: "/login" });
-  return initialChangePasswordState;
+  return { error: null };
 }

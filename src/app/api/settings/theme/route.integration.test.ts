@@ -107,16 +107,17 @@ describe("PATCH /api/settings/theme", () => {
   });
 
   it("authenticates before validating the request body", async () => {
+    const authFailure = new Error("AUTH_SENTINEL");
+    const json = vi.fn(() => {
+      throw new Error("request body must not be read");
+    });
+    requireUser.mockRejectedValueOnce(authFailure);
     const { PATCH } = await import("./route");
 
-    await PATCH(
-      new Request("http://localhost/api/settings/theme", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ themePreference: "invalid" }),
-      }),
+    await expect(PATCH({ json } as unknown as Request)).rejects.toBe(
+      authFailure,
     );
 
-    expect(requireUser).toHaveBeenCalledTimes(1);
+    expect(json).not.toHaveBeenCalled();
   });
 });

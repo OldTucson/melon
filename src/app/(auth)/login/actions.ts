@@ -5,14 +5,12 @@ import { z } from "zod";
 
 import { signIn } from "@/auth";
 
+import type { LoginState } from "./state";
+
 const loginInput = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
   password: z.string().min(1).max(128),
 });
-
-export type LoginState = { error: string | null };
-
-export const initialLoginState: LoginState = { error: null };
 
 export async function loginAction(
   _previousState: LoginState,
@@ -39,5 +37,5 @@ export async function loginAction(
     throw error;
   }
 
-  return initialLoginState;
+  return { error: null };
 }

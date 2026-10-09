@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useTheme } from "next-themes";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +11,26 @@ vi.mock("next-themes", () => ({
 
 const setTheme = vi.fn();
 const mockedUseTheme = vi.mocked(useTheme);
+
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+};
+
+const response = (themePreference: "system" | "light" | "dark") =>
+  new Response(JSON.stringify({ themePreference }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+
+const failureResponse = () =>
+  new Response(JSON.stringify({ error: "Unable to save theme" }), {
+    status: 500,
+    headers: { "Content-Type": "application/json" },
+  });
 
 describe("ThemeControl", () => {
   beforeEach(() => {
@@ -95,6 +115,65 @@ describe("ThemeControl", () => {
     });
     expect(screen.getByRole("radio", { name: "夜间" })).toBeChecked();
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores a stale failure after the latest preference is confirmed", async () => {
+    const requestA = deferred<Response>();
+    const requestB = deferred<Response>();
+    vi.mocked(fetch)
+      .mockReset()
+      .mockReturnValueOnce(requestA.promise)
+      .mockReturnValueOnce(requestB.promise);
+    const user = userEvent.setup();
+    render(<ThemeControl serverPreference="light" />);
+
+    await user.click(screen.getByRole("radio", { name: "夜间" }));
+    await user.click(screen.getByRole("radio", { name: "跟随系统" }));
+    expect(fetch).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      requestB.resolve(response("system"));
+      await requestB.promise;
+    });
+    await act(async () => {
+      requestA.resolve(failureResponse());
+      await requestA.promise;
+    });
+
+    expect(screen.getByRole("radio", { name: "跟随系统" })).toBeChecked();
+    expect(setTheme).toHaveBeenLastCalledWith("system");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("rolls the latest failure back to a newly confirmed earlier request", async () => {
+    const requestA = deferred<Response>();
+    const requestB = deferred<Response>();
+    vi.mocked(fetch)
+      .mockReset()
+      .mockReturnValueOnce(requestA.promise)
+      .mockReturnValueOnce(requestB.promise);
+    const user = userEvent.setup();
+    render(<ThemeControl serverPreference="light" />);
+
+    await user.click(screen.getByRole("radio", { name: "夜间" }));
+    await user.click(screen.getByRole("radio", { name: "跟随系统" }));
+
+    await act(async () => {
+      requestA.resolve(response("dark"));
+      await requestA.promise;
+    });
+    expect(screen.getByRole("radio", { name: "跟随系统" })).toBeChecked();
+
+    await act(async () => {
+      requestB.resolve(failureResponse());
+      await requestB.promise;
+    });
+
+    expect(screen.getByRole("radio", { name: "夜间" })).toBeChecked();
+    expect(setTheme).toHaveBeenLastCalledWith("dark");
+    expect(
+      screen.getByRole("alert", { name: "主题保存失败" }),
+    ).toBeInTheDocument();
   });
 
   it("synchronizes when the authenticated server preference changes", () => {

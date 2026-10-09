@@ -1,35 +1,21 @@
 import { password as promptPassword } from "@inquirer/prompts";
 import nextEnv from "@next/env";
 
-import { parseEmailFlag } from "@/features/auth/account-command";
+import { runResetPasswordCommand } from "@/features/auth/user-commands";
 
-const run = async () => {
-  const email = parseEmailFlag(process.argv.slice(2));
-  const password = await promptPassword({ message: "Password", mask: "*" });
-  const confirmation = await promptPassword({
-    message: "Confirm password",
-    mask: "*",
-  });
-
-  if (password !== confirmation) {
-    throw new Error("Passwords do not match.");
-  }
-
+const loadServices = async () => {
   nextEnv.loadEnvConfig(process.cwd());
   const [{ resetUserPassword }, { closeDatabase }] = await Promise.all([
     import("@/features/auth/user-admin"),
     import("@/lib/db/client"),
   ]);
 
-  try {
-    await resetUserPassword({ email, password });
-    console.log("Password reset.");
-  } finally {
-    await closeDatabase();
-  }
+  return { closeDatabase, resetUserPassword };
 };
 
-run().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : "Command failed.");
-  process.exitCode = 1;
-});
+runResetPasswordCommand(process.argv.slice(2), { loadServices, promptPassword })
+  .then(() => console.log("Password reset."))
+  .catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : "Command failed.");
+    process.exitCode = 1;
+  });

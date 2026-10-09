@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./actions", () => ({
   changePasswordAction: vi.fn(),
-  initialChangePasswordState: { error: null },
 }));
 
 describe("ChangePasswordForm", () => {

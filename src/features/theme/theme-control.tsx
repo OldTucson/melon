@@ -36,13 +36,14 @@ function ThemeControlState({
   const [preference, setPreference] = useState(serverPreference);
   const [error, setError] = useState(false);
   const confirmedPreference = useRef(serverPreference);
+  const latestRequest = useRef(0);
 
   useEffect(() => {
     setTheme(serverPreference);
   }, [serverPreference, setTheme]);
 
   const updatePreference = async (nextPreference: ThemePreference) => {
-    const rollbackPreference = confirmedPreference.current;
+    const requestId = ++latestRequest.current;
     setError(false);
     setPreference(nextPreference);
     setTheme(nextPreference);
@@ -60,6 +61,9 @@ function ThemeControlState({
 
       confirmedPreference.current = nextPreference;
     } catch {
+      if (requestId !== latestRequest.current) return;
+
+      const rollbackPreference = confirmedPreference.current;
       setPreference(rollbackPreference);
       setTheme(rollbackPreference);
       setError(true);
