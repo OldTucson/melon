@@ -67,6 +67,31 @@ async function insertTag(input: {
   return id;
 }
 
+const insertChange = (input: {
+  ownerId: string;
+  seq: bigint;
+  operationId: string;
+}) =>
+  db.execute(sql`
+    insert into change_log (
+      owner_id,
+      seq,
+      operation_id,
+      entity_type,
+      entity_id,
+      operation,
+      payload
+    ) values (
+      ${input.ownerId},
+      ${input.seq},
+      ${input.operationId},
+      'pattern',
+      ${randomUUID()},
+      'updated',
+      ${JSON.stringify({ version: 1 })}::jsonb
+    )
+  `);
+
 describe("core library schema", () => {
   let ownerA: string;
   let ownerB: string;
@@ -264,6 +289,47 @@ describe("core library schema", () => {
       .from(users)
       .where(eq(users.id, ownerA));
     expect(owner?.syncSeq).toBe(2n);
+  });
+
+  it("allocates a gap-free sequence across concurrent transactions", async () => {
+    const allocationPromises = Array.from({ length: 20 }, () =>
+      db.transaction((tx) => nextChangeSeq(tx, ownerA)),
+    );
+    const allocated = await Promise.all(allocationPromises);
+    const sorted = [...allocated].sort((left, right) =>
+      left < right ? -1 : left > right ? 1 : 0,
+    );
+
+    expect(sorted).toEqual(
+      Array.from({ length: 20 }, (_, index) => BigInt(index + 1)),
+    );
+    expect(new Set(allocated.map(String)).size).toBe(20);
+
+    const [owner] = await db
+      .select({ syncSeq: users.syncSeq })
+      .from(users)
+      .where(eq(users.id, ownerA));
+    expect(owner?.syncSeq).toBe(20n);
+  });
+
+  it("scopes change log sequence and operation uniqueness to an owner", async () => {
+    const operationId = randomUUID();
+
+    await insertChange({ ownerId: ownerA, seq: 1n, operationId });
+
+    await expect(
+      insertChange({
+        ownerId: ownerA,
+        seq: 1n,
+        operationId: randomUUID(),
+      }),
+    ).rejects.toThrow();
+    await expect(
+      insertChange({ ownerId: ownerA, seq: 2n, operationId }),
+    ).rejects.toThrow();
+    await expect(
+      insertChange({ ownerId: ownerB, seq: 1n, operationId }),
+    ).resolves.toBeDefined();
   });
 
   it("rejects sequence allocation for an unknown owner", async () => {
