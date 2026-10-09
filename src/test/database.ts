@@ -24,7 +24,18 @@ export const resetDatabase = async (
   try {
     const database = drizzle(queryClient);
     await database.execute(
-      sql.raw('TRUNCATE TABLE "users" RESTART IDENTITY CASCADE'),
+      sql.raw(`
+        TRUNCATE TABLE
+          "change_log",
+          "operations",
+          "upload_sessions",
+          "pattern_tags",
+          "assets",
+          "tags",
+          "patterns",
+          "users"
+        RESTART IDENTITY CASCADE
+      `),
     );
   } finally {
     await queryClient.end();

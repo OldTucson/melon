@@ -10,4 +10,8 @@ const queryClient = postgres(getServerEnv().DATABASE_URL);
 
 export const db = drizzle(queryClient, { schema });
 
+export type DbTransaction = Parameters<
+  Parameters<typeof db.transaction>[0]
+>[0];
+
 export const closeDatabase = () => queryClient.end();
