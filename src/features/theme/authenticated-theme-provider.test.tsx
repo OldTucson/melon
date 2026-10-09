@@ -111,6 +111,62 @@ describe("AuthenticatedThemeProvider", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("preserves a pending intent through a successful same-user server refresh", async () => {
+    const queue = queuedFetch();
+    vi.stubGlobal("fetch", queue.fetchMock);
+    const user = userEvent.setup();
+    const { rerender } = render(workspace("user-a", "light"));
+
+    await user.click(screen.getByRole("radio", { name: "夜间" }));
+    await user.click(screen.getByRole("radio", { name: "跟随系统" }));
+    expect(queue.requests).toHaveLength(1);
+
+    rerender(workspace("user-a", "dark"));
+    expect(screen.getByRole("radio", { name: "跟随系统" })).toBeChecked();
+    expect(setTheme).toHaveBeenLastCalledWith("system");
+
+    await settle(queue.requests[0]!, 200);
+    await vi.waitFor(() => expect(queue.requests).toHaveLength(2));
+    await settle(queue.requests[1]!, 200);
+
+    expect(queue.requests.map(({ body }) => body)).toEqual([
+      { themePreference: "dark" },
+      { themePreference: "system" },
+    ]);
+    expect(queue.maxActiveRequests).toBe(1);
+    expect(screen.getByRole("radio", { name: "跟随系统" })).toBeChecked();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("uses refreshed confirmation when both queued requests fail", async () => {
+    const queue = queuedFetch();
+    vi.stubGlobal("fetch", queue.fetchMock);
+    const user = userEvent.setup();
+    const { rerender } = render(workspace("user-a", "light"));
+
+    await user.click(screen.getByRole("radio", { name: "夜间" }));
+    await user.click(screen.getByRole("radio", { name: "跟随系统" }));
+    rerender(workspace("user-a", "dark"));
+    expect(screen.getByRole("radio", { name: "跟随系统" })).toBeChecked();
+
+    await settle(queue.requests[0]!, 500);
+    await vi.waitFor(() => expect(queue.requests).toHaveLength(2));
+    expect(screen.getByRole("radio", { name: "跟随系统" })).toBeChecked();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await settle(queue.requests[1]!, 500);
+
+    expect(queue.requests.map(({ body }) => body)).toEqual([
+      { themePreference: "dark" },
+      { themePreference: "system" },
+    ]);
+    expect(queue.maxActiveRequests).toBe(1);
+    expect(screen.getByRole("radio", { name: "夜间" })).toBeChecked();
+    expect(setTheme).toHaveBeenLastCalledWith("dark");
+    expect(
+      screen.getByRole("alert", { name: "主题保存失败" }),
+    ).toBeInTheDocument();
+  });
+
   it("isolates an old user's failed request and queued intent after account switch", async () => {
     const queue = queuedFetch();
     vi.stubGlobal("fetch", queue.fetchMock);

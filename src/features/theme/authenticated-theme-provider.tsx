@@ -35,7 +35,7 @@ export function AuthenticatedThemeProvider({
 }) {
   return (
     <AuthenticatedThemeCoordinator
-      key={`${userId}:${serverPreference}`}
+      key={userId}
       serverPreference={serverPreference}
     >
       {children}
@@ -60,6 +60,15 @@ function AuthenticatedThemeCoordinator({
   const pendingPreference = useRef<ThemePreference | null>(null);
 
   useEffect(() => {
+    confirmedPreference.current = serverPreference;
+
+    if (inFlight.current || pendingPreference.current !== null) {
+      return;
+    }
+
+    latestIntent.current = serverPreference;
+    setError(false);
+    setPreference(serverPreference);
     setTheme(serverPreference);
   }, [serverPreference, setTheme]);
 
