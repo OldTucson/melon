@@ -18,13 +18,15 @@
     "test:e2e": "playwright test",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "user:create": "tsx scripts/create-user.ts",
-    "user:reset-password": "tsx scripts/reset-password.ts"
+    "user:create": "node --conditions=react-server --import tsx scripts/create-user.ts",
+    "user:reset-password": "node --conditions=react-server --import tsx scripts/reset-password.ts"
   },
   "dependencies": {
     "@alicloud/credentials": "^2.4.7",
     "@alicloud/openapi-client": "^0.4.15",
     "@alicloud/sts20150401": "^1.2.0",
+    "@inquirer/prompts": "^8.7.3",
+    "@next/env": "16.4.0",
     "@radix-ui/react-checkbox": "^1.3.12",
     "@radix-ui/react-dialog": "^1.2.0",
     "@radix-ui/react-dropdown-menu": "^2.1.25",
@@ -42,7 +44,7 @@
     "hash-wasm": "^4.12.0",
     "lucide-react": "^1.53.0",
     "next": "^16.4.0",
-    "next-auth": "^4.24.15",
+    "next-auth": "5.0.0-beta.32",
     "next-themes": "^0.4.6",
     "postgres": "^3.4.9",
     "react": "^19.3.0",

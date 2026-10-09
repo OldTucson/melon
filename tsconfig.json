@@ -20,6 +20,7 @@
       "@/*": ["./src/*"]
     }
   },
+  "files": ["src/auth.d.ts"],
   "include": [
     "next-env.d.ts",
     "**/*.ts",

@@ -54,6 +54,213 @@ textarea {
   font: inherit;
 }
 
+button,
+input {
+  border-radius: 6px;
+}
+
+button:focus-visible,
+input:focus-visible,
+.theme-options label:has(input:focus-visible) {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.auth-shell {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.auth-panel {
+  width: min(100%, 360px);
+  padding: 28px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.wordmark {
+  margin: 0 0 28px;
+  color: var(--primary);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.auth-panel h1,
+.settings-header h1,
+.settings-section h2 {
+  margin: 0;
+  font-weight: 650;
+}
+
+.auth-panel h1 {
+  font-size: 24px;
+}
+
+.form-stack {
+  display: grid;
+  gap: 16px;
+  margin-top: 24px;
+}
+
+.form-field {
+  display: grid;
+  gap: 7px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.form-field input {
+  min-height: 40px;
+  width: 100%;
+  padding: 8px 10px;
+  color: var(--text);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+}
+
+.form-field input:focus {
+  border-color: var(--primary);
+}
+
+.primary-button {
+  min-height: 40px;
+  padding: 8px 14px;
+  color: #fff;
+  background: var(--primary);
+  border: 1px solid var(--primary);
+  cursor: pointer;
+}
+
+.primary-button:hover:not(:disabled) {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
+}
+
+.primary-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.form-error,
+.theme-control [role="alert"] {
+  margin: 0;
+  color: var(--status-buyout);
+  font-size: 14px;
+}
+
+.workspace-shell {
+  min-height: 100dvh;
+}
+
+.settings-page {
+  width: min(100%, 760px);
+  margin: 0 auto;
+  padding: 40px 24px;
+}
+
+.settings-header {
+  padding-bottom: 28px;
+}
+
+.settings-header .wordmark {
+  margin-bottom: 16px;
+}
+
+.settings-header h1 {
+  font-size: 26px;
+}
+
+.settings-section {
+  display: grid;
+  grid-template-columns: minmax(120px, 180px) minmax(0, 1fr);
+  gap: 24px;
+  padding: 24px 0;
+  border-top: 1px solid var(--border);
+}
+
+.settings-section h2,
+.theme-control legend {
+  font-size: 15px;
+}
+
+.theme-control {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.theme-control legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.theme-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: min(100%, 360px);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.theme-options label {
+  min-width: 0;
+  padding: 9px 10px;
+  color: var(--text-muted);
+  text-align: center;
+  cursor: pointer;
+}
+
+.theme-options label + label {
+  border-left: 1px solid var(--border);
+}
+
+.theme-options input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.theme-options label:has(input:checked) {
+  color: #fff;
+  background: var(--primary);
+}
+
+.theme-control [role="alert"] {
+  margin-top: 12px;
+}
+
+@media (max-width: 560px) {
+  .auth-shell {
+    align-items: start;
+    padding: 48px 18px 24px;
+  }
+
+  .auth-panel {
+    padding: 24px 20px;
+  }
+
+  .settings-page {
+    padding: 28px 18px;
+  }
+
+  .settings-section {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
