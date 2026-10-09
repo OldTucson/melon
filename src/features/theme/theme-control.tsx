@@ -36,38 +36,83 @@ function ThemeControlState({
   const [preference, setPreference] = useState(serverPreference);
   const [error, setError] = useState(false);
   const confirmedPreference = useRef(serverPreference);
-  const latestRequest = useRef(0);
+  const inFlight = useRef(false);
+  const latestIntent = useRef(serverPreference);
+  const mounted = useRef(true);
+  const pendingPreference = useRef<ThemePreference | null>(null);
 
   useEffect(() => {
     setTheme(serverPreference);
   }, [serverPreference, setTheme]);
 
-  const updatePreference = async (nextPreference: ThemePreference) => {
-    const requestId = ++latestRequest.current;
-    setError(false);
-    setPreference(nextPreference);
-    setTheme(nextPreference);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      pendingPreference.current = null;
+    };
+  }, []);
+
+  const persistPreference = async (targetPreference: ThemePreference) => {
+    inFlight.current = true;
+    let saved = false;
 
     try {
       const response = await fetch("/api/settings/theme", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ themePreference: nextPreference }),
+        body: JSON.stringify({ themePreference: targetPreference }),
       });
 
       if (!response.ok) {
         throw new Error("Theme preference was not saved");
       }
 
-      confirmedPreference.current = nextPreference;
+      saved = true;
     } catch {
-      if (requestId !== latestRequest.current) return;
+      saved = false;
+    }
 
+    if (!mounted.current) {
+      inFlight.current = false;
+      return;
+    }
+
+    if (saved) {
+      confirmedPreference.current = targetPreference;
+    }
+
+    const pending = pendingPreference.current;
+    pendingPreference.current = null;
+    inFlight.current = false;
+
+    if (pending !== null) {
+      if (pending !== confirmedPreference.current) {
+        void persistPreference(pending);
+      }
+      return;
+    }
+
+    if (!saved && latestIntent.current === targetPreference) {
       const rollbackPreference = confirmedPreference.current;
       setPreference(rollbackPreference);
       setTheme(rollbackPreference);
       setError(true);
     }
+  };
+
+  const updatePreference = (nextPreference: ThemePreference) => {
+    latestIntent.current = nextPreference;
+    setError(false);
+    setPreference(nextPreference);
+    setTheme(nextPreference);
+
+    if (inFlight.current) {
+      pendingPreference.current = nextPreference;
+      return;
+    }
+
+    void persistPreference(nextPreference);
   };
 
   return (

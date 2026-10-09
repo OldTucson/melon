@@ -1,6 +1,6 @@
 "use server";
 
-import { AuthError } from "next-auth";
+import { CredentialsSignin } from "next-auth";
 import { z } from "zod";
 
 import { signIn } from "@/auth";
@@ -31,7 +31,7 @@ export async function loginAction(
       redirectTo: "/library",
     });
   } catch (error) {
-    if (error instanceof AuthError) {
+    if (error instanceof CredentialsSignin) {
       return { error: "邮箱或密码不正确。" };
     }
     throw error;

@@ -28,14 +28,14 @@ declare module "@auth/core/types" {
 
 declare module "next-auth/jwt" {
   interface JWT {
-    id: string;
-    sessionVersion: number;
+    id?: string;
+    sessionVersion?: number;
   }
 }
 
 declare module "@auth/core/jwt" {
   interface JWT {
-    id: string;
-    sessionVersion: number;
+    id?: string;
+    sessionVersion?: number;
   }
 }

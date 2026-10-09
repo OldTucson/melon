@@ -2,15 +2,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const authMocks = vi.hoisted(() => {
   class MockAuthError extends Error {}
+  class MockCredentialsSignin extends MockAuthError {}
+  class MockCallbackRouteError extends MockAuthError {}
 
   return {
     MockAuthError,
+    MockCallbackRouteError,
+    MockCredentialsSignin,
     signIn: vi.fn(),
   };
 });
 
 vi.mock("next-auth", () => ({
   AuthError: authMocks.MockAuthError,
+  CredentialsSignin: authMocks.MockCredentialsSignin,
 }));
 
 vi.mock("@/auth", () => ({
@@ -48,9 +53,9 @@ describe("loginAction", () => {
     expect(authMocks.signIn).not.toHaveBeenCalled();
   });
 
-  it("returns the same generic error for an Auth.js authentication error", async () => {
+  it("returns the same generic error for a credentials rejection", async () => {
     authMocks.signIn.mockRejectedValueOnce(
-      new authMocks.MockAuthError("invalid credentials"),
+      new authMocks.MockCredentialsSignin("invalid credentials"),
     );
 
     await expect(
@@ -59,6 +64,20 @@ describe("loginAction", () => {
         credentials("owner@example.test", "wrong-password"),
       ),
     ).resolves.toEqual({ error: "邮箱或密码不正确。" });
+  });
+
+  it("rethrows an Auth.js callback or provider failure", async () => {
+    const callbackFailure = new authMocks.MockCallbackRouteError(
+      "provider callback failed",
+    );
+    authMocks.signIn.mockRejectedValueOnce(callbackFailure);
+
+    await expect(
+      actionModule.loginAction(
+        initialState,
+        credentials("owner@example.test", "private-password"),
+      ),
+    ).rejects.toBe(callbackFailure);
   });
 
   it("normalizes credentials and redirects a successful login", async () => {

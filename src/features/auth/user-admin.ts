@@ -79,8 +79,8 @@ export async function changeUserPassword(input: {
 }) {
   try {
     const userId = z.string().uuid().parse(input.userId);
+    const currentPassword = z.string().min(1).max(128).parse(input.currentPassword);
     const newPassword = passwordSchema.parse(input.newPassword);
-    const passwordHash = await hashPassword(newPassword);
 
     await db.transaction(async (tx) => {
       const [user] = await tx
@@ -92,11 +92,13 @@ export async function changeUserPassword(input: {
 
       if (
         !user ||
-        !(await verifyPassword(input.currentPassword, user.passwordHash))
+        !(await verifyPassword(currentPassword, user.passwordHash)) ||
+        currentPassword === newPassword
       ) {
         throw genericError("change");
       }
 
+      const passwordHash = await hashPassword(newPassword);
       await tx
         .update(users)
         .set({

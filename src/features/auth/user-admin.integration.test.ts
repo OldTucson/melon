@@ -77,6 +77,40 @@ describe("account administration", () => {
     expect(await loadSessionUser(oldToken)).toBeNull();
   });
 
+  it("rejects current-password reuse without changing account or session state", async () => {
+    const created = await createUser({
+      email: "owner@example.test",
+      displayName: "Library Owner",
+      password: originalPassword,
+    });
+    const oldToken = { id: created.id, sessionVersion: 0 };
+    const securityFields = {
+      passwordHash: users.passwordHash,
+      mustChangePassword: users.mustChangePassword,
+      sessionVersion: users.sessionVersion,
+      updatedAt: users.updatedAt,
+    };
+    const [before] = await db
+      .select(securityFields)
+      .from(users)
+      .where(eq(users.id, created.id));
+
+    await expect(
+      changeUserPassword({
+        userId: created.id,
+        currentPassword: originalPassword,
+        newPassword: originalPassword,
+      }),
+    ).rejects.toThrow("Unable to change password.");
+
+    const [after] = await db
+      .select(securityFields)
+      .from(users)
+      .where(eq(users.id, created.id));
+    expect(after).toEqual(before);
+    expect(await loadSessionUser(oldToken)).not.toBeNull();
+  });
+
   it("changes a verified password, clears the forced-change flag, and invalidates the session", async () => {
     const created = await createUser({
       email: "owner@example.test",

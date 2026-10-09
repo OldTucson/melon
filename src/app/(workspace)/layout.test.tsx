@@ -4,11 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   redirect: vi.fn(),
   requireUser: vi.fn(),
+  setTheme: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({ redirect: mocks.redirect }));
 vi.mock("@/features/auth/session", () => ({
   requireUser: mocks.requireUser,
+}));
+vi.mock("next-themes", () => ({
+  useTheme: () => ({ setTheme: mocks.setTheme }),
 }));
 
 const sessionUser = {
@@ -25,6 +29,7 @@ describe("workspace layout", () => {
   beforeEach(() => {
     mocks.redirect.mockReset();
     mocks.requireUser.mockReset();
+    mocks.setTheme.mockReset();
   });
 
   afterEach(cleanup);
@@ -48,6 +53,7 @@ describe("workspace layout", () => {
     render(await WorkspaceLayout({ children: <p>Private workspace</p> }));
 
     expect(mocks.requireUser).toHaveBeenCalledTimes(1);
+    expect(mocks.setTheme).toHaveBeenCalledWith(sessionUser.themePreference);
     expect(screen.getByText("Private workspace")).toBeInTheDocument();
   });
 });

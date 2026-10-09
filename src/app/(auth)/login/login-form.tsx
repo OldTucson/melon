@@ -14,7 +14,7 @@ export function LoginForm() {
 
   useEffect(() => {
     if (state.error) errorRef.current?.focus();
-  }, [state.error]);
+  }, [state]);
 
   return (
     <form action={formAction} className="form-stack" aria-label="登录">
