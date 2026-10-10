@@ -59,3 +59,14 @@ export async function readJson(request: Request): Promise<unknown> {
     throw validationError();
   }
 }
+
+export function assertSameOrigin(request: Request) {
+  const origin = request.headers.get("origin");
+  if (origin !== new URL(request.url).origin) {
+    throw new AppError(
+      "FORBIDDEN_ORIGIN",
+      403,
+      "Request origin is not allowed",
+    );
+  }
+}

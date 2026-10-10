@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import integrationConfig from "../../vitest.integration.config";
+import nextConfig from "../../next.config";
 
 describe("database infrastructure configuration", () => {
   it("serializes integration test files that share the test database", () => {
@@ -17,6 +18,10 @@ describe("database infrastructure configuration", () => {
 
     expect(compose).toContain('ports: ["127.0.0.1:55432:5432"]');
     expect(compose).not.toContain('ports: ["55432:5432"]');
+  });
+
+  it("keeps the Node-only OSS SDK outside the Turbopack server bundle", () => {
+    expect(nextConfig.serverExternalPackages).toContain("ali-oss");
   });
 
   it("keeps account commands executable in a production-only install", async () => {
