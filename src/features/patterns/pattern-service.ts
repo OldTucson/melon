@@ -29,6 +29,7 @@ import {
   lockPatternRow,
   updatePatternRow,
   type PatternRow,
+  type PatternRowWithAssets,
 } from "./pattern-repository";
 
 const mutationIdentitySchema = z.object({
@@ -38,7 +39,7 @@ const mutationIdentitySchema = z.object({
 
 export type PatternDto = ReturnType<typeof toPatternDto>;
 
-function toPatternDto(row: PatternRow) {
+function toPatternDto(row: PatternRow | PatternRowWithAssets) {
   return {
     id: row.id,
     ownerId: row.ownerId,
@@ -50,6 +51,9 @@ function toPatternDto(row: PatternRow) {
     contentHash: row.contentHash,
     status: row.status,
     previewStatus: row.previewStatus,
+    previewAssetId: "previewAssetId" in row ? row.previewAssetId : null,
+    thumbnailAssetId: "thumbnailAssetId" in row ? row.thumbnailAssetId : null,
+    sourceAssetId: "sourceAssetId" in row ? row.sourceAssetId : null,
     isFavorite: row.isFavorite,
     version: row.version,
     commercialVersion: row.commercialVersion,

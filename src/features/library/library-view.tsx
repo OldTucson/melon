@@ -1,5 +1,7 @@
 "use client";
 
+/* eslint-disable @next/next/no-img-element */
+
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   type InfiniteData,
@@ -170,7 +172,6 @@ export function LibraryView({ initialQuery }: { initialQuery: PatternQuery }) {
         ) : items.length === 0 ? (
           <div className="library-state">
             <strong>这里还没有图案</strong>
-            <p>上传功能接入后，新图案会显示在这里。</p>
           </div>
         ) : (
           <PatternGrid
@@ -236,22 +237,42 @@ export function LibraryView({ initialQuery }: { initialQuery: PatternQuery }) {
                   </IconButton>
                 </Dialog.Close>
               </header>
-              <div className="preview-stage">
-                <FormatPlaceholder
-                  extension={previewPattern.extension}
-                  previewStatus={previewPattern.previewStatus}
-                />
-              </div>
+              <PreviewStage pattern={previewPattern} />
               <footer className="preview-footer">
-                <button className="secondary-button" type="button" disabled>
-                  <Download aria-hidden="true" />
-                  下载将在存储接入后开放
-                </button>
+                {previewPattern.sourceAssetId ? (
+                  <a
+                    className="secondary-button"
+                    href={`/api/assets/${previewPattern.sourceAssetId}/download`}
+                  >
+                    <Download aria-hidden="true" />
+                    下载原文件
+                  </a>
+                ) : null}
               </footer>
             </Dialog.Content>
           ) : null}
         </Dialog.Portal>
       </Dialog.Root>
     </main>
+  );
+}
+
+function PreviewStage({ pattern }: { pattern: PatternPage["items"][number] }) {
+  const [failed, setFailed] = useState(false);
+  return (
+    <div className="preview-stage">
+      {pattern.previewAssetId && !failed ? (
+        <img
+          alt={`${pattern.name} 预览图`}
+          src={`/api/assets/${pattern.previewAssetId}/view`}
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        <FormatPlaceholder
+          extension={pattern.extension}
+          previewStatus={pattern.previewStatus}
+        />
+      )}
+    </div>
   );
 }

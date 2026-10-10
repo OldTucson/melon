@@ -19,12 +19,17 @@ import {
 } from "drizzle-orm";
 
 import { db, type DbTransaction } from "@/lib/db/client";
-import { patterns, patternTags } from "@/lib/db/schema";
+import { assets, patterns, patternTags } from "@/lib/db/schema";
 
 import type { PatternPatch, PatternQuery } from "./contracts";
 import type { PatternCursor } from "./pattern-cursor";
 
 export type PatternRow = typeof patterns.$inferSelect;
+export type PatternRowWithAssets = PatternRow & {
+  previewAssetId: string | null;
+  thumbnailAssetId: string | null;
+  sourceAssetId: string | null;
+};
 
 const escapeLike = (value: string) => value.replace(/[\\%_]/g, "\\$&");
 
@@ -152,6 +157,27 @@ export async function listPatternRows(
   return db
     .select({
       ...getTableColumns(patterns),
+      previewAssetId: sql<string | null>`(
+        select ${assets.id} from ${assets}
+        where ${assets.ownerId} = ${ownerId}::uuid
+          and ${assets.patternId} = ${patterns.id}
+          and ${assets.role} = 'preview'
+        limit 1
+      )`,
+      thumbnailAssetId: sql<string | null>`(
+        select ${assets.id} from ${assets}
+        where ${assets.ownerId} = ${ownerId}::uuid
+          and ${assets.patternId} = ${patterns.id}
+          and ${assets.role} = 'thumbnail'
+        limit 1
+      )`,
+      sourceAssetId: sql<string | null>`(
+        select ${assets.id} from ${assets}
+        where ${assets.ownerId} = ${ownerId}::uuid
+          and ${assets.patternId} = ${patterns.id}
+          and ${assets.role} = 'source'
+        limit 1
+      )`,
       updatedCursorValue: sql<string>`to_char(${patterns.updatedAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
       createdCursorValue: sql<string>`to_char(${patterns.createdAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
     })
@@ -168,7 +194,30 @@ export async function getPatternRow(
 ) {
   const executor = tx ?? db;
   const [row] = await executor
-    .select()
+    .select({
+      ...getTableColumns(patterns),
+      previewAssetId: sql<string | null>`(
+        select ${assets.id} from ${assets}
+        where ${assets.ownerId} = ${ownerId}::uuid
+          and ${assets.patternId} = ${patterns.id}
+          and ${assets.role} = 'preview'
+        limit 1
+      )`,
+      thumbnailAssetId: sql<string | null>`(
+        select ${assets.id} from ${assets}
+        where ${assets.ownerId} = ${ownerId}::uuid
+          and ${assets.patternId} = ${patterns.id}
+          and ${assets.role} = 'thumbnail'
+        limit 1
+      )`,
+      sourceAssetId: sql<string | null>`(
+        select ${assets.id} from ${assets}
+        where ${assets.ownerId} = ${ownerId}::uuid
+          and ${assets.patternId} = ${patterns.id}
+          and ${assets.role} = 'source'
+        limit 1
+      )`,
+    })
     .from(patterns)
     .where(
       and(

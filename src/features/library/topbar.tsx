@@ -4,7 +4,7 @@ import { Cloud, Search, Upload, UserRound } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
-import { IconButton } from "./icon-button";
+import { useUploadManager } from "@/features/uploads/upload-manager";
 
 export function Topbar({
   user,
@@ -14,6 +14,7 @@ export function Topbar({
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const upload = useUploadManager();
 
   const submitSearch = (event: React.FormEvent) => {
     event.preventDefault();
@@ -52,9 +53,15 @@ export function Topbar({
           <Cloud aria-hidden="true" />
           <span>在线</span>
         </span>
-        <IconButton disabled label="上传功能将在存储接入后开放">
+        <button
+          className="topbar-upload-button"
+          type="button"
+          onClick={upload.openFilePicker}
+          title="上传图案"
+        >
           <Upload aria-hidden="true" />
-        </IconButton>
+          <span>上传</span>
+        </button>
         <Link className="account-link" href="/settings" aria-label="打开账户设置">
           <UserRound aria-hidden="true" />
           <span className="account-copy">

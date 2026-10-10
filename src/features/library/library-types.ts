@@ -12,6 +12,9 @@ export type PatternItem = {
   contentHash: string | null;
   status: string;
   previewStatus: "pending" | "ready" | "unsupported" | "failed" | "manual";
+  previewAssetId?: string | null;
+  thumbnailAssetId?: string | null;
+  sourceAssetId?: string | null;
   isFavorite: boolean;
   version: number;
   commercialVersion: number;

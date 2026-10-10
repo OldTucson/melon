@@ -1,6 +1,9 @@
 "use client";
 
+/* eslint-disable @next/next/no-img-element */
+
 import { Download, Eye, FileImage, Heart } from "lucide-react";
+import { useState } from "react";
 
 import type { PatternItem } from "./library-types";
 import { IconButton } from "./icon-button";
@@ -43,6 +46,8 @@ export function PatternCard({
   onSelect: (id: string, modifiers: SelectionModifiers) => void;
   selected: boolean;
 }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const imageAssetId = item.thumbnailAssetId ?? item.previewAssetId;
   return (
     <div
       className="pattern-card"
@@ -74,11 +79,20 @@ export function PatternCard({
         }
       }}
     >
-      <div className="pattern-media" aria-hidden="true">
-        <FormatPlaceholder
-          extension={item.extension}
-          previewStatus={item.previewStatus}
-        />
+      <div className="pattern-media">
+        {imageAssetId && !imageFailed ? (
+          <img
+            alt={`${item.name} 缩略图`}
+            loading="lazy"
+            src={`/api/assets/${imageAssetId}/view`}
+            onError={() => setImageFailed(true)}
+          />
+        ) : (
+          <FormatPlaceholder
+            extension={item.extension}
+            previewStatus={item.previewStatus}
+          />
+        )}
       </div>
       <div className="pattern-card-copy">
         <strong title={item.name}>{item.name}</strong>
@@ -106,9 +120,21 @@ export function PatternCard({
         >
           <Eye aria-hidden="true" />
         </IconButton>
-        <IconButton disabled label="下载将在存储接入后开放">
-          <Download aria-hidden="true" />
-        </IconButton>
+        {item.sourceAssetId ? (
+          <a
+            className="icon-button"
+            aria-label={`下载 ${item.name}`}
+            href={`/api/assets/${item.sourceAssetId}/download`}
+            title="下载原文件"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <Download aria-hidden="true" />
+          </a>
+        ) : (
+          <IconButton disabled label="原文件尚未就绪">
+            <Download aria-hidden="true" />
+          </IconButton>
+        )}
       </div>
     </div>
   );
