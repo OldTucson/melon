@@ -1,6 +1,6 @@
 # 阿里云 OSS 运行配置
 
-本文只描述 `melon` 的 OSS 安全边界和上线检查。最后核对日期：2026-10-09。阿里云控制台名称可能调整；权限含义以本文链接的官方文档为准。
+本文只描述 `melon` 的 OSS 安全边界和上线检查。最后核对日期：2026-10-10。阿里云控制台名称可能调整；权限含义以本文链接的官方文档为准。
 
 ## 访问模型
 
@@ -16,10 +16,10 @@ Bucket 必须是 `melon` 专用的私有 Bucket。浏览器不持有长期 Acces
 
 ```text
 users/{OWNER_UUID}/patterns/{PATTERN_UUID}/source/{ASSET_UUID}.{psd|ai|jpg|jpeg|png|procreate}
-users/{OWNER_UUID}/patterns/{PATTERN_UUID}/derived/{ASSET_UUID}.{psd|ai|jpg|jpeg|png|procreate}
+users/{OWNER_UUID}/patterns/{PATTERN_UUID}/derived/{ASSET_UUID}.{jpg|jpeg|png|webp}
 ```
 
-`source` 保存原始资产，`derived` 保存 preview 和 thumbnail 等派生资产。派生角色由数据库记录和调用方区分，不编码进对象键。每个派生对象必须使用自己的资产 UUID；preview 和 thumbnail 禁止复用同一资产 UUID，否则会解析为同一个 OSS key。应用使用 `assertDistinctDerivedAssetIds` 在生成这两个派生键前验证这一约束。对象键不包含邮箱、用户名、图案名或原始文件名。
+`source` 保存原始资产，只接受产品批准的原文件格式；`derived` 保存 preview 和 thumbnail 等派生资产，只接受 JPG、PNG 或 WebP 图像。WebP 仅允许用于派生资产，不能声明为 source。派生角色由数据库记录和调用方区分，不编码进对象键。每个派生对象必须使用自己的资产 UUID；preview 和 thumbnail 禁止复用同一资产 UUID，否则会解析为同一个 OSS key。应用使用 `assertDistinctDerivedAssetIds` 在生成这两个派生键前验证这一约束。对象键不包含邮箱、用户名、图案名或原始文件名。
 
 生成对象键、STS policy 和归属校验时，合法 UUID 输入会先规范为与 PostgreSQL `uuid` 文本输出一致的小写形式。解析已存在的对象键时不做宽松修复：只接受完整的小写规范 key，大写 UUID 或其他等价写法一律 fail closed。这样数据库值、policy resource 与归属比较只有一种文本表示。
 

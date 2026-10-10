@@ -18,6 +18,7 @@ describe("upload file signatures", () => {
       "image/png",
     ],
     ["psd", ascii("8BPS"), "psd", "image/vnd.adobe.photoshop"],
+    ["webp", ascii("RIFF1234WEBP"), "webp", "image/webp"],
     ["ai", ascii("%PDF-1.7"), "ai-pdf", "application/pdf"],
     [
       "ai",
@@ -58,6 +59,7 @@ describe("upload file signatures", () => {
     ["jpg", ascii("8BPS")],
     ["ai", ascii("not-an-ai-file")],
     ["procreate", ascii("8BPS")],
+    ["webp", ascii("RIFF1234NOPE")],
   ] as const)("rejects a %s extension/signature mismatch", (extension, bytes) => {
     expect(() => detectFileSignature(extension, bytes)).toThrowError(
       expect.objectContaining({
@@ -73,5 +75,6 @@ describe("upload file signatures", () => {
     expect(requiredSignatureBytes("psd")).toBe(4);
     expect(requiredSignatureBytes("ai")).toBe(11);
     expect(requiredSignatureBytes("procreate")).toBe(4);
+    expect(requiredSignatureBytes("webp")).toBe(12);
   });
 });

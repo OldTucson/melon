@@ -98,10 +98,27 @@ describe("upload request contracts", () => {
     expect(() =>
       parseUploadComplete({ operationId, assets: [source, { ...source }] }),
     ).toThrowError(expect.objectContaining({ code: "UPLOAD_OBJECT_INVALID" }));
+
+    expect(() =>
+      parseUploadComplete({
+        operationId,
+        assets: [
+          source,
+          {
+            ...source,
+            assetId: source.assetId.toUpperCase(),
+            role: "preview",
+            extension: "png",
+            width: 10,
+            height: 10,
+          },
+        ],
+      }),
+    ).toThrowError(expect.objectContaining({ code: "UPLOAD_OBJECT_INVALID" }));
   });
 
-  it("keeps derived assets at the currently verifiable image boundary", () => {
-    expect(() =>
+  it("accepts WebP only for derived assets", () => {
+    expect(
       parseUploadComplete({
         operationId: randomUUID(),
         assets: [
@@ -117,15 +134,66 @@ describe("upload request contracts", () => {
             role: "preview",
             objectKey: "derived-key",
             extension: "webp",
-            sizeBytes: 4,
+            sizeBytes: 12,
             width: 10,
             height: 10,
           },
         ],
       }),
-    ).toThrowError(
-      expect.objectContaining({ code: "UPLOAD_EXTENSION_UNSUPPORTED" }),
-    );
+    ).toMatchObject({ assets: [{ role: "source" }, { extension: "webp" }] });
+
+    expect(() =>
+      parseUploadInit({ ...validInit(), originalFilename: "source.webp", extension: "webp" }),
+    ).toThrowError(expect.objectContaining({ code: "UPLOAD_EXTENSION_UNSUPPORTED" }));
+  });
+
+  it("enforces role-aware derived dimensions within PostgreSQL integer bounds", () => {
+    const source = {
+      assetId: randomUUID(),
+      role: "source" as const,
+      objectKey: "source-key",
+      extension: "psd" as const,
+      sizeBytes: 4,
+    };
+    const derived = {
+      assetId: randomUUID(),
+      role: "preview" as const,
+      objectKey: "preview-key",
+      extension: "png" as const,
+      sizeBytes: 8,
+      width: 2048,
+      height: 2048,
+    };
+
+    expect(parseUploadComplete({ operationId: randomUUID(), assets: [source, derived] })).toBeDefined();
+    for (const asset of [
+      { ...derived, width: 2049 },
+      { ...derived, assetId: randomUUID(), role: "thumbnail", width: 513, height: 512 },
+      { ...derived, width: 2_147_483_648 },
+    ]) {
+      expect(() =>
+        parseUploadComplete({ operationId: randomUUID(), assets: [source, asset] }),
+      ).toThrowError(expect.objectContaining({ code: "UPLOAD_OBJECT_INVALID" }));
+    }
+    expect(() =>
+      parseUploadComplete({
+        operationId: randomUUID(),
+        assets: [{ ...source, width: 1, height: 1 }],
+      }),
+    ).toThrowError(expect.objectContaining({ code: "VALIDATION_ERROR" }));
+  });
+
+  it("requires the filename suffix to match the declared source extension", () => {
+    expect(() =>
+      parseUploadInit({ ...validInit(), originalFilename: "flora.png" }),
+    ).toThrowError(expect.objectContaining({ code: "UPLOAD_OBJECT_INVALID" }));
+    expect(
+      parseUploadInit({
+        ...validInit(),
+        originalFilename: "flora.JPEG",
+        extension: "jpg",
+      }),
+    ).toMatchObject({ originalFilename: "flora.JPEG", extension: "jpg" });
   });
 
   it("maps an oversized completion declaration to the stable size error", () => {

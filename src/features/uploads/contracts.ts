@@ -2,6 +2,7 @@ import { z, ZodError } from "zod";
 
 import { normalizedUuidSchema } from "@/features/storage/identifiers";
 import { AppError, validationError } from "@/lib/http/app-error";
+import { publicOperationIdSchema } from "@/lib/validation/operation-id";
 
 export const MAX_UPLOAD_SIZE_BYTES = 209_715_200;
 
@@ -13,17 +14,12 @@ export const uploadSourceExtensions = [
   "png",
   "procreate",
 ] as const;
-export const uploadDerivedExtensions = ["jpg", "jpeg", "png"] as const;
+export const uploadDerivedExtensions = ["jpg", "jpeg", "png", "webp"] as const;
 export const uploadAssetRoles = ["source", "preview", "thumbnail"] as const;
 
 export type UploadSourceExtension = (typeof uploadSourceExtensions)[number];
 export type UploadDerivedExtension = (typeof uploadDerivedExtensions)[number];
 export type UploadAssetRole = (typeof uploadAssetRoles)[number];
-
-const clientOperationIdSchema = normalizedUuidSchema.refine(
-  (value) => value[14] === "4",
-  "Client operation ID must be a UUID v4",
-);
 
 const safeOriginalFilenameSchema = z
   .string()
@@ -36,7 +32,7 @@ export const uploadInitSchema = z
   .object({
     patternId: normalizedUuidSchema,
     sourceAssetId: normalizedUuidSchema,
-    operationId: clientOperationIdSchema,
+    operationId: publicOperationIdSchema,
     originalFilename: safeOriginalFilenameSchema,
     extension: z.enum(uploadSourceExtensions),
     sizeBytes: z.number().int().positive().max(MAX_UPLOAD_SIZE_BYTES),
@@ -55,37 +51,51 @@ const sourceCompletionAssetSchema = z
   })
   .strict();
 
-const derivedCompletionAssetSchema = z
+const derivedCompletionAssetBase = {
+  assetId: normalizedUuidSchema,
+  objectKey: z.string().min(1),
+  extension: z.enum(uploadDerivedExtensions),
+  sizeBytes: z.number().int().positive().max(MAX_UPLOAD_SIZE_BYTES),
+};
+
+const previewCompletionAssetSchema = z
   .object({
-    assetId: normalizedUuidSchema,
-    role: z.enum(["preview", "thumbnail"]),
-    objectKey: z.string().min(1),
-    extension: z.enum(uploadDerivedExtensions),
-    sizeBytes: z.number().int().positive().max(MAX_UPLOAD_SIZE_BYTES),
-    width: z.number().int().positive(),
-    height: z.number().int().positive(),
+    ...derivedCompletionAssetBase,
+    role: z.literal("preview"),
+    width: z.number().int().positive().max(2048),
+    height: z.number().int().positive().max(2048),
+  })
+  .strict();
+
+const thumbnailCompletionAssetSchema = z
+  .object({
+    ...derivedCompletionAssetBase,
+    role: z.literal("thumbnail"),
+    width: z.number().int().positive().max(512),
+    height: z.number().int().positive().max(512),
   })
   .strict();
 
 export const uploadCompletionAssetSchema = z.discriminatedUnion("role", [
   sourceCompletionAssetSchema,
-  derivedCompletionAssetSchema,
+  previewCompletionAssetSchema,
+  thumbnailCompletionAssetSchema,
 ]);
 
 export const uploadCompleteSchema = z
   .object({
-    operationId: clientOperationIdSchema,
+    operationId: publicOperationIdSchema,
     assets: z.array(uploadCompletionAssetSchema).min(1).max(3),
   })
   .strict();
 
 export const uploadCredentialsSchema = z
-  .object({ operationId: clientOperationIdSchema })
+  .object({ operationId: publicOperationIdSchema })
   .strict();
 
 export const uploadCancelSchema = z
   .object({
-    operationId: clientOperationIdSchema,
+    operationId: publicOperationIdSchema,
     multipartAbort: z
       .object({
         attempted: z.boolean(),
@@ -122,6 +132,22 @@ function rawField(input: unknown, key: string) {
   return (input as Record<string, unknown>)[key];
 }
 
+function filenameMatchesExtension(filename: string, extension: UploadSourceExtension) {
+  const suffix = filename.slice(filename.lastIndexOf(".") + 1).toLowerCase();
+  if (extension === "jpg" || extension === "jpeg") {
+    return suffix === "jpg" || suffix === "jpeg";
+  }
+  return suffix === extension;
+}
+
+function invalidUploadObject(): never {
+  throw new AppError(
+    "UPLOAD_OBJECT_INVALID",
+    422,
+    "Upload object declaration is invalid",
+  );
+}
+
 export function parseUploadInit(input: unknown): UploadInitInput {
   const sizeBytes = rawField(input, "sizeBytes");
   if (
@@ -148,7 +174,11 @@ export function parseUploadInit(input: unknown): UploadInitInput {
     );
   }
 
-  return parseOrValidationError(() => uploadInitSchema.parse(input));
+  const parsed = parseOrValidationError(() => uploadInitSchema.parse(input));
+  if (!filenameMatchesExtension(parsed.originalFilename, parsed.extension)) {
+    invalidUploadObject();
+  }
+  return parsed;
 }
 
 export function parseUploadComplete(input: unknown): UploadCompleteInput {
@@ -189,16 +219,23 @@ export function parseUploadComplete(input: unknown): UploadCompleteInput {
         !(uploadSourceExtensions as readonly string[]).includes(extension)
       );
     });
+    const hasInvalidDimensions = assets.some((asset) => {
+      const role = rawField(asset, "role");
+      const width = rawField(asset, "width");
+      const height = rawField(asset, "height");
+      if (role !== "preview" && role !== "thumbnail") return false;
+      const limit = role === "preview" ? 2048 : 512;
+      return (
+        (typeof width === "number" && width > limit) ||
+        (typeof height === "number" && height > limit)
+      );
+    });
     if (
       roles.filter((role) => role === "source").length !== 1 ||
       new Set(roles).size !== roles.length ||
       new Set(assetIds).size !== assetIds.length
     ) {
-      throw new AppError(
-        "UPLOAD_OBJECT_INVALID",
-        422,
-        "Upload object declaration is invalid",
-      );
+      invalidUploadObject();
     }
     if (hasUnsupportedDerivedExtension || hasUnsupportedSourceExtension) {
       throw new AppError(
@@ -207,9 +244,15 @@ export function parseUploadComplete(input: unknown): UploadCompleteInput {
         "Upload extension is unsupported",
       );
     }
+    if (hasInvalidDimensions) invalidUploadObject();
   }
 
-  return parseOrValidationError(() => uploadCompleteSchema.parse(input));
+  const parsed = parseOrValidationError(() => uploadCompleteSchema.parse(input));
+  const normalizedIds = parsed.assets.map((asset) => asset.assetId);
+  if (new Set(normalizedIds).size !== normalizedIds.length) {
+    invalidUploadObject();
+  }
+  return parsed;
 }
 
 export const parseUploadCredentials = (input: unknown) =>

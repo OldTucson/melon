@@ -32,6 +32,7 @@ import { AppError, validationError } from "@/lib/http/app-error";
 import {
   parseUploadCancel,
   parseUploadComplete,
+  parseUploadCredentials,
   parseUploadInit,
   type UploadCancelInput,
   type UploadCompleteInput,
@@ -44,8 +45,10 @@ import {
   requiredSignatureBytes,
   type DetectedFileSignature,
 } from "./file-signatures";
+import { derivePatternName, sanitizeDownloadName } from "./filenames";
 
 const UPLOAD_SESSION_DURATION_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_VERIFICATION_TIMEOUT_MS = 10_000;
 const CLEANUP_WARNING = "UPLOAD_MULTIPART_CLEANUP_PENDING" as const;
 
 type UploadDatabase = typeof db;
@@ -85,6 +88,7 @@ type UploadServiceDependencies = {
   oss: OssAdapter;
   credentialIssuer: BrowserCredentialIssuer;
   now: () => Date;
+  verificationTimeoutMs?: number;
 };
 
 type ServiceOutcome<T> =
@@ -146,14 +150,6 @@ function toSessionDto(row: UploadSessionRow) {
   };
 }
 
-function derivePatternName(filename: string, extension: string) {
-  const suffix = `.${extension}`;
-  const base = filename.toLowerCase().endsWith(suffix)
-    ? filename.slice(0, -suffix.length)
-    : filename.replace(/\.[^.]+$/, "");
-  return base.trim() || "Untitled Pattern";
-}
-
 function parseOwnerId(ownerId: string) {
   const parsed = normalizedUuidSchema.safeParse(ownerId);
   if (!parsed.success) throw validationError();
@@ -213,6 +209,36 @@ function storageFailure() {
     "UPLOAD_STORAGE_UNAVAILABLE",
     503,
     "Upload storage is temporarily unavailable",
+  );
+}
+
+function uploadIdConflict() {
+  return new AppError(
+    "UPLOAD_ID_CONFLICT",
+    409,
+    "Upload identifier is already in use",
+  );
+}
+
+function postgresConstraint(error: unknown) {
+  let candidate = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (typeof candidate !== "object" || candidate === null) return undefined;
+    if ("code" in candidate && candidate.code === "23505") {
+      return "constraint_name" in candidate &&
+        typeof candidate.constraint_name === "string"
+        ? candidate.constraint_name
+        : undefined;
+    }
+    if (!("cause" in candidate)) return undefined;
+    candidate = candidate.cause;
+  }
+  return undefined;
+}
+
+function isClientUploadIdConflict(error: unknown) {
+  return ["patterns_pkey", "assets_pkey"].includes(
+    postgresConstraint(error) ?? "",
   );
 }
 
@@ -406,28 +432,65 @@ async function issueCredentials(
   }
 }
 
+async function revalidateIssuedCredentials(
+  database: UploadDatabase,
+  ownerId: string,
+  sessionId: string,
+  operationId: string,
+  now: () => Date,
+) {
+  return database.transaction<
+    ServiceOutcome<{ session: ReturnType<typeof toSessionDto> }>
+  >(async (tx) => {
+    const session = await lockOwnedSession(tx, ownerId, sessionId);
+    if (!session) return { ok: false, error: notFound("session") };
+    if (session.operationId !== operationId) {
+      return { ok: false, error: operationMismatch() };
+    }
+    if (session.status === "completed" || session.status === "aborted") {
+      return { ok: false, error: invalidSessionState() };
+    }
+    if (session.status === "expired" || now() >= session.expiresAt) {
+      const timestamp = now();
+      await persistFailure(
+        tx,
+        session,
+        "UPLOAD_SESSION_EXPIRED",
+        timestamp,
+        "expired",
+      );
+      return { ok: false, error: expiredSession() };
+    }
+    if (session.status === "completing") {
+      return { ok: false, error: invalidSessionState() };
+    }
+    return { ok: true, value: { session: toSessionDto(session) } };
+  });
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(storageFailure()), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function completionFingerprint(input: UploadCompleteInput) {
   return createOperationKey("upload.complete", input.assets);
 }
 
-function sanitizeDownloadNameInternal(filename: string) {
-  const stripped = filename
-    .replace(/[\u0000-\u001f\u007f/\\'"]/g, "")
-    .trim();
-  const fallback = stripped || "download";
-  const encoder = new TextEncoder();
-  let result = "";
-  for (const character of fallback) {
-    if (encoder.encode(result + character).byteLength > 180) break;
-    result += character;
-  }
-  return result || "download";
-}
-
-export const sanitizeDownloadName = sanitizeDownloadNameInternal;
-
 export function createUploadService(dependencies: UploadServiceDependencies) {
   const { database, oss, credentialIssuer, now } = dependencies;
+  const verificationTimeoutMs =
+    dependencies.verificationTimeoutMs ?? DEFAULT_VERIFICATION_TIMEOUT_MS;
+  if (!Number.isSafeInteger(verificationTimeoutMs) || verificationTimeoutMs <= 0) {
+    throw new Error("UPLOAD_VERIFICATION_TIMEOUT_INVALID");
+  }
 
   return {
     async initialize(input: { ownerId: string; input: UploadInitInput }) {
@@ -443,9 +506,11 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
         contentHash: parsed.contentHash,
       });
 
-      const initializationOutcome = await database.transaction<
-        ServiceOutcome<InitializedReplay>
-      >(async (tx) => {
+      let initializationOutcome: ServiceOutcome<InitializedReplay>;
+      try {
+        initializationOutcome = await database.transaction<
+          ServiceOutcome<InitializedReplay>
+        >(async (tx) => {
         const operation = await claimOperation(
           ownerId,
           tx,
@@ -492,7 +557,7 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
           .values({
             id: parsed.patternId,
             ownerId,
-            name: derivePatternName(parsed.originalFilename, parsed.extension),
+            name: derivePatternName(parsed.originalFilename),
             originalFilename: parsed.originalFilename,
             extension: parsed.extension,
             sizeBytes: BigInt(parsed.sizeBytes),
@@ -564,8 +629,12 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
         await storeOperationResult(ownerId, tx, parsed.operationId, {
           initialized: replay,
         });
-        return { ok: true, value: replay };
-      });
+          return { ok: true, value: replay };
+        });
+      } catch (error) {
+        if (isClientUploadIdConflict(error)) throw uploadIdConflict();
+        throw error;
+      }
 
       if (!initializationOutcome.ok) throw initializationOutcome.error;
       const initialized = initializationOutcome.value;
@@ -575,7 +644,15 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
         ownerId,
         initialized.pattern.id,
       );
-      return { ...initialized, credentials };
+      const revalidated = await revalidateIssuedCredentials(
+        database,
+        ownerId,
+        initialized.session.id,
+        initialized.operationId,
+        now,
+      );
+      if (!revalidated.ok) throw revalidated.error;
+      return { ...initialized, session: revalidated.value.session, credentials };
     },
 
     async refreshCredentials(input: {
@@ -585,7 +662,9 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
     }) {
       const ownerId = parseOwnerId(input.ownerId);
       const sessionId = normalizedUuidSchema.parse(input.sessionId);
-      const operationId = normalizedUuidSchema.parse(input.operationId);
+      const operationId = parseUploadCredentials({
+        operationId: input.operationId,
+      }).operationId;
       const outcome = await database.transaction<
         ServiceOutcome<{ session: ReturnType<typeof toSessionDto> }>
       >(async (tx) => {
@@ -607,6 +686,9 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
             "expired",
           );
           return { ok: false, error: expiredSession() };
+        }
+        if (session.status === "completing") {
+          return { ok: false, error: invalidSessionState() };
         }
         const timestamp = now();
         const [updated] = await tx
@@ -641,7 +723,15 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
         ownerId,
         outcome.value.session.patternId,
       );
-      return { ...outcome.value, credentials };
+      const revalidated = await revalidateIssuedCredentials(
+        database,
+        ownerId,
+        sessionId,
+        operationId,
+        now,
+      );
+      if (!revalidated.ok) throw revalidated.error;
+      return { ...revalidated.value, credentials };
     },
 
     async complete(input: {
@@ -653,6 +743,183 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
       const sessionId = normalizedUuidSchema.parse(input.sessionId);
       const parsed = parseUploadComplete(input.input);
       const fingerprint = completionFingerprint(parsed);
+
+      type Preparation =
+        | { kind: "replay"; result: CompletionResult }
+        | { kind: "verify" };
+
+      const preparation = await database.transaction<
+        ServiceOutcome<Preparation>
+      >(async (tx) => {
+        const session = await lockOwnedSession(tx, ownerId, sessionId);
+        if (!session) return { ok: false, error: notFound("session") };
+        if (session.operationId !== parsed.operationId) {
+          return { ok: false, error: operationMismatch() };
+        }
+        const lifecycle = await readLifecycleOperation(
+          tx,
+          ownerId,
+          session.operationId,
+        );
+        if (
+          lifecycle.completion &&
+          lifecycle.completion.fingerprint !== fingerprint
+        ) {
+          return { ok: false, error: operationMismatch() };
+        }
+        if (lifecycle.completion?.result) {
+          return {
+            ok: true,
+            value: { kind: "replay", result: lifecycle.completion.result },
+          };
+        }
+        if (session.status === "completed") {
+          throw new Error("UPLOAD_COMPLETION_RESULT_MISSING");
+        }
+        if (session.status === "expired" || now() >= session.expiresAt) {
+          await persistFailure(
+            tx,
+            session,
+            "UPLOAD_SESSION_EXPIRED",
+            now(),
+            "expired",
+          );
+          return { ok: false, error: expiredSession() };
+        }
+        if (session.status === "aborted") {
+          return { ok: false, error: invalidSessionState() };
+        }
+
+        const claimedLifecycle: LifecycleOperationResult = {
+          ...lifecycle,
+          completion: lifecycle.completion ?? { fingerprint },
+        };
+        await storeOperationResult(
+          ownerId,
+          tx,
+          session.operationId,
+          claimedLifecycle,
+        );
+
+        const [sourceRow] = await tx
+          .select()
+          .from(assets)
+          .where(
+            and(
+              eq(assets.ownerId, ownerId),
+              eq(assets.patternId, session.patternId),
+              eq(assets.role, "source"),
+            ),
+          )
+          .limit(1)
+          .for("update");
+        if (!sourceRow) throw new Error("UPLOAD_SOURCE_PLACEHOLDER_MISSING");
+
+        try {
+          validateSubmittedAssets(ownerId, session, parsed, sourceRow);
+        } catch (error) {
+          const mapped = mapVerificationError(error);
+          await persistFailure(tx, session, mapped.code, now());
+          return { ok: false, error: mapped };
+        }
+
+        const conflicts = await tx
+          .select({ id: assets.id })
+          .from(assets)
+          .where(
+            and(
+              inArray(
+                assets.id,
+                parsed.assets.map((asset) => asset.assetId),
+              ),
+              ne(assets.id, sourceRow.id),
+            ),
+          );
+        if (conflicts.length > 0) {
+          const error = invalidUploadObject();
+          await persistFailure(tx, session, error.code, now());
+          return { ok: false, error };
+        }
+
+        const timestamp = now();
+        await tx
+          .update(uploadSessions)
+          .set({ status: "completing", lastErrorCode: null, updatedAt: timestamp })
+          .where(
+            and(
+              eq(uploadSessions.ownerId, ownerId),
+              eq(uploadSessions.id, session.id),
+            ),
+          );
+        await tx
+          .update(patterns)
+          .set({ status: "processing", lastErrorCode: null, updatedAt: timestamp })
+          .where(
+            and(
+              eq(patterns.ownerId, ownerId),
+              eq(patterns.id, session.patternId),
+            ),
+          );
+        return { ok: true, value: { kind: "verify" } };
+      });
+      if (!preparation.ok) throw preparation.error;
+      if (preparation.value.kind === "replay") {
+        return preparation.value.result;
+      }
+
+      const persistVerificationError = async (error: AppError) =>
+        database.transaction<ServiceOutcome<CompletionResult>>(async (tx) => {
+          const session = await lockOwnedSession(tx, ownerId, sessionId);
+          if (!session) return { ok: false, error: notFound("session") };
+          if (session.operationId !== parsed.operationId) {
+            return { ok: false, error: operationMismatch() };
+          }
+          const lifecycle = await readLifecycleOperation(
+            tx,
+            ownerId,
+            session.operationId,
+          );
+          if (lifecycle.completion?.fingerprint !== fingerprint) {
+            return { ok: false, error: operationMismatch() };
+          }
+          if (lifecycle.completion.result) {
+            return { ok: true, value: lifecycle.completion.result };
+          }
+          if (session.status === "completed") {
+            throw new Error("UPLOAD_COMPLETION_RESULT_MISSING");
+          }
+          if (session.status === "expired" || now() >= session.expiresAt) {
+            if (session.status !== "expired") {
+              await persistFailure(
+                tx,
+                session,
+                "UPLOAD_SESSION_EXPIRED",
+                now(),
+                "expired",
+              );
+            }
+            return { ok: false, error: expiredSession() };
+          }
+          if (session.status === "aborted") {
+            return { ok: false, error: invalidSessionState() };
+          }
+          await persistFailure(tx, session, error.code, now());
+          return { ok: false, error };
+        });
+
+      let verified: Awaited<ReturnType<typeof verifyAsset>>[];
+      try {
+        verified = await withTimeout(
+          Promise.all(parsed.assets.map((asset) => verifyAsset(oss, asset))),
+          verificationTimeoutMs,
+        );
+      } catch (error) {
+        const failure = await persistVerificationError(
+          mapVerificationError(error),
+        );
+        if (!failure.ok) throw failure.error;
+        return failure.value;
+      }
 
       const outcome = await database.transaction<ServiceOutcome<CompletionResult>>(
         async (tx) => {
@@ -666,43 +933,33 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
             ownerId,
             session.operationId,
           );
-          if (
-            lifecycle.completion &&
-            lifecycle.completion.fingerprint !== fingerprint
-          ) {
+          if (lifecycle.completion?.fingerprint !== fingerprint) {
             return { ok: false, error: operationMismatch() };
           }
-          if (lifecycle.completion?.result) {
+          if (lifecycle.completion.result) {
             return { ok: true, value: lifecycle.completion.result };
           }
           if (session.status === "completed") {
             throw new Error("UPLOAD_COMPLETION_RESULT_MISSING");
           }
           if (session.status === "expired" || now() >= session.expiresAt) {
-            const timestamp = now();
-            await persistFailure(
-              tx,
-              session,
-              "UPLOAD_SESSION_EXPIRED",
-              timestamp,
-              "expired",
-            );
+            if (session.status !== "expired") {
+              await persistFailure(
+                tx,
+                session,
+                "UPLOAD_SESSION_EXPIRED",
+                now(),
+                "expired",
+              );
+            }
             return { ok: false, error: expiredSession() };
           }
           if (session.status === "aborted") {
             return { ok: false, error: invalidSessionState() };
           }
-
-          const claimedLifecycle: LifecycleOperationResult = {
-            ...lifecycle,
-            completion: { fingerprint },
-          };
-          await storeOperationResult(
-            ownerId,
-            tx,
-            session.operationId,
-            claimedLifecycle,
-          );
+          if (session.status !== "completing" && session.status !== "failed") {
+            return { ok: false, error: invalidSessionState() };
+          }
 
           const [sourceRow] = await tx
             .select()
@@ -717,7 +974,6 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
             .limit(1)
             .for("update");
           if (!sourceRow) throw new Error("UPLOAD_SOURCE_PLACEHOLDER_MISSING");
-
           try {
             validateSubmittedAssets(ownerId, session, parsed, sourceRow);
           } catch (error) {
@@ -725,14 +981,15 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
             await persistFailure(tx, session, mapped.code, now());
             return { ok: false, error: mapped };
           }
-
-          const assetIds = parsed.assets.map((asset) => asset.assetId);
           const conflicts = await tx
             .select({ id: assets.id })
             .from(assets)
             .where(
               and(
-                inArray(assets.id, assetIds),
+                inArray(
+                  assets.id,
+                  parsed.assets.map((asset) => asset.assetId),
+                ),
                 ne(assets.id, sourceRow.id),
               ),
             );
@@ -743,36 +1000,6 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
           }
 
           const timestamp = now();
-          await tx
-            .update(uploadSessions)
-            .set({ status: "completing", lastErrorCode: null, updatedAt: timestamp })
-            .where(
-              and(
-                eq(uploadSessions.ownerId, ownerId),
-                eq(uploadSessions.id, session.id),
-              ),
-            );
-          await tx
-            .update(patterns)
-            .set({ status: "processing", lastErrorCode: null, updatedAt: timestamp })
-            .where(
-              and(
-                eq(patterns.ownerId, ownerId),
-                eq(patterns.id, session.patternId),
-              ),
-            );
-
-          let verified: Awaited<ReturnType<typeof verifyAsset>>[];
-          try {
-            verified = await Promise.all(
-              parsed.assets.map((asset) => verifyAsset(oss, asset)),
-            );
-          } catch (error) {
-            const mapped = mapVerificationError(error);
-            await persistFailure(tx, session, mapped.code, now());
-            return { ok: false, error: mapped };
-          }
-
           const sourceVerified = verified.find(
             (entry) => entry.asset.role === "source",
           )!;
@@ -862,16 +1089,10 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
             assets: [updatedSource, ...insertedDerived].map(toAssetDto),
             session: toSessionDto(updatedSession),
           };
-          const completedLifecycle: LifecycleOperationResult = {
-            ...claimedLifecycle,
+          await storeOperationResult(ownerId, tx, session.operationId, {
+            ...lifecycle,
             completion: { fingerprint, result },
-          };
-          await storeOperationResult(
-            ownerId,
-            tx,
-            session.operationId,
-            completedLifecycle,
-          );
+          });
           await tx.insert(changeLog).values({
             ownerId,
             seq,
@@ -1022,7 +1243,7 @@ async function signAsset(
     return {
       location: await oss.createSignedGet({
         key: asset.objectKey,
-        filename: sanitizeDownloadNameInternal(asset.originalFilename),
+        filename: sanitizeDownloadName(asset.originalFilename, asset.objectKey),
         expiresSeconds,
       }),
     };

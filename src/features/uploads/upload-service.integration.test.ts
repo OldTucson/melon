@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
-import { sourceObjectKey } from "@/features/storage/object-keys";
+import {
+  previewObjectKey,
+  sourceObjectKey,
+} from "@/features/storage/object-keys";
 import type {
   BrowserCredentialIssuer,
   BrowserOssCredentials,
@@ -35,6 +38,49 @@ const PSD_BYTES = new TextEncoder().encode("8BPS");
 const PNG_BYTES = Uint8Array.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
 ]);
+const WEBP_BYTES = new TextEncoder().encode("RIFF1234WEBP");
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+const browserCredentials = (): BrowserOssCredentials => ({
+  accessKeyId: "STS.blocked",
+  accessKeySecret: "temporary-secret",
+  securityToken: "temporary-token",
+  expiration: "2026-10-09T10:15:00.000Z",
+  region: "oss-cn-hangzhou",
+  bucket: "melon-test-assets",
+  endpoint: "https://assets.example.test",
+  cname: true,
+});
+
+class BlockingCredentialIssuer implements BrowserCredentialIssuer {
+  readonly started = deferred<void>();
+  readonly response = deferred<BrowserOssCredentials>();
+
+  async issue() {
+    this.started.resolve(undefined);
+    return this.response.promise;
+  }
+}
+
+class BlockingHeadOssAdapter extends FakeOssAdapter {
+  readonly started = deferred<void>();
+  readonly headRelease = deferred<void>();
+
+  override async headObject(key: string) {
+    this.started.resolve(undefined);
+    await this.headRelease.promise;
+    return super.headObject(key);
+  }
+}
 
 const seedUser = async (email: string) => {
   const id = randomUUID();
@@ -191,6 +237,153 @@ describe("upload service lifecycle", () => {
     expect(await db.select().from(assets)).toHaveLength(1);
     expect(await db.select().from(uploadSessions)).toHaveLength(1);
   });
+
+  it.each(["cancel", "complete", "expire"] as const)(
+    "does not return initialization credentials after a concurrent %s transition",
+    async (transition) => {
+      const blockedIssuer = new BlockingCredentialIssuer();
+      const blockedService = createUploadService({
+        database: db,
+        oss,
+        credentialIssuer: blockedIssuer,
+        now: () => now,
+      });
+      const input = initInput();
+      const pending = blockedService.initialize({ ownerId: ownerA, input });
+      await blockedIssuer.started.promise;
+      const [session] = await db
+        .select()
+        .from(uploadSessions)
+        .where(eq(uploadSessions.operationId, input.operationId));
+      const [source] = await db
+        .select()
+        .from(assets)
+        .where(eq(assets.id, input.sourceAssetId));
+      expect(session).toBeDefined();
+      expect(source).toBeDefined();
+
+      if (transition === "cancel") {
+        await service.cancel({
+          ownerId: ownerA,
+          sessionId: session!.id,
+          input: { operationId: input.operationId },
+        });
+      } else if (transition === "complete") {
+        oss.putObject(source!.objectKey, PSD_BYTES);
+        await service.complete({
+          ownerId: ownerA,
+          sessionId: session!.id,
+          input: {
+            operationId: input.operationId,
+            assets: [
+              {
+                assetId: source!.id,
+                role: "source",
+                objectKey: source!.objectKey,
+                extension: "psd",
+                sizeBytes: PSD_BYTES.byteLength,
+              },
+            ],
+          },
+        });
+      } else {
+        now = new Date(session!.expiresAt);
+        await expect(
+          service.refreshCredentials({
+            ownerId: ownerA,
+            sessionId: session!.id,
+            operationId: input.operationId,
+          }),
+        ).rejects.toMatchObject({ code: "UPLOAD_SESSION_EXPIRED" });
+      }
+
+      blockedIssuer.response.resolve(browserCredentials());
+      await expect(pending).rejects.toMatchObject({
+        code:
+          transition === "expire"
+            ? "UPLOAD_SESSION_EXPIRED"
+            : "UPLOAD_SESSION_INVALID_STATE",
+      });
+    },
+  );
+
+  it.each(["cancel", "complete", "expire"] as const)(
+    "does not return refreshed credentials after a concurrent %s transition",
+    async (transition) => {
+      const initialized = await service.initialize({
+        ownerId: ownerA,
+        input: initInput(),
+      });
+      const blockedIssuer = new BlockingCredentialIssuer();
+      const blockedService = createUploadService({
+        database: db,
+        oss,
+        credentialIssuer: blockedIssuer,
+        now: () => now,
+      });
+      const pending = blockedService.refreshCredentials({
+        ownerId: ownerA,
+        sessionId: initialized.session.id,
+        operationId: initialized.operationId,
+      });
+      await blockedIssuer.started.promise;
+
+      if (transition === "cancel") {
+        await service.cancel({
+          ownerId: ownerA,
+          sessionId: initialized.session.id,
+          input: { operationId: initialized.operationId },
+        });
+      } else if (transition === "complete") {
+        oss.putObject(initialized.sourceAsset.objectKey, PSD_BYTES);
+        await service.complete({
+          ownerId: ownerA,
+          sessionId: initialized.session.id,
+          input: sourceCompletion(initialized),
+        });
+      } else {
+        now = new Date(initialized.session.expiresAt);
+        await expect(
+          service.refreshCredentials({
+            ownerId: ownerA,
+            sessionId: initialized.session.id,
+            operationId: initialized.operationId,
+          }),
+        ).rejects.toMatchObject({ code: "UPLOAD_SESSION_EXPIRED" });
+      }
+      blockedIssuer.response.resolve(browserCredentials());
+
+      await expect(pending).rejects.toMatchObject({
+        code:
+          transition === "expire"
+            ? "UPLOAD_SESSION_EXPIRED"
+            : "UPLOAD_SESSION_INVALID_STATE",
+      });
+    },
+  );
+
+  it.each(["pattern", "asset"] as const)(
+    "maps a global client %s UUID collision to a stable conflict",
+    async (collision) => {
+      const existing = await service.initialize({ ownerId: ownerB, input: initInput() });
+      const input = initInput({
+        ...(collision === "pattern" ? { patternId: existing.pattern.id } : {}),
+        ...(collision === "asset" ? { sourceAssetId: existing.sourceAsset.id } : {}),
+      });
+
+      await expect(service.initialize({ ownerId: ownerA, input })).rejects.toMatchObject({
+        code: "UPLOAD_ID_CONFLICT",
+        status: 409,
+        message: expect.not.stringMatching(/duplicate|constraint|sql/i),
+      });
+      expect(
+        await db.select().from(patterns).where(eq(patterns.ownerId, ownerA)),
+      ).toHaveLength(0);
+      expect(
+        await db.select().from(operations).where(eq(operations.ownerId, ownerA)),
+      ).toHaveLength(0);
+    },
+  );
 
   it("hides foreign sessions exactly like missing sessions across lifecycle calls", async () => {
     const initialized = await service.initialize({
@@ -531,6 +724,254 @@ describe("upload service lifecycle", () => {
     ).toHaveLength(2);
   });
 
+  it("releases the database transaction while OSS verification is pending", async () => {
+    const initialized = await service.initialize({ ownerId: ownerA, input: initInput() });
+    const blockingOss = new BlockingHeadOssAdapter();
+    blockingOss.putObject(initialized.sourceAsset.objectKey, PSD_BYTES);
+    const blockedService = createUploadService({
+      database: db,
+      oss: blockingOss,
+      credentialIssuer: issuer,
+      now: () => now,
+      verificationTimeoutMs: 5_000,
+    });
+    const pending = blockedService.complete({
+      ownerId: ownerA,
+      sessionId: initialized.session.id,
+      input: sourceCompletion(initialized),
+    });
+    await blockingOss.started.promise;
+
+    const ordinaryQuery = await db.select({ id: users.id }).from(users).limit(1);
+    const transactionActivity = await db.execute(sql<{ count: number }>`
+      select count(*)::int as count
+      from pg_stat_activity
+      where datname = current_database()
+        and pid <> pg_backend_pid()
+        and state = 'idle in transaction'
+    `);
+    blockingOss.headRelease.resolve(undefined);
+    await pending;
+
+    expect(ordinaryQuery).toHaveLength(1);
+    expect(transactionActivity[0]?.count).toBe(0);
+  });
+
+  it("lets cancel win while verification is blocked and never resurrects the session", async () => {
+    const initialized = await service.initialize({ ownerId: ownerA, input: initInput() });
+    const blockingOss = new BlockingHeadOssAdapter();
+    blockingOss.putObject(initialized.sourceAsset.objectKey, PSD_BYTES);
+    const blockedService = createUploadService({
+      database: db,
+      oss: blockingOss,
+      credentialIssuer: issuer,
+      now: () => now,
+      verificationTimeoutMs: 5_000,
+    });
+    const completion = blockedService.complete({
+      ownerId: ownerA,
+      sessionId: initialized.session.id,
+      input: sourceCompletion(initialized),
+    });
+    await blockingOss.started.promise;
+
+    const cancellation = service.cancel({
+      ownerId: ownerA,
+      sessionId: initialized.session.id,
+      input: { operationId: initialized.operationId },
+    });
+    const cancelWon = await Promise.race([
+      cancellation.then(() => true, () => false),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 200)),
+    ]);
+    blockingOss.headRelease.resolve(undefined);
+    const [completionResult, cancellationResult] = await Promise.allSettled([
+      completion,
+      cancellation,
+    ]);
+
+    expect(cancelWon).toBe(true);
+    expect(cancellationResult).toMatchObject({ status: "fulfilled" });
+    expect(completionResult).toMatchObject({
+      status: "rejected",
+      reason: { code: "UPLOAD_SESSION_INVALID_STATE" },
+    });
+    const [session] = await db
+      .select()
+      .from(uploadSessions)
+      .where(eq(uploadSessions.id, initialized.session.id));
+    expect(session?.status).toBe("aborted");
+  });
+
+  it("allows the same completion payload to recover a completing session", async () => {
+    const initialized = await service.initialize({ ownerId: ownerA, input: initInput() });
+    const blockingOss = new BlockingHeadOssAdapter();
+    blockingOss.putObject(initialized.sourceAsset.objectKey, PSD_BYTES);
+    oss.putObject(initialized.sourceAsset.objectKey, PSD_BYTES);
+    const blockedService = createUploadService({
+      database: db,
+      oss: blockingOss,
+      credentialIssuer: issuer,
+      now: () => now,
+      verificationTimeoutMs: 5_000,
+    });
+    const input = sourceCompletion(initialized);
+    const abandoned = blockedService.complete({
+      ownerId: ownerA,
+      sessionId: initialized.session.id,
+      input,
+    });
+    await blockingOss.started.promise;
+
+    const recovery = service.complete({
+      ownerId: ownerA,
+      sessionId: initialized.session.id,
+      input,
+    });
+    const recoveredBeforeRelease = await Promise.race([
+      recovery.then(() => true, () => false),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 200)),
+    ]);
+    blockingOss.headRelease.resolve(undefined);
+    const [recovered, replay] = await Promise.all([recovery, abandoned]);
+
+    expect(recoveredBeforeRelease).toBe(true);
+    expect(replay).toEqual(recovered);
+    expect(
+      await db
+        .select()
+        .from(changeLog)
+        .where(and(eq(changeLog.ownerId, ownerA), eq(changeLog.operation, "upload.completed"))),
+    ).toHaveLength(1);
+  });
+
+  it("does not let a late verification failure overwrite a successful completion", async () => {
+    const initialized = await service.initialize({
+      ownerId: ownerA,
+      input: initInput(),
+    });
+    const blockingOss = new BlockingHeadOssAdapter();
+    oss.putObject(initialized.sourceAsset.objectKey, PSD_BYTES);
+    const blockedService = createUploadService({
+      database: db,
+      oss: blockingOss,
+      credentialIssuer: issuer,
+      now: () => now,
+      verificationTimeoutMs: 5_000,
+    });
+    const input = sourceCompletion(initialized);
+    const lateFailure = blockedService.complete({
+      ownerId: ownerA,
+      sessionId: initialized.session.id,
+      input,
+    });
+    await blockingOss.started.promise;
+
+    const completed = await service.complete({
+      ownerId: ownerA,
+      sessionId: initialized.session.id,
+      input,
+    });
+    blockingOss.headRelease.resolve(undefined);
+
+    await expect(lateFailure).resolves.toEqual(completed);
+    const [session] = await db
+      .select()
+      .from(uploadSessions)
+      .where(eq(uploadSessions.id, initialized.session.id));
+    expect(session).toMatchObject({ status: "completed", lastErrorCode: null });
+    expect(
+      await db
+        .select()
+        .from(changeLog)
+        .where(
+          and(
+            eq(changeLog.ownerId, ownerA),
+            eq(changeLog.operation, "upload.completed"),
+          ),
+        ),
+    ).toHaveLength(1);
+  });
+
+  it("lets expiry win while verification is blocked", async () => {
+    const initialized = await service.initialize({ ownerId: ownerA, input: initInput() });
+    const blockingOss = new BlockingHeadOssAdapter();
+    blockingOss.putObject(initialized.sourceAsset.objectKey, PSD_BYTES);
+    const blockedService = createUploadService({
+      database: db,
+      oss: blockingOss,
+      credentialIssuer: issuer,
+      now: () => now,
+      verificationTimeoutMs: 5_000,
+    });
+    const completion = blockedService.complete({
+      ownerId: ownerA,
+      sessionId: initialized.session.id,
+      input: sourceCompletion(initialized),
+    });
+    await blockingOss.started.promise;
+    now = new Date(initialized.session.expiresAt);
+
+    const expiry = service.refreshCredentials({
+      ownerId: ownerA,
+      sessionId: initialized.session.id,
+      operationId: initialized.operationId,
+    });
+    const expiryWon = await Promise.race([
+      expiry.then(() => false, (error: { code?: string }) => error.code === "UPLOAD_SESSION_EXPIRED"),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 200)),
+    ]);
+    blockingOss.headRelease.resolve(undefined);
+
+    expect(expiryWon).toBe(true);
+    await expect(completion).rejects.toMatchObject({ code: "UPLOAD_SESSION_EXPIRED" });
+    const [session] = await db
+      .select()
+      .from(uploadSessions)
+      .where(eq(uploadSessions.id, initialized.session.id));
+    expect(session?.status).toBe("expired");
+  });
+
+  it("times out blocked OSS verification and persists a retryable failure", async () => {
+    const initialized = await service.initialize({ ownerId: ownerA, input: initInput() });
+    const blockingOss = new BlockingHeadOssAdapter();
+    blockingOss.putObject(initialized.sourceAsset.objectKey, PSD_BYTES);
+    const timedService = createUploadService({
+      database: db,
+      oss: blockingOss,
+      credentialIssuer: issuer,
+      now: () => now,
+      verificationTimeoutMs: 20,
+    });
+    const completion = timedService.complete({
+      ownerId: ownerA,
+      sessionId: initialized.session.id,
+      input: sourceCompletion(initialized),
+    });
+    await blockingOss.started.promise;
+    const outcome = await Promise.race([
+      completion.then(
+        () => ({ code: "resolved" }),
+        (error: { code?: string }) => ({ code: error.code }),
+      ),
+      new Promise<{ code: string }>((resolve) =>
+        setTimeout(() => resolve({ code: "test-timeout" }), 200),
+      ),
+    ]);
+    blockingOss.headRelease.resolve(undefined);
+    await completion.catch(() => undefined);
+
+    expect(outcome).toEqual({ code: "UPLOAD_STORAGE_UNAVAILABLE" });
+    const [session] = await db
+      .select()
+      .from(uploadSessions)
+      .where(eq(uploadSessions.id, initialized.session.id));
+    expect(session).toMatchObject({
+      status: "failed",
+      lastErrorCode: "UPLOAD_STORAGE_UNAVAILABLE",
+    });
+  });
+
   it("persists signature mismatch without making the pattern ready and can retry", async () => {
     const initialized = await service.initialize({
       ownerId: ownerA,
@@ -743,7 +1184,7 @@ describe("upload service lifecycle", () => {
       ownerId: ownerA,
       assetId: initialized.sourceAsset.id,
     });
-    expect(oss.signedGets.at(-1)?.filename).toBe("download");
+    expect(oss.signedGets.at(-1)?.filename).toBe("download.psd");
 
     await db
       .update(assets)
@@ -756,6 +1197,58 @@ describe("upload service lifecycle", () => {
     expect(
       new TextEncoder().encode(oss.signedGets.at(-1)?.filename).byteLength,
     ).toBeLessThanOrEqual(180);
+    expect(oss.signedGets.at(-1)?.filename).toMatch(/\.psd$/);
+  });
+
+  it("completes and signs a bounded derived WebP preview", async () => {
+    const originalFilename = `${"🍉".repeat(125)}x.psd`;
+    const initialized = await service.initialize({
+      ownerId: ownerA,
+      input: initInput({ originalFilename }),
+    });
+    expect(initialized.pattern.name.length).toBeLessThanOrEqual(160);
+    expect(initialized.pattern.name).not.toMatch(/[\uD800-\uDBFF]$/);
+    oss.putObject(initialized.sourceAsset.objectKey, PSD_BYTES);
+    const previewId = randomUUID();
+    const previewKey = previewObjectKey({
+      ownerId: ownerA,
+      patternId: initialized.pattern.id,
+      assetId: previewId,
+      extension: "webp",
+    });
+    oss.putObject(previewKey, WEBP_BYTES, "text/plain");
+
+    const completed = await service.complete({
+      ownerId: ownerA,
+      sessionId: initialized.session.id,
+      input: {
+        ...sourceCompletion(initialized),
+        assets: [
+          ...sourceCompletion(initialized).assets,
+          {
+            assetId: previewId,
+            role: "preview",
+            objectKey: previewKey,
+            extension: "webp",
+            sizeBytes: WEBP_BYTES.byteLength,
+            width: 2048,
+            height: 2048,
+          },
+        ],
+      },
+    });
+    const preview = completed.assets.find((asset) => asset.role === "preview");
+    expect(preview).toMatchObject({
+      id: previewId,
+      detectedMimeType: "image/webp",
+      originalFilename: "preview.webp",
+    });
+
+    await service.signAssetView({ ownerId: ownerA, assetId: previewId });
+    expect(oss.signedGets.at(-1)).toMatchObject({
+      filename: "preview.webp",
+      expiresSeconds: 60,
+    });
   });
 
   it("does not accept a foreign-looking source key even when its size matches", async () => {

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { hasNoNullByte } from "@/lib/validation/text";
+import { publicOperationIdSchema } from "@/lib/validation/operation-id";
 
 export const patternFormats = [
   "psd",
@@ -56,7 +57,7 @@ export const patternPatchSchema = z
   );
 
 export const patternMutationSchema = z.object({
-  operationId: z.string().uuid(),
+  operationId: publicOperationIdSchema,
   patch: patternPatchSchema,
 });
 

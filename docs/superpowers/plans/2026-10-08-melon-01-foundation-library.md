@@ -729,7 +729,7 @@ Also test invalid UUIDs, path separators in extensions, and cross-pattern keys. 
 
 - [ ] **Step 2: Implement UUID-only keys and the exact session policy**
 
-Validate every ID with `z.string().uuid()` and extensions with the approved enum. Never include email, display name, pattern name or original filename. Generate a version `1` policy with one object-prefix resource and these actions only:
+Validate every ID with `z.string().uuid()` and use role-aware extension enums: source keys accept `psd|ai|jpg|jpeg|png|procreate`, while derived keys accept `jpg|jpeg|png|webp`. WebP is derived-only. Never include email, display name, pattern name or original filename. Generate a version `1` policy with one object-prefix resource and these actions only:
 
 ```ts
 const uploadActions = ["oss:AbortMultipartUpload", "oss:ListParts", "oss:PutObject"] as const;
@@ -833,15 +833,13 @@ Initialization claims `(ownerId, operationId)`, creates pattern/source placehold
 
 Initialization never searches by content hash and never deduplicates. Once a pattern becomes `ready`, no source-replacement endpoint exists; a revised source must create a new pattern.
 
-Completion locks the session, returns stored output when already completed, checks every key against the session pattern prefix, verifies size and signature through `OssAdapter`, inserts current assets, marks the pattern `ready`, marks the session completed and stores the replay result in one transaction.
+Completion uses three phases. A short transaction locks the session, returns stored output when already completed, claims the normalized completion fingerprint, validates every key against the session pattern prefix and marks the session `completing`. The service then verifies size and signature through `OssAdapter` outside any database transaction with an explicit timeout. A final short transaction re-locks the session, rechecks the fingerprint and terminal state, inserts current assets, marks the pattern `ready`, marks the session completed and stores the replay result. The failure path performs the same terminal-state recheck before persisting diagnostics, so it cannot overwrite a concurrent success, cancellation or expiry.
 
 ```ts
-const completed = await db.transaction(async (tx) => {
-  const session = await lockOwnedUploadSession(tx, ownerId, sessionId);
-  if (session.status === "completed") return readStoredCompletion(session);
-  const verified = await verifySubmittedAssets(oss, session, input.assets);
-  return commitVerifiedAssets(tx, session, verified, operationId);
-});
+const preparation = await claimCompletionInShortTransaction(input);
+if (preparation.kind === "replay") return preparation.result;
+const verified = await withTimeout(verifySubmittedAssets(oss, input.assets));
+const completed = await commitVerifiedAssetsInShortTransaction(verified);
 ```
 
 Cancel is idempotent: it marks the session aborted and attempts multipart abort through a browser command result when available; lifecycle expiry remains the fallback. A cancel failure returns a warning but never changes ownership checks.

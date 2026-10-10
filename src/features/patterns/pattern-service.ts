@@ -11,6 +11,7 @@ import {
   storeOperationResult,
 } from "@/lib/db/operation";
 import { AppError, validationError } from "@/lib/http/app-error";
+import { publicOperationIdSchema } from "@/lib/validation/operation-id";
 
 import {
   patternPatchSchema,
@@ -32,7 +33,7 @@ import {
 
 const mutationIdentitySchema = z.object({
   patternId: z.string().uuid(),
-  operationId: z.string().uuid(),
+  operationId: publicOperationIdSchema,
 });
 
 export type PatternDto = ReturnType<typeof toPatternDto>;

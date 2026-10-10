@@ -15,4 +15,19 @@ describe("OSS operations contract", () => {
     );
     expect(operations).toMatch(/上线核对[\s\S]*版本控制保持关闭/);
   });
+
+  it("documents role-aware source and derived object extensions", async () => {
+    const operations = await readFile(
+      path.resolve(process.cwd(), "docs/operations/aliyun-oss.md"),
+      "utf8",
+    );
+
+    expect(operations).toMatch(
+      /source\/\{ASSET_UUID\}\.\{psd\|ai\|jpg\|jpeg\|png\|procreate\}/,
+    );
+    expect(operations).toMatch(
+      /derived\/\{ASSET_UUID\}\.\{jpg\|jpeg\|png\|webp\}/,
+    );
+    expect(operations).toMatch(/WebP[\s\S]*派生/);
+  });
 });

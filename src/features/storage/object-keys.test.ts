@@ -70,6 +70,30 @@ describe("OSS object keys", () => {
     expect(previewKey).not.toBe(thumbnailKey);
   });
 
+  it("allows WebP only for derived keys", () => {
+    expect(
+      previewObjectKey({
+        ownerId,
+        patternId,
+        assetId: previewAssetId,
+        extension: "WEBP",
+      }),
+    ).toBe(
+      `users/${ownerId}/patterns/${patternId}/derived/${previewAssetId}.webp`,
+    );
+    expect(() =>
+      sourceObjectKey({ ownerId, patternId, assetId, extension: "webp" }),
+    ).toThrow();
+    expect(() =>
+      previewObjectKey({
+        ownerId,
+        patternId,
+        assetId: previewAssetId,
+        extension: "psd",
+      }),
+    ).toThrow();
+  });
+
   it("requires preview and thumbnail to use distinct asset UUIDs", () => {
     expect(
       assertDistinctDerivedAssetIds({ previewAssetId, thumbnailAssetId }),

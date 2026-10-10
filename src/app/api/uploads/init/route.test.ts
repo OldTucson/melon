@@ -27,6 +27,10 @@ vi.mock("@/features/uploads/upload-service", () => ({
   signAssetView: mocks.signAssetView,
 }));
 
+vi.mock("@/lib/env/server", () => ({
+  getServerEnv: () => ({ APP_ORIGIN: "http://localhost:3000" }),
+}));
+
 const ORIGIN = "http://localhost:3000";
 const ownerId = "10000000-0000-4000-8000-000000000001";
 const sessionId = "20000000-0000-4000-8000-000000000002";

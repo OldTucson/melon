@@ -156,7 +156,7 @@ Nginx ── Next.js 单体服务
 4. 客户端调用上传初始化 API。服务端验证会话和配额，创建 `UploadSession`、分配不可猜测的 OSS object key，并签发只允许写入该前缀的短期 STS 凭证。
 5. `ali-oss` 执行分片上传。分片 checkpoint 持久化到 Dexie；STS 到期时自动刷新后继续。
 6. 若生成了预览和缩略图，客户端把它们作为派生资产上传到同一图案前缀。
-7. 客户端调用完成 API。服务端通过 OSS `HEAD` 和小范围读取核对对象存在性、大小、扩展名与 magic bytes，在一个数据库事务中创建资产记录、更新图案状态并写入 `ChangeLog`。
+7. 客户端调用完成 API。服务端先用短事务锁定会话、认领完成载荷并切换为 `completing`，随后在事务外通过 OSS `HEAD` 和小范围读取核对对象存在性、大小、扩展名与 magic bytes，最后用第二个短事务重锁会话并创建资产记录、更新图案状态和写入 `ChangeLog`。这样 OSS 网络等待不会占用数据库事务或行锁；取消、过期和同载荷恢复仍能并发推进，终态重检可防止失败结果覆盖成功或复活已取消会话。
 8. 成功后状态变为 `ready`；预览失败只影响预览状态，不阻止原文件进入可查询、可打标、可下载状态。
 
 浏览器关闭后不能继续持有 `File` 对象，因此后台上传不会跨浏览器关闭继续。再次打开后，队列显示待恢复任务；用户重选同一文件，系统比较大小、文件名、lastModified 和内容哈希，通过后从 checkpoint 继续。校验不一致时不会复用旧分片。
@@ -391,10 +391,12 @@ users/{userId}/patterns/{patternId}/source/{assetId}.{ext}
 users/{userId}/patterns/{patternId}/derived/{assetId}.{ext}
 ```
 
+`source` 的扩展名仅允许 `psd|ai|jpg|jpeg|png|procreate`；`derived` 仅允许 `jpg|jpeg|png|webp`。WebP 只用于派生预览或缩略图，不得声明为源文件。
+
 ### 10.3 文件校验与租户隔离
 
 - 客户端校验只用于快速反馈；服务端在完成上传时使用 OSS `HEAD` 和 Range 读取再次验证大小、扩展名与 magic bytes。
-- 允许的签名包括 JPEG、PNG、PSD `8BPS`、PDF/PostScript AI，以及 Procreate 的 ZIP 容器签名；不信任浏览器上报的 MIME。
+- 允许的源文件签名包括 JPEG、PNG、PSD `8BPS`、PDF/PostScript AI，以及 Procreate 的 ZIP 容器签名；派生文件另允许 `RIFF....WEBP`。不信任浏览器上报的 MIME。
 - 超过 200 MB、扩展名不在白名单或签名不匹配的对象不能完成入库，并进入清理队列。
 - 每个查询和写入都必须包含从会话获得的 `ownerId`。客户端传入的 owner ID 被忽略。
 - 数据库索引以 `ownerId` 为前导列；对象路径隔离只是第二道防线，不能替代 API 授权。

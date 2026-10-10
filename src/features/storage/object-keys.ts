@@ -4,7 +4,7 @@ import { normalizedUuidSchema } from "./identifiers";
 
 export const storageObjectRoles = ["source", "preview", "thumbnail"] as const;
 export const storageObjectKinds = ["source", "derived"] as const;
-export const storageExtensions = [
+export const storageSourceExtensions = [
   "psd",
   "ai",
   "jpg",
@@ -12,34 +12,61 @@ export const storageExtensions = [
   "png",
   "procreate",
 ] as const;
+export const storageDerivedExtensions = ["jpg", "jpeg", "png", "webp"] as const;
+export const storageExtensions = [
+  ...storageSourceExtensions,
+  "webp",
+] as const;
 
 export type StorageObjectRole = (typeof storageObjectRoles)[number];
 export type StorageObjectKind = (typeof storageObjectKinds)[number];
 export type StorageExtension = (typeof storageExtensions)[number];
 
-const roleSchema = z.enum(storageObjectRoles);
-const kindSchema = z.enum(storageObjectKinds);
-const canonicalExtensionSchema = z.enum(storageExtensions);
-const extensionInputSchema = z
+const sourceExtensionInputSchema = z
   .string()
   .transform((value) => value.toLowerCase())
-  .pipe(canonicalExtensionSchema);
+  .pipe(z.enum(storageSourceExtensions));
+const derivedExtensionInputSchema = z
+  .string()
+  .transform((value) => value.toLowerCase())
+  .pipe(z.enum(storageDerivedExtensions));
 
-const objectKeyInputSchema = z.object({
+const objectIdentityShape = {
   ownerId: normalizedUuidSchema,
   patternId: normalizedUuidSchema,
   assetId: normalizedUuidSchema,
-  role: roleSchema,
-  extension: extensionInputSchema,
-});
+};
 
-const objectKeyPartsSchema = z.object({
-  ownerId: normalizedUuidSchema,
-  patternId: normalizedUuidSchema,
-  assetId: normalizedUuidSchema,
-  kind: kindSchema,
-  extension: canonicalExtensionSchema,
-});
+const objectKeyInputSchema = z.discriminatedUnion("role", [
+  z.object({
+    ...objectIdentityShape,
+    role: z.literal("source"),
+    extension: sourceExtensionInputSchema,
+  }),
+  z.object({
+    ...objectIdentityShape,
+    role: z.literal("preview"),
+    extension: derivedExtensionInputSchema,
+  }),
+  z.object({
+    ...objectIdentityShape,
+    role: z.literal("thumbnail"),
+    extension: derivedExtensionInputSchema,
+  }),
+]);
+
+const objectKeyPartsSchema = z.discriminatedUnion("kind", [
+  z.object({
+    ...objectIdentityShape,
+    kind: z.literal("source"),
+    extension: z.enum(storageSourceExtensions),
+  }),
+  z.object({
+    ...objectIdentityShape,
+    kind: z.literal("derived"),
+    extension: z.enum(storageDerivedExtensions),
+  }),
+]);
 
 const derivedAssetIdsSchema = z
   .object({
@@ -52,15 +79,14 @@ const derivedAssetIdsSchema = z
     { message: "Derived asset IDs must be distinct" },
   );
 
-const storageKindByRole = {
-  source: "source",
-  preview: "derived",
-  thumbnail: "derived",
-} as const satisfies Record<StorageObjectRole, StorageObjectKind>;
-
 export type ObjectKeyParts = z.output<typeof objectKeyPartsSchema>;
 
-type RoleObjectKeyInput = Omit<z.input<typeof objectKeyInputSchema>, "role">;
+type RoleObjectKeyInput = {
+  ownerId: string;
+  patternId: string;
+  assetId: string;
+  extension: string;
+};
 
 function formatObjectKey(parts: ObjectKeyParts) {
   return [
@@ -76,13 +102,21 @@ function formatObjectKey(parts: ObjectKeyParts) {
 export function storageObjectKey(input: z.input<typeof objectKeyInputSchema>) {
   const parsed = objectKeyInputSchema.parse(input);
 
-  return formatObjectKey({
-    ownerId: parsed.ownerId,
-    patternId: parsed.patternId,
-    assetId: parsed.assetId,
-    kind: storageKindByRole[parsed.role],
-    extension: parsed.extension,
-  });
+  return parsed.role === "source"
+    ? formatObjectKey({
+        ownerId: parsed.ownerId,
+        patternId: parsed.patternId,
+        assetId: parsed.assetId,
+        kind: "source",
+        extension: parsed.extension,
+      })
+    : formatObjectKey({
+        ownerId: parsed.ownerId,
+        patternId: parsed.patternId,
+        assetId: parsed.assetId,
+        kind: "derived",
+        extension: parsed.extension,
+      });
 }
 
 export function assertDistinctDerivedAssetIds(

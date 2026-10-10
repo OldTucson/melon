@@ -12,6 +12,7 @@ import {
   storeOperationResult,
 } from "@/lib/db/operation";
 import { AppError, validationError } from "@/lib/http/app-error";
+import { publicOperationIdSchema } from "@/lib/validation/operation-id";
 
 import {
   tagCreateSchema,
@@ -35,7 +36,7 @@ import {
   updateTagRow,
 } from "./tag-repository";
 
-const operationIdSchema = z.string().uuid();
+const operationIdSchema = publicOperationIdSchema;
 const relationIdentitySchema = z.object({
   operationId: operationIdSchema,
   patternId: z.string().uuid(),

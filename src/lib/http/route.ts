@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { isRedirectError } from "next/dist/client/components/redirect-error";
 import { ZodError } from "zod";
 
+import { getServerEnv } from "@/lib/env/server";
+
 import { AppError, validationError } from "./app-error";
 
 type RouteHandler<Context = unknown> = (
@@ -60,9 +62,22 @@ export async function readJson(request: Request): Promise<unknown> {
   }
 }
 
-export function assertSameOrigin(request: Request) {
+export function assertSameOrigin(
+  request: Request,
+  expectedOrigin = getServerEnv().APP_ORIGIN,
+) {
   const origin = request.headers.get("origin");
-  if (origin !== new URL(request.url).origin) {
+  let normalizedOrigin: string | undefined;
+  try {
+    normalizedOrigin = origin ? new URL(origin).origin : undefined;
+  } catch {
+    normalizedOrigin = undefined;
+  }
+  if (
+    origin === "null" ||
+    normalizedOrigin === undefined ||
+    normalizedOrigin !== new URL(expectedOrigin).origin
+  ) {
     throw new AppError(
       "FORBIDDEN_ORIGIN",
       403,

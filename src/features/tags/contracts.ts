@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { hasNoNullByte } from "@/lib/validation/text";
+import { publicOperationIdSchema } from "@/lib/validation/operation-id";
 
 export const tagColorTokens = [
   "gray",
@@ -34,21 +35,21 @@ export const tagPatchSchema = z
   );
 
 export const tagCreateMutationSchema = z.object({
-  operationId: z.string().uuid(),
+  operationId: publicOperationIdSchema,
   input: tagCreateSchema,
 });
 
 export const tagPatchMutationSchema = z.object({
-  operationId: z.string().uuid(),
+  operationId: publicOperationIdSchema,
   patch: tagPatchSchema,
 });
 
 export const tagDeleteMutationSchema = z.object({
-  operationId: z.string().uuid(),
+  operationId: publicOperationIdSchema,
 });
 
 export const patternTagMutationSchema = z.object({
-  operationId: z.string().uuid(),
+  operationId: publicOperationIdSchema,
 });
 
 export type TagColorToken = z.output<typeof tagColorTokenSchema>;
