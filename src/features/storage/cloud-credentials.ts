@@ -1,10 +1,13 @@
 import "server-only";
 
-import Credential from "@alicloud/credentials";
 import { Config as OpenApiConfig } from "@alicloud/openapi-client";
 import StsClient, { AssumeRoleRequest } from "@alicloud/sts20150401";
 import { z } from "zod";
 
+import {
+  createAlibabaCredential,
+  resolveAlibabaSdkConstructor,
+} from "./alibaba-credential";
 import type {
   BrowserCredentialIssuer,
   BrowserCredentialIssuerConfig,
@@ -69,8 +72,11 @@ type AssumeRoleOperation = (
 async function assumeRoleWithDefaultCredential(
   input: AssumeRoleInput,
 ): Promise<AssumeRoleOutput> {
-  const credential = new Credential();
-  const client = new StsClient(
+  const credential = createAlibabaCredential();
+  const StsClientConstructor = resolveAlibabaSdkConstructor<typeof StsClient>(
+    StsClient as unknown,
+  );
+  const client = new StsClientConstructor(
     new OpenApiConfig({
       credential,
       endpoint: "sts.aliyuncs.com",

@@ -1,9 +1,9 @@
 import "server-only";
 
-import Credential from "@alicloud/credentials";
 import OSS from "ali-oss";
 import { z } from "zod";
 
+import { createAlibabaCredential } from "./alibaba-credential";
 import type { OssAdapter, OssConnectionConfig } from "./contracts";
 import {
   assertCanonicalObjectKey,
@@ -53,7 +53,7 @@ function encodeDispositionFilename(filename: string) {
 
 export function createDefaultCredentialResolver(
   createCredentialProvider: OssCredentialProviderFactory = () =>
-    new Credential(),
+    createAlibabaCredential(),
 ): OssCredentialResolver {
   let credentialProvider: OssCredentialProvider | undefined;
   let inFlight: Promise<unknown> | undefined;
