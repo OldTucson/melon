@@ -63,7 +63,10 @@ function parsePatternTrashMutation(
 
   if (
     parsed.error.issues.some(
-      (issue) => issue.code === "too_big" && issue.path[0] === "patternIds",
+      (issue) =>
+        issue.code === "too_big" &&
+        issue.path.length === 1 &&
+        issue.path[0] === "patternIds",
     )
   ) {
     throw new AppError(

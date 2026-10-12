@@ -107,6 +107,24 @@ describe("pattern batch contracts", () => {
     );
   });
 
+  it("maps a nested too_big issue to VALIDATION_ERROR", () => {
+    expect(() =>
+      parsePatternBatchMutation({
+        operationId: randomUUID(),
+        action: "trash",
+        patterns: [
+          { id: randomUUID(), version: Number.MAX_SAFE_INTEGER + 1 },
+        ],
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "VALIDATION_ERROR",
+        status: 400,
+        message: "Invalid request",
+      }),
+    );
+  });
+
   it("maps other invalid requests to VALIDATION_ERROR", () => {
     expect(() =>
       parsePatternBatchMutation({

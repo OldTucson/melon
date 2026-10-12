@@ -65,7 +65,10 @@ export function parsePatternBatchMutation(
 
   if (
     parsed.error.issues.some(
-      (issue) => issue.code === "too_big" && issue.path[0] === "patterns",
+      (issue) =>
+        issue.code === "too_big" &&
+        issue.path.length === 1 &&
+        issue.path[0] === "patterns",
     )
   ) {
     throw new AppError(
