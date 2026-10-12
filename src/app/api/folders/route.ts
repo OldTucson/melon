@@ -4,7 +4,7 @@ import {
   createFolder,
   listFolders,
 } from "@/features/folders/folder-service";
-import { readJson, withRoute } from "@/lib/http/route";
+import { assertSameOrigin, readJson, withRoute } from "@/lib/http/route";
 
 export const GET = withRoute(async () => {
   const user = await requireUser();
@@ -13,6 +13,7 @@ export const GET = withRoute(async () => {
 
 export const POST = withRoute(async (request: Request) => {
   const user = await requireUser();
+  assertSameOrigin(request);
   const mutation = folderCreateMutationSchema.parse(await readJson(request));
   return Response.json(
     await createFolder({

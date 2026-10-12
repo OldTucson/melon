@@ -15,7 +15,11 @@ vi.mock("@/features/auth/session", () => ({
 vi.mock("@/features/folders/folder-service", () => ({
   renameFolder: mocks.renameFolder,
 }));
+vi.mock("@/lib/env/server", () => ({
+  getServerEnv: () => ({ APP_ORIGIN: "http://localhost:3000" }),
+}));
 
+const ORIGIN = "http://localhost:3000";
 const ownerId = "10000000-0000-4000-8000-000000000001";
 const attackerId = "20000000-0000-4000-8000-000000000002";
 const folderId = "30000000-0000-4000-8000-000000000003";
@@ -36,7 +40,7 @@ describe("folder item Route Handlers", () => {
     const response = await route.PATCH(
       new Request(`http://localhost/api/folders/${folderId}`, {
         method: "PATCH",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", origin: ORIGIN },
         body: JSON.stringify({
           operationId,
           ownerId: attackerId,
@@ -64,6 +68,33 @@ describe("folder item Route Handlers", () => {
     expect("DELETE" in route).toBe(false);
   });
 
+  it("rejects cross-origin renames before calling the service", async () => {
+    const { PATCH } = await import("./route");
+    const response = await PATCH(
+      new Request(`${ORIGIN}/api/folders/${folderId}`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          origin: "https://evil.test",
+        },
+        body: JSON.stringify({
+          operationId: randomUUID(),
+          patch: { name: "Renamed", version: 0 },
+        }),
+      }),
+      { params: Promise.resolve({ folderId }) },
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "FORBIDDEN_ORIGIN",
+        message: "Request origin is not allowed",
+      },
+    });
+    expect(mocks.renameFolder).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed folder IDs and bodies before calling the service", async () => {
     const { PATCH } = await import("./route");
     const cases = [
@@ -88,7 +119,7 @@ describe("folder item Route Handlers", () => {
       const response = await PATCH(
         new Request(`http://localhost/api/folders/${input.folderId}`, {
           method: "PATCH",
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", origin: ORIGIN },
           body: input.body,
         }),
         { params: Promise.resolve({ folderId: input.folderId }) },
@@ -110,7 +141,7 @@ describe("folder item Route Handlers", () => {
     const response = await PATCH(
       new Request(`http://localhost/api/folders/${folderId}`, {
         method: "PATCH",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", origin: ORIGIN },
         body: JSON.stringify({
           operationId: randomUUID(),
           patch: { name: "Renamed", version: 0 },

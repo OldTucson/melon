@@ -17,7 +17,11 @@ vi.mock("@/features/folders/folder-service", () => ({
   listFolders: mocks.listFolders,
   createFolder: mocks.createFolder,
 }));
+vi.mock("@/lib/env/server", () => ({
+  getServerEnv: () => ({ APP_ORIGIN: "http://localhost:3000" }),
+}));
 
+const ORIGIN = "http://localhost:3000";
 const ownerId = "10000000-0000-4000-8000-000000000001";
 const attackerId = "20000000-0000-4000-8000-000000000002";
 const folderId = "30000000-0000-4000-8000-000000000003";
@@ -58,7 +62,7 @@ describe("folder collection Route Handlers", () => {
     const response = await POST(
       new Request("http://localhost/api/folders", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", origin: ORIGIN },
         body: JSON.stringify({
           operationId,
           ownerId: attackerId,
@@ -84,6 +88,32 @@ describe("folder collection Route Handlers", () => {
     );
   });
 
+  it("rejects cross-origin creates before calling the service", async () => {
+    const { POST } = await import("./route");
+    const response = await POST(
+      new Request(`${ORIGIN}/api/folders`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: "https://evil.test",
+        },
+        body: JSON.stringify({
+          operationId: randomUUID(),
+          input: { name: "Summer", parentId: null },
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "FORBIDDEN_ORIGIN",
+        message: "Request origin is not allowed",
+      },
+    });
+    expect(mocks.createFolder).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed create bodies before calling the service", async () => {
     const { POST } = await import("./route");
     for (const body of [
@@ -101,7 +131,7 @@ describe("folder collection Route Handlers", () => {
       const response = await POST(
         new Request("http://localhost/api/folders", {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: { "content-type": "application/json", origin: ORIGIN },
           body,
         }),
       );
@@ -127,7 +157,7 @@ describe("folder collection Route Handlers", () => {
     const response = await POST(
       new Request("http://localhost/api/folders", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", origin: ORIGIN },
         body: JSON.stringify({
           operationId: randomUUID(),
           input: { name: "Summer", parentId: null },

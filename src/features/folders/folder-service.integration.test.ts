@@ -260,6 +260,23 @@ describe("folder service", () => {
     expect(await ownerSyncSeq(ownerA)).toBe(0n);
   });
 
+  it("returns zero pattern impact for an empty active folder", async () => {
+    const emptyFolder = await seedFolder({
+      ownerId: ownerA,
+      name: "Empty impact folder",
+    });
+
+    await expect(
+      getFolderDeleteImpact({ ownerId: ownerA, folderId: emptyFolder }),
+    ).resolves.toEqual({
+      folderCount: 1,
+      patternCount: 0,
+      alreadyTrashedFolderCount: 0,
+      alreadyTrashedPatternCount: 0,
+      hasDeletingEntities: false,
+    });
+  });
+
   it("previews trashed and deleting roots while rejecting unavailable roots", async () => {
     const trashedRoot = await seedFolder({
       ownerId: ownerA,
