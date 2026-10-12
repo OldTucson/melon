@@ -5,7 +5,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { db, type DbTransaction } from "@/lib/db/client";
 import { folders, patternStatuses } from "@/lib/db/schema";
 
-export const libraryPatternStatuses = [
+const libraryPatternStatuses = [
   "draft",
   "hashing",
   "uploading",
@@ -92,17 +92,13 @@ function toFolderCountRow(row: RawFolderCountRow): FolderCountRow {
 async function queryActiveFolderRows(
   executor: FolderQueryExecutor,
   ownerId: string,
-  folderId?: string,
 ) {
-  const anchorTarget =
-    folderId === undefined ? sql`` : sql`and root.id = ${folderId}`;
   const rows = await executor.execute<RawFolderCountRow>(sql`
     with recursive descendants (owner_id, ancestor_id, descendant_id) as (
       select root.owner_id, root.id, root.id
       from folders root
       where root.owner_id = ${ownerId}
         and root.status = 'active'::folder_status
-        ${anchorTarget}
 
       union all
 
@@ -173,17 +169,11 @@ async function queryActiveFolderRows(
   return rows.map(toFolderCountRow);
 }
 
-export function listActiveFolderRows(ownerId: string) {
-  return queryActiveFolderRows(db, ownerId);
-}
-
-export async function getActiveFolderCountRow(
+export function listActiveFolderRows(
   ownerId: string,
-  tx: DbTransaction,
-  folderId: string,
+  tx?: DbTransaction,
 ) {
-  const [row] = await queryActiveFolderRows(tx, ownerId, folderId);
-  return row;
+  return queryActiveFolderRows(tx ?? db, ownerId);
 }
 
 export async function lockFolderRow(

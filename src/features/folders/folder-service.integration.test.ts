@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
+import * as folderRepository from "@/features/folders/folder-repository";
 import {
   createFolder,
   listFolders,
@@ -145,6 +146,15 @@ describe("folder service", () => {
 
   afterAll(async () => {
     await closeDatabase();
+  });
+
+  it("keeps the folder repository runtime API focused", () => {
+    expect(Object.keys(folderRepository).sort()).toEqual([
+      "insertFolderRow",
+      "listActiveFolderRows",
+      "lockFolderRow",
+      "renameFolderRow",
+    ]);
   });
 
   it("creates a canonical root folder with serialized metadata and one change", async () => {

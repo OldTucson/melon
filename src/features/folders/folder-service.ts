@@ -21,7 +21,6 @@ import {
   parseFolderName,
 } from "./contracts";
 import {
-  getActiveFolderCountRow,
   insertFolderRow,
   listActiveFolderRows,
   lockFolderRow,
@@ -139,7 +138,9 @@ async function requireFolderDto(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
   folderId: string,
 ) {
-  const row = await getActiveFolderCountRow(ownerId, tx, folderId);
+  const row = (await listActiveFolderRows(ownerId, tx)).find(
+    (candidate) => candidate.id === folderId,
+  );
   if (!row) throw new Error("ACTIVE_FOLDER_RESULT_MISSING");
   return toFolderDto(row);
 }
