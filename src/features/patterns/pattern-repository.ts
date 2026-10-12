@@ -17,6 +17,7 @@ import {
   sql,
   type SQL,
 } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 
 import { db, type DbTransaction } from "@/lib/db/client";
 import { assets, patterns, patternTags } from "@/lib/db/schema";
@@ -30,6 +31,10 @@ export type PatternRowWithAssets = PatternRow & {
   thumbnailAssetId: string | null;
   sourceAssetId: string | null;
 };
+
+const previewAssets = alias(assets, "preview_assets");
+const thumbnailAssets = alias(assets, "thumbnail_assets");
+const sourceAssets = alias(assets, "source_assets");
 
 const escapeLike = (value: string) => value.replace(/[\\%_]/g, "\\$&");
 
@@ -157,31 +162,37 @@ export async function listPatternRows(
   return db
     .select({
       ...getTableColumns(patterns),
-      previewAssetId: sql<string | null>`(
-        select ${assets.id} from ${assets}
-        where ${assets.ownerId} = ${ownerId}::uuid
-          and ${assets.patternId} = ${patterns.id}
-          and ${assets.role} = 'preview'
-        limit 1
-      )`,
-      thumbnailAssetId: sql<string | null>`(
-        select ${assets.id} from ${assets}
-        where ${assets.ownerId} = ${ownerId}::uuid
-          and ${assets.patternId} = ${patterns.id}
-          and ${assets.role} = 'thumbnail'
-        limit 1
-      )`,
-      sourceAssetId: sql<string | null>`(
-        select ${assets.id} from ${assets}
-        where ${assets.ownerId} = ${ownerId}::uuid
-          and ${assets.patternId} = ${patterns.id}
-          and ${assets.role} = 'source'
-        limit 1
-      )`,
+      previewAssetId: previewAssets.id,
+      thumbnailAssetId: thumbnailAssets.id,
+      sourceAssetId: sourceAssets.id,
       updatedCursorValue: sql<string>`to_char(${patterns.updatedAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
       createdCursorValue: sql<string>`to_char(${patterns.createdAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
     })
     .from(patterns)
+    .leftJoin(
+      previewAssets,
+      and(
+        eq(previewAssets.ownerId, ownerId),
+        eq(previewAssets.patternId, patterns.id),
+        eq(previewAssets.role, "preview"),
+      ),
+    )
+    .leftJoin(
+      thumbnailAssets,
+      and(
+        eq(thumbnailAssets.ownerId, ownerId),
+        eq(thumbnailAssets.patternId, patterns.id),
+        eq(thumbnailAssets.role, "thumbnail"),
+      ),
+    )
+    .leftJoin(
+      sourceAssets,
+      and(
+        eq(sourceAssets.ownerId, ownerId),
+        eq(sourceAssets.patternId, patterns.id),
+        eq(sourceAssets.role, "source"),
+      ),
+    )
     .where(and(...predicates))
     .orderBy(...sortOrder(query.sort))
     .limit(query.limit + 1);
@@ -196,29 +207,35 @@ export async function getPatternRow(
   const [row] = await executor
     .select({
       ...getTableColumns(patterns),
-      previewAssetId: sql<string | null>`(
-        select ${assets.id} from ${assets}
-        where ${assets.ownerId} = ${ownerId}::uuid
-          and ${assets.patternId} = ${patterns.id}
-          and ${assets.role} = 'preview'
-        limit 1
-      )`,
-      thumbnailAssetId: sql<string | null>`(
-        select ${assets.id} from ${assets}
-        where ${assets.ownerId} = ${ownerId}::uuid
-          and ${assets.patternId} = ${patterns.id}
-          and ${assets.role} = 'thumbnail'
-        limit 1
-      )`,
-      sourceAssetId: sql<string | null>`(
-        select ${assets.id} from ${assets}
-        where ${assets.ownerId} = ${ownerId}::uuid
-          and ${assets.patternId} = ${patterns.id}
-          and ${assets.role} = 'source'
-        limit 1
-      )`,
+      previewAssetId: previewAssets.id,
+      thumbnailAssetId: thumbnailAssets.id,
+      sourceAssetId: sourceAssets.id,
     })
     .from(patterns)
+    .leftJoin(
+      previewAssets,
+      and(
+        eq(previewAssets.ownerId, ownerId),
+        eq(previewAssets.patternId, patterns.id),
+        eq(previewAssets.role, "preview"),
+      ),
+    )
+    .leftJoin(
+      thumbnailAssets,
+      and(
+        eq(thumbnailAssets.ownerId, ownerId),
+        eq(thumbnailAssets.patternId, patterns.id),
+        eq(thumbnailAssets.role, "thumbnail"),
+      ),
+    )
+    .leftJoin(
+      sourceAssets,
+      and(
+        eq(sourceAssets.ownerId, ownerId),
+        eq(sourceAssets.patternId, patterns.id),
+        eq(sourceAssets.role, "source"),
+      ),
+    )
     .where(
       and(
         eq(patterns.ownerId, ownerId),

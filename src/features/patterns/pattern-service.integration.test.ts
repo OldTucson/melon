@@ -9,6 +9,7 @@ import {
 } from "@/features/patterns/pattern-service";
 import { closeDatabase, db } from "@/lib/db/client";
 import {
+  assets,
   changeLog,
   operations,
   patterns,
@@ -105,6 +106,61 @@ describe("pattern service", () => {
     await expect(
       getPattern({ ownerId: ownerA, patternId: randomUUID() }),
     ).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
+  });
+
+  it("returns the owned source, preview, and thumbnail asset ids", async () => {
+    const patternId = await seedPattern({
+      ownerId: ownerA,
+      name: "Ready with assets",
+      extension: "png",
+    });
+    const sourceAssetId = randomUUID();
+    const previewAssetId = randomUUID();
+    const thumbnailAssetId = randomUUID();
+    await db.insert(assets).values([
+      {
+        id: sourceAssetId,
+        ownerId: ownerA,
+        patternId,
+        role: "source",
+        objectKey: `users/${ownerA}/patterns/${patternId}/source/${sourceAssetId}.png`,
+        originalFilename: "ready.png",
+        detectedMimeType: "image/png",
+        sizeBytes: 1024n,
+      },
+      {
+        id: previewAssetId,
+        ownerId: ownerA,
+        patternId,
+        role: "preview",
+        objectKey: `users/${ownerA}/patterns/${patternId}/derived/${previewAssetId}.png`,
+        originalFilename: "preview.png",
+        detectedMimeType: "image/png",
+        sizeBytes: 512n,
+        width: 64,
+        height: 64,
+      },
+      {
+        id: thumbnailAssetId,
+        ownerId: ownerA,
+        patternId,
+        role: "thumbnail",
+        objectKey: `users/${ownerA}/patterns/${patternId}/derived/${thumbnailAssetId}.png`,
+        originalFilename: "thumbnail.png",
+        detectedMimeType: "image/png",
+        sizeBytes: 256n,
+        width: 32,
+        height: 32,
+      },
+    ]);
+
+    const expected = { sourceAssetId, previewAssetId, thumbnailAssetId };
+    await expect(
+      listPatterns({ ownerId: ownerA, input: {} }),
+    ).resolves.toMatchObject({ items: [expected] });
+    await expect(
+      getPattern({ ownerId: ownerA, patternId }),
+    ).resolves.toMatchObject(expected);
   });
 
   it.each([
