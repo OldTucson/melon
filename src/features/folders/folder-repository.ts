@@ -43,6 +43,11 @@ export type RenameFolderInput = {
   now: Date;
 };
 
+export type ListActiveFolderRowsOptions = {
+  rootId?: string;
+  tx?: DbTransaction;
+};
+
 type RawFolderCountRow = {
   id: string;
   ownerId: string;
@@ -92,13 +97,18 @@ function toFolderCountRow(row: RawFolderCountRow): FolderCountRow {
 async function queryActiveFolderRows(
   executor: FolderQueryExecutor,
   ownerId: string,
+  rootId?: string,
 ) {
+  const rootFilter = rootId === undefined ? sql`` : sql`and root.id = ${rootId}`;
+  const directFolderFilter =
+    rootId === undefined ? sql`` : sql`and pattern.folder_id = ${rootId}`;
   const rows = await executor.execute<RawFolderCountRow>(sql`
     with recursive descendants (owner_id, ancestor_id, descendant_id) as (
       select root.owner_id, root.id, root.id
       from folders root
       where root.owner_id = ${ownerId}
         and root.status = 'active'::folder_status
+        ${rootFilter}
 
       union all
 
@@ -115,6 +125,7 @@ async function queryActiveFolderRows(
       from patterns pattern
       where pattern.owner_id = ${ownerId}
         and pattern.status in (${libraryPatternStatusesSql})
+        ${directFolderFilter}
       group by pattern.owner_id, pattern.folder_id
     ), recursive_counts as (
       select
@@ -171,9 +182,9 @@ async function queryActiveFolderRows(
 
 export function listActiveFolderRows(
   ownerId: string,
-  tx?: DbTransaction,
+  options: ListActiveFolderRowsOptions = {},
 ) {
-  return queryActiveFolderRows(tx ?? db, ownerId);
+  return queryActiveFolderRows(options.tx ?? db, ownerId, options.rootId);
 }
 
 export async function lockFolderRow(

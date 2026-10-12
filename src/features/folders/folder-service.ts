@@ -138,9 +138,10 @@ async function requireFolderDto(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
   folderId: string,
 ) {
-  const row = (await listActiveFolderRows(ownerId, tx)).find(
-    (candidate) => candidate.id === folderId,
-  );
+  const [row] = await listActiveFolderRows(ownerId, {
+    rootId: folderId,
+    tx,
+  });
   if (!row) throw new Error("ACTIVE_FOLDER_RESULT_MISSING");
   return toFolderDto(row);
 }

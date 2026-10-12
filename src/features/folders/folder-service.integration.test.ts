@@ -157,6 +157,33 @@ describe("folder service", () => {
     ]);
   });
 
+  it("hydrates one target folder without returning owner-wide rows", async () => {
+    const target = await seedFolder({ ownerId: ownerA, name: "Target" });
+    const child = await seedFolder({
+      ownerId: ownerA,
+      parentId: target,
+      name: "Target child",
+    });
+    const unrelated = await seedFolder({
+      ownerId: ownerA,
+      name: "Unrelated",
+    });
+    await seedPattern({ ownerId: ownerA, folderId: target });
+    await seedPattern({ ownerId: ownerA, folderId: child });
+    await seedPattern({ ownerId: ownerA, folderId: child });
+    await seedPattern({ ownerId: ownerA, folderId: unrelated });
+
+    await expect(
+      folderRepository.listActiveFolderRows(ownerA, { rootId: target }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: target,
+        directPatternCount: 1,
+        recursivePatternCount: 3,
+      }),
+    ]);
+  });
+
   it("creates a canonical root folder with serialized metadata and one change", async () => {
     const operationId = randomUUID();
     const created = await createFolder({
@@ -259,6 +286,21 @@ describe("folder service", () => {
       parentId: parent,
       name: "Child",
     });
+    const grandchild = await seedFolder({
+      ownerId: ownerA,
+      parentId: child,
+      name: "Grandchild",
+    });
+    const branch = await seedFolder({
+      ownerId: ownerA,
+      parentId: parent,
+      name: "Branch",
+    });
+    const branchLeaf = await seedFolder({
+      ownerId: ownerA,
+      parentId: branch,
+      name: "Branch leaf",
+    });
     const visibleStatuses = await seedFolder({
       ownerId: ownerA,
       name: "Visible statuses",
@@ -295,6 +337,14 @@ describe("folder service", () => {
     await seedPattern({ ownerId: ownerA, folderId: parent, status: "ready" });
     await seedPattern({ ownerId: ownerA, folderId: child, status: "draft" });
     await seedPattern({ ownerId: ownerA, folderId: child, status: "failed" });
+    await seedPattern({
+      ownerId: ownerA,
+      folderId: grandchild,
+      status: "processing",
+    });
+    await seedPattern({ ownerId: ownerA, folderId: branch, status: "uploading" });
+    await seedPattern({ ownerId: ownerA, folderId: branchLeaf, status: "hashing" });
+    await seedPattern({ ownerId: ownerA, folderId: branchLeaf, status: "ready" });
     for (const status of ["trashed", "deleting", "deleted"] as const) {
       await seedPattern({ ownerId: ownerA, folderId: parent, status });
       await seedPattern({ ownerId: ownerA, folderId: child, status });
@@ -314,9 +364,21 @@ describe("folder service", () => {
     );
     expect(byId.get(parent)).toMatchObject({
       directPatternCount: 1,
-      recursivePatternCount: 3,
+      recursivePatternCount: 7,
     });
     expect(byId.get(child)).toMatchObject({
+      directPatternCount: 2,
+      recursivePatternCount: 3,
+    });
+    expect(byId.get(grandchild)).toMatchObject({
+      directPatternCount: 1,
+      recursivePatternCount: 1,
+    });
+    expect(byId.get(branch)).toMatchObject({
+      directPatternCount: 1,
+      recursivePatternCount: 3,
+    });
+    expect(byId.get(branchLeaf)).toMatchObject({
       directPatternCount: 2,
       recursivePatternCount: 2,
     });
@@ -479,7 +541,14 @@ describe("folder service", () => {
       name: "Before",
       parentId: parent.id,
     });
+    const descendant = await seedFolder({
+      ownerId: ownerA,
+      parentId: folder.id,
+      name: "Descendant",
+    });
     await seedPattern({ ownerId: ownerA, folderId: folder.id, status: "ready" });
+    await seedPattern({ ownerId: ownerA, folderId: descendant, status: "draft" });
+    await seedPattern({ ownerId: ownerA, folderId: descendant, status: "failed" });
 
     const operationId = randomUUID();
     const renamed = await renameFolder({
@@ -500,7 +569,7 @@ describe("folder service", () => {
       changeSeq: "3",
       createdAt: folder.createdAt,
       directPatternCount: 1,
-      recursivePatternCount: 1,
+      recursivePatternCount: 3,
     });
     expect(Date.parse(renamed.updatedAt)).toBeGreaterThanOrEqual(
       Date.parse(folder.updatedAt),
@@ -603,6 +672,71 @@ describe("folder service", () => {
     expect(stored[0]?.kind).not.toContain("Caf");
   });
 
+  it("serializes concurrent identical creates into one exact replay", async () => {
+    const input = {
+      ownerId: ownerA,
+      operationId: randomUUID(),
+      name: "Concurrent replay",
+      parentId: null,
+    };
+
+    const [first, second] = await Promise.all([
+      createFolder(input),
+      createFolder(input),
+    ]);
+
+    expect(second).toEqual(first);
+    await expect(listFolders({ ownerId: ownerA })).resolves.toEqual([first]);
+    expect(await ownerChanges(ownerA)).toHaveLength(1);
+    expect(
+      await db
+        .select()
+        .from(operations)
+        .where(eq(operations.ownerId, ownerA)),
+    ).toHaveLength(1);
+    expect(await ownerSyncSeq(ownerA)).toBe(1n);
+  });
+
+  it("rolls back the loser of concurrent same-name creates", async () => {
+    const outcomes = await Promise.allSettled([
+      createFolder({
+        ownerId: ownerA,
+        operationId: randomUUID(),
+        name: "Concurrent name",
+        parentId: null,
+      }),
+      createFolder({
+        ownerId: ownerA,
+        operationId: randomUUID(),
+        name: " CONCURRENT NAME ",
+        parentId: null,
+      }),
+    ]);
+    const successes = outcomes.filter(
+      (outcome) => outcome.status === "fulfilled",
+    );
+    const failures = outcomes.filter((outcome) => outcome.status === "rejected");
+
+    expect(successes).toHaveLength(1);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({
+      reason: { code: "FOLDER_NAME_CONFLICT", status: 409 },
+    });
+    const winner = successes[0];
+    if (winner?.status !== "fulfilled") throw new Error("CREATE_RACE_NO_WINNER");
+    await expect(listFolders({ ownerId: ownerA })).resolves.toEqual([
+      winner.value,
+    ]);
+    expect(await ownerChanges(ownerA)).toHaveLength(1);
+    expect(
+      await db
+        .select()
+        .from(operations)
+        .where(eq(operations.ownerId, ownerA)),
+    ).toHaveLength(1);
+    expect(await ownerSyncSeq(ownerA)).toBe(1n);
+  });
+
   it("replays canonical renames and binds reused operation IDs to the target and patch", async () => {
     const first = await createFolder({
       ownerId: ownerA,
@@ -675,6 +809,60 @@ describe("folder service", () => {
         expect.objectContaining({ id: second.id, name: "Second", version: 0 }),
       ]),
     );
+  });
+
+  it("allows exactly one concurrent rename from the same starting version", async () => {
+    const folder = await createFolder({
+      ownerId: ownerA,
+      operationId: randomUUID(),
+      name: "Before race",
+      parentId: null,
+    });
+    const outcomes = await Promise.allSettled([
+      renameFolder({
+        ownerId: ownerA,
+        folderId: folder.id,
+        operationId: randomUUID(),
+        name: "First contender",
+        version: 0,
+      }),
+      renameFolder({
+        ownerId: ownerA,
+        folderId: folder.id,
+        operationId: randomUUID(),
+        name: "Second contender",
+        version: 0,
+      }),
+    ]);
+    const successes = outcomes.filter(
+      (outcome) => outcome.status === "fulfilled",
+    );
+    const failures = outcomes.filter((outcome) => outcome.status === "rejected");
+
+    expect(successes).toHaveLength(1);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({
+      reason: { code: "FOLDER_STATE_CHANGED", status: 409 },
+    });
+    const winner = successes[0];
+    if (winner?.status !== "fulfilled") throw new Error("RENAME_RACE_NO_WINNER");
+    expect(winner.value).toMatchObject({ version: 1, changeSeq: "2" });
+    await expect(listFolders({ ownerId: ownerA })).resolves.toEqual([
+      expect.objectContaining({
+        id: folder.id,
+        name: winner.value.name,
+        version: 1,
+        changeSeq: "2",
+      }),
+    ]);
+    expect(await ownerChanges(ownerA)).toHaveLength(2);
+    expect(
+      await db
+        .select()
+        .from(operations)
+        .where(eq(operations.ownerId, ownerA)),
+    ).toHaveLength(2);
+    expect(await ownerSyncSeq(ownerA)).toBe(2n);
   });
 
   it("isolates list, counts, names, and mutations by owner", async () => {
