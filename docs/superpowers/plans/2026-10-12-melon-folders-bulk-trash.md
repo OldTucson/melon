@@ -372,7 +372,7 @@ Expected: contract tests and typecheck PASS.
 - Create: `src/features/folders/folder-service.ts`
 - Create: `src/features/folders/folder-service.integration.test.ts`
 
-- [ ] **Step 1: Write failing service tests**
+- [x] **Step 1: Write failing service tests**
 
 Test root creation, child creation, nested counts, rename, same-parent conflicts, different-parent duplicates, inactive-parent rejection, stale versions, tenant isolation, idempotent replay, and reused operation IDs:
 
@@ -395,7 +395,7 @@ Run and expect missing service failures:
 npx --yes --package=node@24 -c 'npm run test:integration -- src/features/folders/folder-service.integration.test.ts'
 ```
 
-- [ ] **Step 2: Implement owner-scoped repository primitives**
+- [x] **Step 2: Implement owner-scoped repository primitives**
 
 The repository exposes only these operations:
 
@@ -417,7 +417,7 @@ export const libraryPatternStatuses = [
 
 Every lookup predicate contains both `ownerId` and the entity ID. Child creation locks the parent `FOR UPDATE` and requires `status='active'`.
 
-- [ ] **Step 3: Implement idempotent create and rename services**
+- [x] **Step 3: Implement idempotent create and rename services**
 
 Both services follow this transaction order:
 
@@ -430,7 +430,7 @@ const seq = await nextChangeSeq(tx, ownerId);
 
 Create uses `randomUUID()`, normalized NFC lowercase name, one `changeLog` event `folder.created`, and one stored result. Rename locks the folder, validates `active` plus the supplied version, increments version, emits `folder.updated`, and maps PostgreSQL unique violation `23505` from either live-name index to `FOLDER_NAME_CONFLICT`.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 ```bash
 npx --yes --package=node@24 -c 'npm run test:integration -- src/features/folders/folder-service.integration.test.ts'
