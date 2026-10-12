@@ -7,12 +7,11 @@ import { hasNoNullByte } from "@/lib/validation/text";
 export const folderNameInputSchema = z
   .string()
   .trim()
-  .min(1)
-  .max(80)
-  .refine(hasNoNullByte);
+  .transform((name) => name.normalize("NFC"))
+  .pipe(z.string().min(1).max(80).refine(hasNoNullByte));
 
 export function parseFolderName(input: string) {
-  const name = folderNameInputSchema.parse(input).normalize("NFC");
+  const name = folderNameInputSchema.parse(input);
   return { name, normalizedName: name.toLowerCase() };
 }
 

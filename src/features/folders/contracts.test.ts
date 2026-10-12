@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   folderCreateMutationSchema,
+  folderNameInputSchema,
   folderRenameMutationSchema,
   folderTrashMutationSchema,
   parseFolderName,
@@ -16,6 +17,20 @@ describe("folder contracts", () => {
       normalizedName: "caf\u00e9",
     });
     expect(parseFolderName("Caf\u00e9")).toEqual(parseFolderName("Cafe\u0301"));
+  });
+
+  it("applies length limits after canonical normalization", () => {
+    const composedAtLimit = "\u00e9".repeat(80);
+    const decomposedAtLimit = "e\u0301".repeat(80);
+    const composedOverLimit = `${composedAtLimit}\u00e9`;
+    const decomposedOverLimit = `${decomposedAtLimit}e\u0301`;
+
+    expect(folderNameInputSchema.parse(composedAtLimit)).toBe(composedAtLimit);
+    expect(folderNameInputSchema.parse(decomposedAtLimit)).toBe(composedAtLimit);
+    expect(folderNameInputSchema.safeParse(composedOverLimit).success).toBe(false);
+    expect(folderNameInputSchema.safeParse(decomposedOverLimit).success).toBe(
+      false,
+    );
   });
 
   it.each(["", "   ", "x".repeat(81), "safe\0unsafe"])(
@@ -32,9 +47,9 @@ describe("folder contracts", () => {
     expect(
       folderCreateMutationSchema.parse({
         operationId,
-        input: { name: "  Summer  ", parentId: null },
+        input: { name: "  Cafe\u0301  ", parentId: null },
       }),
-    ).toEqual({ operationId, input: { name: "Summer", parentId: null } });
+    ).toEqual({ operationId, input: { name: "Caf\u00e9", parentId: null } });
     expect(
       folderCreateMutationSchema.parse({
         operationId,
@@ -49,9 +64,12 @@ describe("folder contracts", () => {
     expect(
       folderRenameMutationSchema.parse({
         operationId,
-        patch: { name: "  Renamed  ", version: 0 },
+        patch: { name: "  Renomme\u0301  ", version: 0 },
       }),
-    ).toEqual({ operationId, patch: { name: "Renamed", version: 0 } });
+    ).toEqual({
+      operationId,
+      patch: { name: "Renomm\u00e9", version: 0 },
+    });
     expect(
       folderTrashMutationSchema.parse({ operationId, version: 4 }),
     ).toEqual({ operationId, version: 4 });

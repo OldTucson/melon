@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   folderBatchPurgeMutationSchema,
   folderBatchRestoreMutationSchema,
+  parseFolderBatchPurgeMutation,
+  parseFolderBatchRestoreMutation,
   parsePatternPurgeMutation,
   parsePatternRestoreMutation,
   patternPurgeMutationSchema,
@@ -33,14 +35,21 @@ describe("trash contracts", () => {
     });
   });
 
-  it("rejects duplicate, empty, and invalid pattern IDs", () => {
+  it("maps duplicate, empty, and invalid pattern IDs to VALIDATION_ERROR", () => {
     const operationId = randomUUID();
-    const id = randomUUID();
+    const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
-    for (const patternIds of [[], [id, id], ["not-a-uuid"]]) {
-      expect(() =>
-        patternRestoreMutationSchema.parse({ operationId, patternIds }),
-      ).toThrow();
+    for (const parse of [parsePatternRestoreMutation, parsePatternPurgeMutation]) {
+      for (const patternIds of [
+        [],
+        [id, id],
+        [id, id.toUpperCase()],
+        ["not-a-uuid"],
+      ]) {
+        expect(() => parse({ operationId, patternIds })).toThrowError(
+          expect.objectContaining({ code: "VALIDATION_ERROR" }),
+        );
+      }
     }
   });
 
@@ -85,31 +94,49 @@ describe("trash contracts", () => {
     );
   });
 
-  it("keeps owner and target fields out of parsed pattern actions", () => {
+  it.each([
+    ["ownerId", randomUUID()],
+    ["trashBatchId", randomUUID()],
+    ["targetFolderId", randomUUID()],
+    ["patternIdz", [randomUUID()]],
+  ])("rejects extra %s fields in pattern action envelopes", (key, value) => {
     const operationId = randomUUID();
     const patternIds = [randomUUID()];
 
-    expect(
-      parsePatternRestoreMutation({
-        operationId,
-        patternIds,
-        ownerId: randomUUID(),
-        trashBatchId: randomUUID(),
-        targetFolderId: randomUUID(),
-      }),
-    ).toEqual({ operationId, patternIds });
+    for (const parse of [parsePatternRestoreMutation, parsePatternPurgeMutation]) {
+      expect(() =>
+        parse({ operationId, patternIds, [key]: value }),
+      ).toThrowError(expect.objectContaining({ code: "VALIDATION_ERROR" }));
+    }
   });
 
-  it("parses folder batch bodies without accepting path or owner data as output", () => {
+  it("parses exact folder batch bodies", () => {
     const operationId = randomUUID();
-    const input = {
-      operationId,
-      ownerId: randomUUID(),
-      trashBatchId: randomUUID(),
-      targetFolderId: randomUUID(),
-    };
 
-    expect(folderBatchRestoreMutationSchema.parse(input)).toEqual({ operationId });
-    expect(folderBatchPurgeMutationSchema.parse(input)).toEqual({ operationId });
+    expect(folderBatchRestoreMutationSchema.parse({ operationId })).toEqual({
+      operationId,
+    });
+    expect(folderBatchPurgeMutationSchema.parse({ operationId })).toEqual({
+      operationId,
+    });
+  });
+
+  it.each([
+    ["patternIds", [randomUUID()]],
+    ["trashBatchId", randomUUID()],
+    ["ownerId", randomUUID()],
+    ["targetFolderId", randomUUID()],
+    ["operatonId", randomUUID()],
+  ])("rejects extra %s fields in folder batch envelopes", (key, value) => {
+    const operationId = randomUUID();
+
+    for (const parse of [
+      parseFolderBatchRestoreMutation,
+      parseFolderBatchPurgeMutation,
+    ]) {
+      expect(() => parse({ operationId, [key]: value })).toThrowError(
+        expect.objectContaining({ code: "VALIDATION_ERROR" }),
+      );
+    }
   });
 });

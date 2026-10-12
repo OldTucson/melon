@@ -17,17 +17,21 @@ const uniquePatternIdsSchema = z
     }
   });
 
-const patternTrashMutationSchema = z.object({
-  operationId: publicOperationIdSchema,
-  patternIds: uniquePatternIdsSchema,
-});
+const patternTrashMutationSchema = z
+  .object({
+    operationId: publicOperationIdSchema,
+    patternIds: uniquePatternIdsSchema,
+  })
+  .strict();
 
 export const patternRestoreMutationSchema = patternTrashMutationSchema;
 export const patternPurgeMutationSchema = patternTrashMutationSchema;
 
-const folderBatchMutationSchema = z.object({
-  operationId: publicOperationIdSchema,
-});
+const folderBatchMutationSchema = z
+  .object({
+    operationId: publicOperationIdSchema,
+  })
+  .strict();
 
 export const folderBatchRestoreMutationSchema = folderBatchMutationSchema;
 export const folderBatchPurgeMutationSchema = folderBatchMutationSchema;

@@ -36,16 +36,19 @@ describe("pattern batch contracts", () => {
     ).toEqual({ operationId, action: "favorite", patterns, isFavorite: false });
   });
 
-  it("rejects duplicate pattern IDs", () => {
-    const ref = patternRef();
+  it("rejects pattern IDs that duplicate after UUID normalization", () => {
+    const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
     expect(() =>
-      patternBatchMutationSchema.parse({
+      parsePatternBatchMutation({
         operationId: randomUUID(),
         action: "trash",
-        patterns: [ref, { ...ref, version: 1 }],
+        patterns: [
+          { id, version: 0 },
+          { id: id.toUpperCase(), version: 1 },
+        ],
       }),
-    ).toThrow();
+    ).toThrowError(expect.objectContaining({ code: "VALIDATION_ERROR" }));
   });
 
   it("rejects an empty batch", () => {
