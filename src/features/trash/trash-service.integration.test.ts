@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import postgres from "postgres";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
+import { createFolder } from "@/features/folders/folder-service";
 import { closeDatabase, db } from "@/lib/db/client";
 import {
   assets,
@@ -14,6 +16,7 @@ import {
   tags,
   users,
 } from "@/lib/db/schema";
+import { getServerEnv } from "@/lib/env/server";
 import { AppError } from "@/lib/http/app-error";
 import { resetDatabase } from "@/test/database";
 
@@ -174,6 +177,63 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs = 5_000) {
   } finally {
     if (timeout) clearTimeout(timeout);
   }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function waitForBlockedAdvisoryPids(
+  monitor: ReturnType<typeof postgres>,
+  blockerPid: number,
+  minimum: number,
+) {
+  return withTimeout(
+    (async () => {
+      while (true) {
+        const waiters = await monitor<{ pid: number }[]>`
+          select activity.pid
+          from pg_stat_activity activity
+          where activity.datname = current_database()
+            and activity.state = 'active'
+            and activity.wait_event_type = 'Lock'
+            and ${blockerPid} = any(pg_blocking_pids(activity.pid))
+            and activity.query ilike '%pg_advisory_xact_lock%'
+          order by activity.pid
+        `;
+        if (waiters.length >= minimum) return waiters.map((row) => row.pid);
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      }
+    })(),
+  );
+}
+
+async function waitForOperationClaimWaiter(
+  monitor: ReturnType<typeof postgres>,
+) {
+  return withTimeout(
+    (async () => {
+      while (true) {
+        const waiters = await monitor<{ pid: number }[]>`
+          select activity.pid
+          from pg_stat_activity activity
+          where activity.datname = current_database()
+            and activity.state = 'active'
+            and activity.wait_event_type = 'Lock'
+            and activity.query ilike '%insert into "operations"%'
+          order by activity.pid
+        `;
+        if (waiters[0]) return waiters[0].pid;
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      }
+    })(),
+  );
 }
 
 describe("trash read model and restore services", () => {
@@ -1018,6 +1078,226 @@ describe("trash read model and restore services", () => {
     expect(await readSyncSeq(ownerA)).toBe(1n);
   });
 
+  it("serializes folder-batch restore with a real hierarchy writer", async () => {
+    const databaseUrl = getServerEnv().DATABASE_URL;
+    const blocker = postgres(databaseUrl, { max: 1 });
+    const monitor = postgres(databaseUrl, { max: 1 });
+    const batchId = randomUUID();
+    const rootId = await seedFolder({
+      ownerId: ownerA,
+      name: "Blocked restore root",
+      status: "trashed",
+      trashBatchId: batchId,
+      trashedAt: new Date(),
+    });
+    const restoreOperationId = randomUUID();
+    const createOperationId = randomUUID();
+    const lockReady = deferred<void>();
+    const releaseLock = deferred<void>();
+    let blockerPid = 0;
+    let released = false;
+    const blockerTransaction = blocker.begin(async (tx) => {
+      const [backend] = await tx<{ pid: number }[]>`
+        select pg_backend_pid() as pid
+      `;
+      blockerPid = backend!.pid;
+      await tx`select pg_advisory_xact_lock(hashtextextended(${ownerA}, 0))`;
+      lockReady.resolve();
+      await releaseLock.promise;
+    });
+    let restore: ReturnType<typeof restoreFolderBatch> | undefined;
+    let create: ReturnType<typeof createFolder> | undefined;
+
+    try {
+      await withTimeout(lockReady.promise);
+      restore = restoreFolderBatch({
+        ownerId: ownerA,
+        operationId: restoreOperationId,
+        trashBatchId: batchId,
+      });
+      create = createFolder({
+        ownerId: ownerA,
+        operationId: createOperationId,
+        name: "Concurrent child",
+        parentId: rootId,
+      });
+      void restore.catch(() => undefined);
+      void create.catch(() => undefined);
+
+      const blockedPids = await waitForBlockedAdvisoryPids(
+        monitor,
+        blockerPid,
+        2,
+      );
+      expect(new Set(blockedPids).size).toBeGreaterThanOrEqual(2);
+
+      released = true;
+      releaseLock.resolve();
+      await withTimeout(blockerTransaction);
+      const [restoreOutcome, createOutcome] = await withTimeout(
+        Promise.allSettled([restore, create]),
+      );
+
+      expect(restoreOutcome).toEqual({
+        status: "fulfilled",
+        value: {
+          state: "restored",
+          trashBatchId: batchId,
+          rootFolderId: rootId,
+          folderCount: 1,
+          patternCount: 0,
+        },
+      });
+      await expect(readFolders(ownerA, [rootId])).resolves.toEqual([
+        expect.objectContaining({ id: rootId, status: "active", version: 1 }),
+      ]);
+      if (createOutcome.status === "fulfilled") {
+        await expect(
+          readFolders(ownerA, [createOutcome.value.id]),
+        ).resolves.toEqual([
+          expect.objectContaining({
+            id: createOutcome.value.id,
+            parentId: rootId,
+            status: "active",
+          }),
+        ]);
+      } else {
+        expect(createOutcome.reason).toMatchObject({
+          code: "FOLDER_NOT_ACTIVE",
+          status: 409,
+        });
+      }
+    } finally {
+      if (!released) releaseLock.resolve();
+      await Promise.allSettled([
+        blockerTransaction,
+        ...(restore ? [restore] : []),
+        ...(create ? [create] : []),
+      ]);
+      await Promise.all([
+        blocker.end({ timeout: 1 }),
+        monitor.end({ timeout: 1 }),
+      ]);
+    }
+  }, 10_000);
+
+  it("linearizes concurrent identical folder restores into one complete replay", async () => {
+    const databaseUrl = getServerEnv().DATABASE_URL;
+    const blocker = postgres(databaseUrl, { max: 1 });
+    const monitor = postgres(databaseUrl, { max: 1 });
+
+    try {
+      for (let round = 0; round < 3; round += 1) {
+        const batchId = randomUUID();
+        const rootId = await seedFolder({
+          ownerId: ownerA,
+          name: `Concurrent restore root ${round}`,
+          status: "trashed",
+          trashBatchId: batchId,
+          trashedAt: new Date(),
+        });
+        const patternId = await seedPattern({
+          ownerId: ownerA,
+          name: `Concurrent restore pattern ${round}`,
+          folderId: rootId,
+          status: "trashed",
+          preTrashStatus: "ready",
+          trashBatchId: batchId,
+          trashedAt: new Date(),
+        });
+        const operationId = randomUUID();
+        const input = { ownerId: ownerA, operationId, trashBatchId: batchId };
+        const lockReady = deferred<void>();
+        const releaseLock = deferred<void>();
+        let blockerPid = 0;
+        let released = false;
+        const blockerTransaction = blocker.begin(async (tx) => {
+          const [backend] = await tx<{ pid: number }[]>`
+            select pg_backend_pid() as pid
+          `;
+          blockerPid = backend!.pid;
+          await tx`select pg_advisory_xact_lock(hashtextextended(${ownerA}, 0))`;
+          lockReady.resolve();
+          await releaseLock.promise;
+        });
+        let first: ReturnType<typeof restoreFolderBatch> | undefined;
+        let second: ReturnType<typeof restoreFolderBatch> | undefined;
+
+        try {
+          await withTimeout(lockReady.promise);
+          first = restoreFolderBatch(input);
+          void first.catch(() => undefined);
+          const [firstWaiterPid] = await waitForBlockedAdvisoryPids(
+            monitor,
+            blockerPid,
+            1,
+          );
+          second = restoreFolderBatch(input);
+          void second.catch(() => undefined);
+          const operationWaiterPid = await waitForOperationClaimWaiter(monitor);
+          expect(operationWaiterPid).not.toBe(firstWaiterPid);
+
+          released = true;
+          releaseLock.resolve();
+          await withTimeout(blockerTransaction);
+          const [firstResult, secondResult] = await withTimeout(
+            Promise.all([first, second]),
+          );
+
+          expect(firstResult).toEqual({
+            state: "restored",
+            trashBatchId: batchId,
+            rootFolderId: rootId,
+            folderCount: 1,
+            patternCount: 1,
+          });
+          expect(secondResult).toEqual(firstResult);
+          await expect(readFolders(ownerA, [rootId])).resolves.toEqual([
+            expect.objectContaining({
+              id: rootId,
+              status: "active",
+              version: 1,
+              changeSeq: BigInt(round + 1),
+            }),
+          ]);
+          await expect(readPatterns(ownerA, [patternId])).resolves.toEqual([
+            expect.objectContaining({
+              id: patternId,
+              status: "ready",
+              version: 1,
+              changeSeq: BigInt(round + 1),
+            }),
+          ]);
+          expect(
+            (await readChanges(ownerA)).filter(
+              (change) => change.operationId === operationId,
+            ),
+          ).toHaveLength(1);
+          expect(
+            (await readOperations(ownerA)).filter(
+              (operation) => operation.operationId === operationId,
+            ),
+          ).toEqual([
+            expect.objectContaining({ operationId, result: firstResult }),
+          ]);
+          expect(await readSyncSeq(ownerA)).toBe(BigInt(round + 1));
+        } finally {
+          if (!released) releaseLock.resolve();
+          await Promise.allSettled([
+            blockerTransaction,
+            ...(first ? [first] : []),
+            ...(second ? [second] : []),
+          ]);
+        }
+      }
+    } finally {
+      await Promise.all([
+        blocker.end({ timeout: 1 }),
+        monitor.end({ timeout: 1 }),
+      ]);
+    }
+  }, 20_000);
+
   it("refuses a folder batch whose outside parent is no longer active", async () => {
     const batchId = randomUUID();
     const outsideParentId = await seedFolder({
@@ -1183,6 +1463,109 @@ describe("trash read model and restore services", () => {
       ]);
       expect(await readOperations(ownerA)).toEqual([]);
       expect(await readChanges(ownerA)).toEqual([]);
+    },
+  );
+
+  it.each([
+    "wrong batch inside tree",
+    "null batch inside tree",
+    "same batch outside tree",
+    "deleted inside tree",
+  ] as const)(
+    "rejects a folder batch with pattern membership corruption: %s",
+    async (corruption) => {
+      const batchId = randomUUID();
+      const rootId = await seedFolder({
+        ownerId: ownerA,
+        name: "Pattern membership root",
+        status: "trashed",
+        version: 4,
+        trashBatchId: batchId,
+        trashedAt: new Date(),
+      });
+      const validPatternId = await seedPattern({
+        ownerId: ownerA,
+        name: "Valid batch pattern",
+        folderId: rootId,
+        status: "trashed",
+        preTrashStatus: "ready",
+        version: 5,
+        trashBatchId: batchId,
+        trashedAt: new Date(),
+      });
+      const folderIds = [rootId];
+      let corruptPatternId: string;
+
+      if (corruption === "wrong batch inside tree") {
+        corruptPatternId = await seedPattern({
+          ownerId: ownerA,
+          name: "Wrong batch pattern",
+          folderId: rootId,
+          status: "trashed",
+          preTrashStatus: "ready",
+          version: 6,
+          trashBatchId: randomUUID(),
+          trashedAt: new Date(),
+        });
+      } else if (corruption === "null batch inside tree") {
+        corruptPatternId = await seedPattern({
+          ownerId: ownerA,
+          name: "Null batch pattern",
+          folderId: rootId,
+          status: "trashed",
+          preTrashStatus: "ready",
+          version: 6,
+          trashBatchId: null,
+          trashedAt: new Date(),
+        });
+      } else if (corruption === "same batch outside tree") {
+        const outsideFolderId = await seedFolder({
+          ownerId: ownerA,
+          name: "Outside active folder",
+        });
+        folderIds.push(outsideFolderId);
+        corruptPatternId = await seedPattern({
+          ownerId: ownerA,
+          name: "Outside batch pattern",
+          folderId: outsideFolderId,
+          status: "trashed",
+          preTrashStatus: "ready",
+          version: 6,
+          trashBatchId: batchId,
+          trashedAt: new Date(),
+        });
+      } else {
+        corruptPatternId = await seedPattern({
+          ownerId: ownerA,
+          name: "Deleted tree pattern",
+          folderId: rootId,
+          status: "deleted",
+          preTrashStatus: null,
+          version: 6,
+          trashBatchId: null,
+          trashedAt: new Date(),
+        });
+      }
+
+      const patternIds = [validPatternId, corruptPatternId];
+      const foldersBefore = await readFolders(ownerA, folderIds);
+      const patternsBefore = await readPatterns(ownerA, patternIds);
+
+      await expectAppError(
+        restoreFolderBatch({
+          ownerId: ownerA,
+          operationId: randomUUID(),
+          trashBatchId: batchId,
+        }),
+        "TRASH_BATCH_NOT_FOUND",
+        404,
+      );
+
+      expect(await readFolders(ownerA, folderIds)).toEqual(foldersBefore);
+      expect(await readPatterns(ownerA, patternIds)).toEqual(patternsBefore);
+      expect(await readOperations(ownerA)).toEqual([]);
+      expect(await readChanges(ownerA)).toEqual([]);
+      expect(await readSyncSeq(ownerA)).toBe(0n);
     },
   );
 
