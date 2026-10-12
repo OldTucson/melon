@@ -45,7 +45,7 @@ describe("pattern query contracts", () => {
     expect(() => patternQuerySchema.parse({ scope: "archive" })).toThrow();
   });
 
-  it("preserves repeated existing format and tag parameters", () => {
+  it("canonicalizes repeated existing format and tag parameters", () => {
     const firstTagId = randomUUID();
     const secondTagId = randomUUID();
     const query = parsePatternSearchParams(
@@ -54,8 +54,31 @@ describe("pattern query contracts", () => {
       ),
     );
 
-    expect(query.formats).toEqual(["png", "psd"]);
-    expect(query.tagIds).toEqual([secondTagId, firstTagId]);
+    expect(query.formats).toEqual(["psd", "png"]);
+    expect(query.tagIds).toEqual(
+      [firstTagId, secondTagId].sort((left, right) =>
+        left.localeCompare(right),
+      ),
+    );
+  });
+
+  it("canonicalizes equivalent production search parameter order", () => {
+    const firstTagId = "00000000-0000-4000-8000-000000000001";
+    const secondTagId = "00000000-0000-4000-8000-000000000002";
+    const first = parsePatternSearchParams(
+      new URLSearchParams(
+        `format=png&formats=psd&tag=${secondTagId}&tagIds=${firstTagId}`,
+      ),
+    );
+    const second = parsePatternSearchParams(
+      new URLSearchParams(
+        `tag=${firstTagId}&format=psd&tagIds=${secondTagId}&formats=png`,
+      ),
+    );
+
+    expect(first).toEqual(second);
+    expect(first.formats).toEqual(["psd", "png"]);
+    expect(first.tagIds).toEqual([firstTagId, secondTagId]);
   });
 
   it("parses all folder and trash URL parameters", () => {

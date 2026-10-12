@@ -4,7 +4,11 @@ import { z, ZodError } from "zod";
 
 import { db } from "@/lib/db/client";
 import { nextChangeSeq } from "@/lib/db/change-seq";
-import { changeLog } from "@/lib/db/schema";
+import {
+  changeLog,
+  patternStatuses,
+  previewStatuses,
+} from "@/lib/db/schema";
 import {
   claimOperation,
   createOperationKey,
@@ -12,6 +16,7 @@ import {
 } from "@/lib/db/operation";
 import { AppError, validationError } from "@/lib/http/app-error";
 import { publicOperationIdSchema } from "@/lib/validation/operation-id";
+import { normalizedUuidSchema } from "@/features/storage/identifiers";
 
 import {
   patternPatchSchema,
@@ -37,7 +42,58 @@ const mutationIdentitySchema = z.object({
   operationId: publicOperationIdSchema,
 });
 
+const optionalNullableUuidSchema = normalizedUuidSchema
+  .nullish()
+  .transform((value) => value ?? null);
+const patternStatusSchema = z.enum(patternStatuses);
+const replayPatternDtoSchema = z.object({
+  id: normalizedUuidSchema,
+  ownerId: normalizedUuidSchema,
+  name: z.string(),
+  originalFilename: z.string(),
+  extension: z.string(),
+  detectedMimeType: z.string().nullable(),
+  sizeBytes: z.string().regex(/^(0|[1-9]\d*)$/),
+  contentHash: z.string().nullable(),
+  status: patternStatusSchema,
+  folderId: optionalNullableUuidSchema,
+  trashBatchId: optionalNullableUuidSchema,
+  preTrashStatus: patternStatusSchema.nullish().transform((value) => value ?? null),
+  previewStatus: z.enum(previewStatuses),
+  previewAssetId: normalizedUuidSchema.nullable(),
+  thumbnailAssetId: normalizedUuidSchema.nullable(),
+  sourceAssetId: normalizedUuidSchema.nullable(),
+  isFavorite: z.boolean(),
+  version: z.number().int().nonnegative(),
+  commercialVersion: z.number().int().nonnegative(),
+  lastErrorCode: z.string().nullable(),
+  trashedAt: z.string().datetime().nullable(),
+  deletedAt: z.string().datetime().nullable(),
+  changeSeq: z.string().regex(/^(0|[1-9]\d*)$/),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+});
+
 export type PatternDto = ReturnType<typeof toPatternDto>;
+
+function normalizePatternReplayResult(
+  result: unknown,
+  identity: { ownerId: string; patternId: string },
+): PatternDto {
+  const parsed = replayPatternDtoSchema.safeParse(result);
+  if (
+    !parsed.success ||
+    parsed.data.ownerId !== identity.ownerId ||
+    parsed.data.id !== identity.patternId
+  ) {
+    throw new AppError(
+      "INTERNAL_ERROR",
+      500,
+      "Stored pattern operation result is invalid",
+    );
+  }
+  return parsed.data;
+}
 
 function toPatternDto(row: PatternRow | PatternRowWithAssets) {
   return {
@@ -144,7 +200,12 @@ export async function updatePattern(input: {
       identity.operationId,
       operationKey,
     );
-    if (operation.state === "replay") return operation.result as PatternDto;
+    if (operation.state === "replay") {
+      return normalizePatternReplayResult(operation.result, {
+        ownerId: input.ownerId,
+        patternId: identity.patternId,
+      });
+    }
 
     const existing = await lockPatternRow(
       input.ownerId,

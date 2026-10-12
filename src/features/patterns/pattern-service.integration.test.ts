@@ -19,6 +19,7 @@ import {
   tags,
   users,
 } from "@/lib/db/schema";
+import { createOperationKey } from "@/lib/db/operation";
 import { resetDatabase } from "@/test/database";
 
 type SeedPattern = {
@@ -76,6 +77,7 @@ const seedFolder = async (input: {
   ownerId: string;
   name: string;
   parentId?: string | null;
+  status?: (typeof folders.$inferInsert)["status"];
 }) => {
   const id = randomUUID();
   await db.insert(folders).values({
@@ -84,6 +86,7 @@ const seedFolder = async (input: {
     parentId: input.parentId,
     name: input.name,
     normalizedName: input.name.toLowerCase(),
+    status: input.status,
   });
   return id;
 };
@@ -547,6 +550,230 @@ describe("pattern service", () => {
     await expect(ids({ folderId: foreign })).resolves.toEqual([]);
   });
 
+  it("enforces folder lifecycle boundaries for scoped and unscoped reads", async () => {
+    const activeRoot = await seedFolder({ ownerId: ownerA, name: "Active root" });
+    const activeChild = await seedFolder({
+      ownerId: ownerA,
+      name: "Active child",
+      parentId: activeRoot,
+    });
+    const activeSibling = await seedFolder({
+      ownerId: ownerA,
+      name: "Active sibling",
+      parentId: activeRoot,
+    });
+    const deletedBoundary = await seedFolder({
+      ownerId: ownerA,
+      name: "Deleted boundary",
+      parentId: activeRoot,
+      status: "deleted",
+    });
+    const activeBelowDeleted = await seedFolder({
+      ownerId: ownerA,
+      name: "Active below deleted",
+      parentId: deletedBoundary,
+    });
+    const trashedRoot = await seedFolder({
+      ownerId: ownerA,
+      name: "Trashed root",
+      status: "trashed",
+    });
+    const deletingRoot = await seedFolder({
+      ownerId: ownerA,
+      name: "Deleting root",
+      status: "deleting",
+    });
+    const deletedRoot = await seedFolder({
+      ownerId: ownerA,
+      name: "Deleted root",
+      status: "deleted",
+    });
+    const foreignRoot = await seedFolder({
+      ownerId: ownerB,
+      name: "Foreign lifecycle root",
+    });
+
+    const activeRootPattern = await seedPattern({
+      ownerId: ownerA,
+      folderId: activeRoot,
+      name: "Active root pattern",
+    });
+    const activeChildPattern = await seedPattern({
+      ownerId: ownerA,
+      folderId: activeChild,
+      name: "Active child pattern",
+    });
+    const activeSiblingPattern = await seedPattern({
+      ownerId: ownerA,
+      folderId: activeSibling,
+      name: "Active sibling pattern",
+    });
+    await seedPattern({
+      ownerId: ownerA,
+      folderId: deletedBoundary,
+      name: "Deleted boundary pattern",
+    });
+    const activeBelowDeletedPattern = await seedPattern({
+      ownerId: ownerA,
+      folderId: activeBelowDeleted,
+      name: "Hidden active descendant",
+    });
+    await seedPattern({
+      ownerId: ownerA,
+      folderId: trashedRoot,
+      name: "Library status in trashed folder",
+    });
+    await seedPattern({
+      ownerId: ownerA,
+      folderId: deletingRoot,
+      name: "Library status in deleting folder",
+    });
+    await seedPattern({
+      ownerId: ownerA,
+      folderId: deletedRoot,
+      name: "Library status in deleted folder",
+    });
+    const unfiledPattern = await seedPattern({
+      ownerId: ownerA,
+      folderId: null,
+      name: "Lifecycle unfiled",
+    });
+    await seedPattern({
+      ownerId: ownerB,
+      folderId: foreignRoot,
+      name: "Foreign lifecycle pattern",
+    });
+
+    const trashedInActive = await seedPattern({
+      ownerId: ownerA,
+      folderId: activeRoot,
+      name: "Trashed in active",
+      status: "trashed",
+    });
+    const trashedInActiveChild = await seedPattern({
+      ownerId: ownerA,
+      folderId: activeChild,
+      name: "Trashed in active child",
+      status: "trashed",
+    });
+    await seedPattern({
+      ownerId: ownerA,
+      folderId: deletedBoundary,
+      name: "Trashed at deleted boundary",
+      status: "trashed",
+    });
+    await seedPattern({
+      ownerId: ownerA,
+      folderId: activeBelowDeleted,
+      name: "Trashed below deleted boundary",
+      status: "trashed",
+    });
+    const trashedInTrashed = await seedPattern({
+      ownerId: ownerA,
+      folderId: trashedRoot,
+      name: "Trashed in trashed",
+      status: "trashed",
+    });
+    const deletingInDeleting = await seedPattern({
+      ownerId: ownerA,
+      folderId: deletingRoot,
+      name: "Deleting in deleting",
+      status: "deleting",
+    });
+    await seedPattern({
+      ownerId: ownerA,
+      folderId: deletedRoot,
+      name: "Trashed in deleted",
+      status: "trashed",
+    });
+
+    const ids = async (input: Parameters<typeof listPatterns>[0]["input"]) =>
+      (await listPatterns({ ownerId: ownerA, input })).items
+        .map((item) => item.id)
+        .sort();
+    await expect(ids({})).resolves.toEqual(
+      [
+        activeRootPattern,
+        activeChildPattern,
+        activeSiblingPattern,
+        activeBelowDeletedPattern,
+        unfiledPattern,
+      ].sort(),
+    );
+    await expect(ids({ unfiled: true })).resolves.toEqual([unfiledPattern]);
+    await expect(
+      ids({ folderId: activeRoot, includeDescendants: true }),
+    ).resolves.toEqual(
+      [activeRootPattern, activeChildPattern, activeSiblingPattern].sort(),
+    );
+    await expect(
+      ids({ folderId: activeRoot, includeDescendants: false }),
+    ).resolves.toEqual([activeRootPattern]);
+    for (const folderId of [trashedRoot, deletingRoot, deletedRoot, foreignRoot]) {
+      await expect(
+        ids({ folderId, includeDescendants: false }),
+      ).resolves.toEqual([]);
+      await expect(ids({ folderId })).resolves.toEqual([]);
+    }
+
+    await expect(
+      ids({
+        folderId: activeRoot,
+        includeDescendants: false,
+        scope: "trash",
+      }),
+    ).resolves.toEqual([trashedInActive]);
+    await expect(
+      ids({
+        folderId: activeRoot,
+        includeDescendants: true,
+        scope: "trash",
+      }),
+    ).resolves.toEqual([trashedInActive, trashedInActiveChild].sort());
+    await expect(
+      ids({ folderId: trashedRoot, scope: "trash" }),
+    ).resolves.toEqual([trashedInTrashed]);
+    await expect(
+      ids({ folderId: deletingRoot, scope: "trash" }),
+    ).resolves.toEqual([deletingInDeleting]);
+    await expect(
+      ids({ folderId: deletedRoot, scope: "trash" }),
+    ).resolves.toEqual([]);
+  });
+
+  it("terminates descendant traversal for an anomalous folder cycle", async () => {
+    const first = await seedFolder({ ownerId: ownerA, name: "Cycle first" });
+    const second = await seedFolder({
+      ownerId: ownerA,
+      name: "Cycle second",
+      parentId: first,
+    });
+    await db
+      .update(folders)
+      .set({ parentId: second })
+      .where(and(eq(folders.ownerId, ownerA), eq(folders.id, first)));
+    const unrelated = await seedFolder({
+      ownerId: ownerA,
+      name: "Outside cycle",
+    });
+    await seedPattern({
+      ownerId: ownerA,
+      folderId: unrelated,
+      name: "Outside cycle pattern",
+    });
+
+    await db.execute(sql.raw("set statement_timeout = '250ms'"));
+    try {
+      const result = await listPatterns({
+        ownerId: ownerA,
+        input: { folderId: first, includeDescendants: true },
+      });
+      expect(result.items).toEqual([]);
+    } finally {
+      await db.execute(sql.raw("set statement_timeout = default"));
+    }
+  });
+
   it("combines format, all/any tags, favorite, preview, deleted exclusion, sort, and limit safely", async () => {
     const summer = await seedTag(ownerA, "Summer");
     const floral = await seedTag(ownerA, "Floral");
@@ -781,6 +1008,101 @@ describe("pattern service", () => {
       .from(patterns)
       .where(and(eq(patterns.ownerId, ownerB), eq(patterns.id, foreign)));
     expect(foreignRow).toEqual({ name: "Foreign", version: 0 });
+  });
+
+  it("normalizes legacy pattern update replays without writing again", async () => {
+    const patternId = await seedPattern({
+      ownerId: ownerA,
+      name: "Legacy replay",
+    });
+    const patch = { version: 0, name: "Legacy replay" };
+    const operationId = randomUUID();
+    const current = await getPattern({ ownerId: ownerA, patternId });
+    const legacyResult = { ...current };
+    Reflect.deleteProperty(legacyResult, "folderId");
+    Reflect.deleteProperty(legacyResult, "trashBatchId");
+    Reflect.deleteProperty(legacyResult, "preTrashStatus");
+    await db.insert(operations).values({
+      ownerId: ownerA,
+      operationId,
+      kind: createOperationKey("pattern.update", { patternId, patch }),
+      result: legacyResult,
+    });
+
+    await expect(
+      updatePattern({ ownerId: ownerA, patternId, operationId, patch }),
+    ).resolves.toEqual({
+      ...legacyResult,
+      folderId: null,
+      trashBatchId: null,
+      preTrashStatus: null,
+    });
+    const [owner] = await db
+      .select({ syncSeq: users.syncSeq })
+      .from(users)
+      .where(eq(users.id, ownerA));
+    expect(owner?.syncSeq).toBe(0n);
+    expect(
+      await db
+        .select()
+        .from(changeLog)
+        .where(eq(changeLog.ownerId, ownerA)),
+    ).toEqual([]);
+    expect(
+      await db
+        .select()
+        .from(operations)
+        .where(eq(operations.ownerId, ownerA)),
+    ).toHaveLength(1);
+  });
+
+  it("preserves modern replay location metadata and rejects corrupt results", async () => {
+    const folderId = await seedFolder({ ownerId: ownerA, name: "Replay folder" });
+    const trashBatchId = randomUUID();
+    const patternId = await seedPattern({
+      ownerId: ownerA,
+      folderId,
+      name: "Modern replay",
+      status: "trashed",
+      trashBatchId,
+      preTrashStatus: "ready",
+    });
+    const patch = { version: 0, isFavorite: true };
+    const operationId = randomUUID();
+    const modernResult = await getPattern({ ownerId: ownerA, patternId });
+    await db.insert(operations).values({
+      ownerId: ownerA,
+      operationId,
+      kind: createOperationKey("pattern.update", { patternId, patch }),
+      result: modernResult,
+    });
+
+    await expect(
+      updatePattern({ ownerId: ownerA, patternId, operationId, patch }),
+    ).resolves.toMatchObject({
+      folderId,
+      trashBatchId,
+      preTrashStatus: "ready",
+    });
+
+    const corruptOperationId = randomUUID();
+    await db.execute(sql`
+      insert into operations (owner_id, operation_id, kind, result)
+      values (
+        ${ownerA},
+        ${corruptOperationId},
+        ${createOperationKey("pattern.update", { patternId, patch })},
+        '"corrupt"'::jsonb
+      )
+    `);
+    await expect(
+      updatePattern({
+        ownerId: ownerA,
+        patternId,
+        operationId: corruptOperationId,
+        patch,
+      }),
+    ).rejects.toMatchObject({ code: "INTERNAL_ERROR", status: 500 });
   });
 
   it("rejects patches to deleted patterns as not found without allocating a sequence", async () => {

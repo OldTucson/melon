@@ -20,6 +20,20 @@ export const patternSorts = [
   "size_desc",
 ] as const;
 
+const patternFormatOrder = new Map<string, number>(
+  patternFormats.map((format, index) => [format, index]),
+);
+
+export const canonicalizePatternFormats = (formats: readonly string[]) =>
+  [...formats].sort((left, right) => {
+    const leftOrder = patternFormatOrder.get(left) ?? Number.MAX_SAFE_INTEGER;
+    const rightOrder = patternFormatOrder.get(right) ?? Number.MAX_SAFE_INTEGER;
+    return leftOrder - rightOrder || left.localeCompare(right);
+  });
+
+export const canonicalizePatternTagIds = (tagIds: readonly string[]) =>
+  [...tagIds].sort((left, right) => left.localeCompare(right));
+
 const queryBoolean = z.union([
   z.boolean(),
   z.literal("true").transform(() => true),
@@ -74,6 +88,14 @@ export type PatternQuery = z.output<typeof patternQuerySchema>;
 export type PatternQueryInput = z.input<typeof patternQuerySchema>;
 export type PatternPatch = z.output<typeof patternPatchSchema>;
 
+export function canonicalizePatternQuery(query: PatternQuery): PatternQuery {
+  return {
+    ...query,
+    formats: canonicalizePatternFormats(query.formats) as PatternQuery["formats"],
+    tagIds: canonicalizePatternTagIds(query.tagIds),
+  };
+}
+
 export function parsePatternSearchParams(searchParams: URLSearchParams) {
   const formats = [
     ...searchParams.getAll("formats"),
@@ -85,7 +107,7 @@ export function parsePatternSearchParams(searchParams: URLSearchParams) {
   ];
   const scalar = (name: string) => searchParams.get(name) ?? undefined;
 
-  return patternQuerySchema.parse({
+  return canonicalizePatternQuery(patternQuerySchema.parse({
     q: scalar("q"),
     formats: formats.length > 0 ? formats : undefined,
     tagIds: tagIds.length > 0 ? tagIds : undefined,
@@ -100,5 +122,5 @@ export function parsePatternSearchParams(searchParams: URLSearchParams) {
     sort: scalar("sort"),
     cursor: scalar("cursor"),
     limit: scalar("limit"),
-  });
+  }));
 }

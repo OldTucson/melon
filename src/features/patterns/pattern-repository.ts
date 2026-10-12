@@ -36,6 +36,8 @@ export type PatternRowWithAssets = PatternRow & {
 const previewAssets = alias(assets, "preview_assets");
 const thumbnailAssets = alias(assets, "thumbnail_assets");
 const sourceAssets = alias(assets, "source_assets");
+const visiblePatternFolders = alias(folders, "visible_pattern_folders");
+const recursiveFolders = alias(folders, "recursive_folders");
 const libraryStatuses: PatternRow["status"][] = [
   "draft",
   "hashing",
@@ -45,6 +47,8 @@ const libraryStatuses: PatternRow["status"][] = [
   "failed",
 ];
 const trashStatuses: PatternRow["status"][] = ["trashed", "deleting"];
+const libraryFolderStatuses = ["active"] as const;
+const trashFolderStatuses = ["active", "trashed", "deleting"] as const;
 
 const escapeLike = (value: string) => value.replace(/[\\%_]/g, "\\$&");
 
@@ -99,12 +103,29 @@ export async function listPatternRows(
   query: PatternQuery,
   cursor: PatternCursor | undefined,
 ) {
+  const folderStatuses =
+    query.scope === "trash" ? trashFolderStatuses : libraryFolderStatuses;
   const predicates: SQL[] = [
     eq(patterns.ownerId, ownerId),
     inArray(
       patterns.status,
       query.scope === "trash" ? trashStatuses : libraryStatuses,
     ),
+    or(
+      isNull(patterns.folderId),
+      exists(
+        db
+          .select({ value: sql`1` })
+          .from(visiblePatternFolders)
+          .where(
+            and(
+              eq(visiblePatternFolders.ownerId, ownerId),
+              eq(visiblePatternFolders.id, patterns.folderId),
+              inArray(visiblePatternFolders.status, folderStatuses),
+            ),
+          ),
+      ),
+    )!,
   ];
 
   if (query.unfiled) {
@@ -117,14 +138,16 @@ export async function listPatternRows(
           from ${folders}
           where ${folders.ownerId} = ${ownerId}
             and ${folders.id} = ${query.folderId}
-          union all
-          select child.owner_id, child.id
-          from ${folders} as child
+            and ${inArray(folders.status, folderStatuses)}
+          union
+          select ${recursiveFolders.ownerId}, ${recursiveFolders.id}
+          from ${folders} as recursive_folders
           inner join folder_scope as parent
-            on child.owner_id = parent.owner_id
-           and child.parent_id = parent.id
-          where child.owner_id = ${ownerId}
+            on ${recursiveFolders.ownerId} = parent.owner_id
+           and ${recursiveFolders.parentId} = parent.id
+          where ${recursiveFolders.ownerId} = ${ownerId}
             and parent.owner_id = ${ownerId}
+            and ${inArray(recursiveFolders.status, folderStatuses)}
         )
         select id
         from folder_scope

@@ -1,5 +1,7 @@
 import {
-  patternFormats,
+  canonicalizePatternFormats,
+  canonicalizePatternQuery,
+  canonicalizePatternTagIds,
   patternQuerySchema,
   type PatternQuery,
 } from "@/features/patterns/contracts";
@@ -21,20 +23,6 @@ export type LibrarySearchState = {
   limit: string | number;
 };
 
-const formatOrder = new Map<string, number>(
-  patternFormats.map((format, index) => [format, index]),
-);
-
-const canonicalFormats = (formats: readonly string[]) =>
-  [...formats].sort((left, right) => {
-    const leftOrder = formatOrder.get(left) ?? Number.MAX_SAFE_INTEGER;
-    const rightOrder = formatOrder.get(right) ?? Number.MAX_SAFE_INTEGER;
-    return leftOrder - rightOrder || left.localeCompare(right);
-  });
-
-const canonicalTags = (tagIds: readonly string[]) =>
-  [...tagIds].sort((left, right) => left.localeCompare(right));
-
 export function parseLibrarySearchParams(
   searchParams: URLSearchParams,
 ): LibrarySearchState {
@@ -51,8 +39,8 @@ export function parseLibrarySearchParams(
 
   return {
     q: scalar("q"),
-    formats: canonicalFormats(formats),
-    tagIds: canonicalTags(tagIds),
+    formats: canonicalizePatternFormats(formats),
+    tagIds: canonicalizePatternTagIds(tagIds),
     tagMode: scalar("tagMode") ?? "all",
     untagged: scalar("untagged"),
     favorite: scalar("favorite"),
@@ -68,12 +56,7 @@ export function parseLibrarySearchParams(
 }
 
 export function toPatternQuery(state: LibrarySearchState): PatternQuery {
-  const parsed = patternQuerySchema.parse(state);
-  return {
-    ...parsed,
-    formats: canonicalFormats(parsed.formats) as PatternQuery["formats"],
-    tagIds: canonicalTags(parsed.tagIds),
-  };
+  return canonicalizePatternQuery(patternQuerySchema.parse(state));
 }
 
 export function serializeLibrarySearchParams(
@@ -81,10 +64,10 @@ export function serializeLibrarySearchParams(
 ) {
   const result = new URLSearchParams();
   if (state.q) result.set("q", state.q);
-  for (const format of canonicalFormats(state.formats)) {
+  for (const format of canonicalizePatternFormats(state.formats)) {
     result.append("format", format);
   }
-  for (const tagId of canonicalTags(state.tagIds)) {
+  for (const tagId of canonicalizePatternTagIds(state.tagIds)) {
     result.append("tag", tagId);
   }
   if (state.tagIds.length > 0) result.set("tagMode", state.tagMode);

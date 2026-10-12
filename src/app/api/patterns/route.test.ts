@@ -58,7 +58,7 @@ describe("pattern Route Handlers", () => {
       ownerId,
       input: expect.objectContaining({
         formats: ["psd", "png"],
-        tagIds: [tagA, tagB],
+        tagIds: [tagA, tagB].sort((left, right) => left.localeCompare(right)),
         tagMode: "any",
         favorite: true,
       }),
@@ -83,7 +83,7 @@ describe("pattern Route Handlers", () => {
       ownerId,
       input: expect.objectContaining({
         formats: ["ai", "jpg"],
-        tagIds: [tagA, tagB],
+        tagIds: [tagA, tagB].sort((left, right) => left.localeCompare(right)),
       }),
     });
   });

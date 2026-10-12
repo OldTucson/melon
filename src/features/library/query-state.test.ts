@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { patternQuerySchema } from "@/features/patterns/contracts";
+import {
+  parsePatternSearchParams,
+  patternQuerySchema,
+} from "@/features/patterns/contracts";
 import {
   ApiResponseError,
   createQueryClient,
@@ -181,6 +184,23 @@ describe("library query state", () => {
       "tags",
     ]);
     expect(queryKeys.tags(ownerA)).toEqual(["owner", ownerA, "tags"]);
+  });
+
+  it("gives equivalent production URL permutations the same query key", () => {
+    const first = parsePatternSearchParams(
+      new URLSearchParams(
+        `format=png&formats=psd&tag=${tagB}&tagIds=${tagA}`,
+      ),
+    );
+    const second = parsePatternSearchParams(
+      new URLSearchParams(
+        `tag=${tagA}&format=psd&tagIds=${tagB}&formats=png`,
+      ),
+    );
+
+    expect(queryKeys.patterns(ownerA, first)).toEqual(
+      queryKeys.patterns(ownerA, second),
+    );
   });
 });
 
