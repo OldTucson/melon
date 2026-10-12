@@ -224,34 +224,45 @@ export async function batchPatterns(input: {
       if (folder.status !== "active") folderNotActive();
     }
 
-    const seq = await nextChangeSeq(tx, input.ownerId);
-    const now = new Date();
-    const updated =
+    const affectedPatternIds =
       mutation.action === "move"
-        ? await updatePatternRows(input.ownerId, tx, {
-            action: "move",
-            patternIds,
-            folderId: mutation.folderId,
-            changeSeq: seq,
-            updatedAt: now,
-          })
-        : mutation.action === "favorite"
+        ? rows
+            .filter((row) => row.folderId !== mutation.folderId)
+            .map((row) => row.id)
+        : patternIds;
+    let seq: bigint | undefined;
+    let now: Date | undefined;
+
+    if (affectedPatternIds.length > 0) {
+      seq = await nextChangeSeq(tx, input.ownerId);
+      now = new Date();
+      const updated =
+        mutation.action === "move"
           ? await updatePatternRows(input.ownerId, tx, {
-              action: "favorite",
-              patternIds,
-              isFavorite: mutation.isFavorite,
+              action: "move",
+              patternIds: affectedPatternIds,
+              folderId: mutation.folderId,
               changeSeq: seq,
               updatedAt: now,
             })
-          : await updatePatternRows(input.ownerId, tx, {
-              action: "trash",
-              patternIds,
-              trashBatchId: mutation.operationId,
-              trashedAt: now,
-              changeSeq: seq,
-              updatedAt: now,
-            });
-    if (updated.length !== patternIds.length) patternStateChanged();
+          : mutation.action === "favorite"
+            ? await updatePatternRows(input.ownerId, tx, {
+                action: "favorite",
+                patternIds: affectedPatternIds,
+                isFavorite: mutation.isFavorite,
+                changeSeq: seq,
+                updatedAt: now,
+              })
+            : await updatePatternRows(input.ownerId, tx, {
+                action: "trash",
+                patternIds: affectedPatternIds,
+                trashBatchId: mutation.operationId,
+                trashedAt: now,
+                changeSeq: seq,
+                updatedAt: now,
+              });
+      if (updated.length !== affectedPatternIds.length) patternStateChanged();
+    }
 
     const freshRows = await listPatternBatchRows(input.ownerId, tx, patternIds);
     if (freshRows.length !== patternIds.length) {
@@ -261,16 +272,18 @@ export async function batchPatterns(input: {
       patterns: freshRows.map(toPatternDto),
     };
 
-    await tx.insert(changeLog).values({
-      ownerId: input.ownerId,
-      seq,
-      operationId: mutation.operationId,
-      entityType: "pattern_batch",
-      entityId: mutation.operationId,
-      operation: eventName(mutation.action),
-      payload: { patternIds },
-      createdAt: now,
-    });
+    if (seq !== undefined && now !== undefined) {
+      await tx.insert(changeLog).values({
+        ownerId: input.ownerId,
+        seq,
+        operationId: mutation.operationId,
+        entityType: "pattern_batch",
+        entityId: mutation.operationId,
+        operation: eventName(mutation.action),
+        payload: { patternIds: affectedPatternIds },
+        createdAt: now,
+      });
+    }
     await storeOperationResult(
       input.ownerId,
       tx,

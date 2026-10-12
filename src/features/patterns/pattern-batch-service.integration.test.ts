@@ -21,6 +21,7 @@ type PatternStatus = (typeof patternStatuses)[number];
 type FolderStatus = (typeof folders.$inferInsert)["status"];
 
 const lowId = "00000000-0000-4000-8000-000000000001";
+const middleId = "88888888-8888-4888-8888-888888888888";
 const highId = "ffffffff-ffff-4fff-bfff-ffffffffffff";
 
 const seedUser = async (email: string) => {
@@ -58,7 +59,9 @@ const seedPattern = async (input: {
   folderId?: string | null;
   status?: PatternStatus;
   version?: number;
+  changeSeq?: bigint;
   isFavorite?: boolean;
+  updatedAt?: Date;
 }) => {
   const id = input.id ?? randomUUID();
   const name = input.name ?? `Pattern ${id}`;
@@ -75,7 +78,9 @@ const seedPattern = async (input: {
     status: input.status ?? "ready",
     previewStatus: "ready",
     version: input.version ?? 0,
+    changeSeq: input.changeSeq ?? 0n,
     isFavorite: input.isFavorite ?? false,
+    updatedAt: input.updatedAt,
   });
   return { id, version: input.version ?? 0 };
 };
@@ -223,6 +228,294 @@ describe("pattern batch service", () => {
         result,
       }),
     ]);
+    expect(await readSyncSeq(ownerA)).toBe(1n);
+  });
+
+  it("stores and replays deterministic no-op moves without mutating rows or sync state", async () => {
+    const target = await seedFolder({ ownerId: ownerA, name: "Already there" });
+    const lowUpdatedAt = new Date("2026-01-02T03:04:05.000Z");
+    const highUpdatedAt = new Date("2026-02-03T04:05:06.000Z");
+    const low = await seedPattern({
+      ownerId: ownerA,
+      id: lowId,
+      folderId: target,
+      status: "ready",
+      version: 4,
+      changeSeq: 7n,
+      updatedAt: lowUpdatedAt,
+    });
+    const high = await seedPattern({
+      ownerId: ownerA,
+      id: highId,
+      folderId: target,
+      status: "failed",
+      version: 5,
+      changeSeq: 8n,
+      updatedAt: highUpdatedAt,
+    });
+    const filedOperationId = randomUUID();
+
+    const filedResult = await batchPatterns({
+      ownerId: ownerA,
+      mutation: {
+        operationId: filedOperationId,
+        action: "move",
+        patterns: [high, low],
+        folderId: target,
+      },
+    });
+
+    expect(filedResult.patterns.map((pattern) => pattern.id)).toEqual([
+      lowId,
+      highId,
+    ]);
+    expect(filedResult.patterns).toEqual([
+      expect.objectContaining({
+        id: lowId,
+        folderId: target,
+        status: "ready",
+        version: 4,
+        changeSeq: "7",
+        updatedAt: lowUpdatedAt.toISOString(),
+      }),
+      expect.objectContaining({
+        id: highId,
+        folderId: target,
+        status: "failed",
+        version: 5,
+        changeSeq: "8",
+        updatedAt: highUpdatedAt.toISOString(),
+      }),
+    ]);
+    await expect(
+      batchPatterns({
+        ownerId: ownerA,
+        mutation: {
+          operationId: filedOperationId,
+          action: "move",
+          patterns: [low, high],
+          folderId: target,
+        },
+      }),
+    ).resolves.toEqual(filedResult);
+
+    const unfiledUpdatedAt = new Date("2026-03-04T05:06:07.000Z");
+    const unfiled = await seedPattern({
+      ownerId: ownerA,
+      id: middleId,
+      folderId: null,
+      version: 6,
+      changeSeq: 9n,
+      updatedAt: unfiledUpdatedAt,
+    });
+    const unfiledOperationId = randomUUID();
+    const unfiledResult = await batchPatterns({
+      ownerId: ownerA,
+      mutation: {
+        operationId: unfiledOperationId,
+        action: "move",
+        patterns: [unfiled],
+        folderId: null,
+      },
+    });
+    expect(unfiledResult.patterns).toEqual([
+      expect.objectContaining({
+        id: unfiled.id,
+        folderId: null,
+        version: 6,
+        changeSeq: "9",
+        updatedAt: unfiledUpdatedAt.toISOString(),
+      }),
+    ]);
+
+    expect(await readPatterns(ownerA, [low.id, high.id, unfiled.id])).toEqual([
+      expect.objectContaining({
+        id: low.id,
+        folderId: target,
+        version: 4,
+        changeSeq: 7n,
+        updatedAt: lowUpdatedAt,
+      }),
+      expect.objectContaining({
+        id: unfiled.id,
+        folderId: null,
+        version: 6,
+        changeSeq: 9n,
+        updatedAt: unfiledUpdatedAt,
+      }),
+      expect.objectContaining({
+        id: high.id,
+        folderId: target,
+        version: 5,
+        changeSeq: 8n,
+        updatedAt: highUpdatedAt,
+      }),
+    ]);
+    expect(await readChanges(ownerA)).toEqual([]);
+    expect(await readSyncSeq(ownerA)).toBe(0n);
+    expect(await readOperations(ownerA)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          operationId: filedOperationId,
+          result: filedResult,
+        }),
+        expect.objectContaining({
+          operationId: unfiledOperationId,
+          result: unfiledResult,
+        }),
+      ]),
+    );
+    expect(await readOperations(ownerA)).toHaveLength(2);
+  });
+
+  it("validates an already-targeted folder is still active before accepting a no-op", async () => {
+    const target = await seedFolder({
+      ownerId: ownerA,
+      name: "Inactive target",
+      status: "trashed",
+    });
+    const pattern = await seedPattern({ ownerId: ownerA, folderId: target });
+
+    await expect(
+      batchPatterns({
+        ownerId: ownerA,
+        mutation: {
+          operationId: randomUUID(),
+          action: "move",
+          patterns: [pattern],
+          folderId: target,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "FOLDER_NOT_ACTIVE", status: 409 });
+    expect(await readOperations(ownerA)).toEqual([]);
+    expect(await readSyncSeq(ownerA)).toBe(0n);
+  });
+
+  it("does not skip version or status validation when a move would otherwise be a no-op", async () => {
+    const target = await seedFolder({
+      ownerId: ownerA,
+      name: "Validated no-op target",
+    });
+    const pattern = await seedPattern({ ownerId: ownerA, folderId: target });
+
+    await expect(
+      batchPatterns({
+        ownerId: ownerA,
+        mutation: {
+          operationId: randomUUID(),
+          action: "move",
+          patterns: [{ id: pattern.id, version: 1 }],
+          folderId: target,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "PATTERN_STATE_CHANGED", status: 409 });
+
+    await db
+      .update(patterns)
+      .set({ status: "draft" })
+      .where(and(eq(patterns.ownerId, ownerA), eq(patterns.id, pattern.id)));
+    await expect(
+      batchPatterns({
+        ownerId: ownerA,
+        mutation: {
+          operationId: randomUUID(),
+          action: "move",
+          patterns: [pattern],
+          folderId: target,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "PATTERN_STATE_CHANGED", status: 409 });
+
+    expect(await readOperations(ownerA)).toEqual([]);
+    expect(await readChanges(ownerA)).toEqual([]);
+    expect(await readSyncSeq(ownerA)).toBe(0n);
+  });
+
+  it("updates only changed rows in a mixed move and logs only affected IDs", async () => {
+    const source = await seedFolder({ ownerId: ownerA, name: "Mixed source" });
+    const target = await seedFolder({ ownerId: ownerA, name: "Mixed target" });
+    const unchangedAt = new Date("2026-04-05T06:07:08.000Z");
+    const changedAt = new Date("2026-05-06T07:08:09.000Z");
+    const unchanged = await seedPattern({
+      ownerId: ownerA,
+      id: lowId,
+      folderId: target,
+      version: 3,
+      changeSeq: 11n,
+      updatedAt: unchangedAt,
+    });
+    const changed = await seedPattern({
+      ownerId: ownerA,
+      id: highId,
+      folderId: source,
+      version: 4,
+      changeSeq: 12n,
+      updatedAt: changedAt,
+    });
+    const operationId = randomUUID();
+
+    const result = await batchPatterns({
+      ownerId: ownerA,
+      mutation: {
+        operationId,
+        action: "move",
+        patterns: [changed, unchanged],
+        folderId: target,
+      },
+    });
+
+    expect(result.patterns).toEqual([
+      expect.objectContaining({
+        id: unchanged.id,
+        folderId: target,
+        version: 3,
+        changeSeq: "11",
+        updatedAt: unchangedAt.toISOString(),
+      }),
+      expect.objectContaining({
+        id: changed.id,
+        folderId: target,
+        version: 5,
+        changeSeq: "1",
+        updatedAt: expect.any(String),
+      }),
+    ]);
+    expect(result.patterns[1]?.updatedAt).not.toBe(changedAt.toISOString());
+    expect(await readPatterns(ownerA, [unchanged.id, changed.id])).toEqual([
+      expect.objectContaining({
+        id: unchanged.id,
+        folderId: target,
+        version: 3,
+        changeSeq: 11n,
+        updatedAt: unchangedAt,
+      }),
+      expect.objectContaining({
+        id: changed.id,
+        folderId: target,
+        version: 5,
+        changeSeq: 1n,
+      }),
+    ]);
+    expect(await readChanges(ownerA)).toEqual([
+      expect.objectContaining({
+        operationId,
+        operation: "patterns.moved",
+        payload: { patternIds: [changed.id] },
+      }),
+    ]);
+    expect(await readSyncSeq(ownerA)).toBe(1n);
+    await expect(
+      batchPatterns({
+        ownerId: ownerA,
+        mutation: {
+          operationId,
+          action: "move",
+          patterns: [unchanged, changed],
+          folderId: target,
+        },
+      }),
+    ).resolves.toEqual(result);
+    expect(await readChanges(ownerA)).toHaveLength(1);
     expect(await readSyncSeq(ownerA)).toBe(1n);
   });
 
