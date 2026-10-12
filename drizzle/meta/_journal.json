@@ -15,6 +15,13 @@
       "when": 1791521416141,
       "tag": "0001_loose_killmonger",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791778342195,
+      "tag": "0002_melon_folders_bulk_trash",
+      "breakpoints": true
     }
   ]
 }

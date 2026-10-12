@@ -1,5 +1,6 @@
 export * from "./assets";
 export * from "./change-log";
+export * from "./folders";
 export * from "./operations";
 export * from "./patterns";
 export * from "./tags";

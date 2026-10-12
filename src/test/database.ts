@@ -33,6 +33,7 @@ export const resetDatabase = async (
           "assets",
           "tags",
           "patterns",
+          "folders",
           "users"
         RESTART IDENTITY CASCADE
       `),
