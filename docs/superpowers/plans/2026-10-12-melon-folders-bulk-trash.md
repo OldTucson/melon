@@ -682,7 +682,7 @@ git commit -m "feat: add atomic pattern batch actions"
 - Modify: `src/app/api/folders/[folderId]/route.ts`
 - Modify: `src/app/api/folders/[folderId]/route.test.ts`
 
-- [ ] **Step 1: Write failing cascade and merge tests**
+- [x] **Step 1: Write failing cascade and merge tests**
 
 Build a three-level tree containing active and already-trashed descendants and patterns. Assert one deletion produces:
 
@@ -709,7 +709,7 @@ expect(subtree.every((row) =>
 
 Prove an already-trashed pattern preserves its existing `preTrashStatus`, but receives the new batch and timestamp. Prove any `deleting` folder or pattern aborts the entire transaction. Prove stale root version, cross-tenant root, and replay-with-different-payload fail with public errors.
 
-- [ ] **Step 2: Serialize folder-structure mutations for one owner**
+- [x] **Step 2: Serialize folder-structure mutations for one owner**
 
 Add a transaction-scoped advisory lock used by create-child and cascade-delete before reading the hierarchy:
 
@@ -721,7 +721,7 @@ export async function lockFolderHierarchy(ownerId: string, tx: DbTransaction) {
 
 Keep the existing row lock on the direct parent as a local invariant. The advisory lock closes the snapshot race in which a new grandchild commits while a recursive delete is resolving descendants.
 
-- [ ] **Step 3: Implement recursive lookup and deterministic locks**
+- [x] **Step 3: Implement recursive lookup and deterministic locks**
 
 The repository resolves every non-deleted descendant with an owner-scoped recursive CTE, sorts IDs, then locks folders and patterns in stable UUID order. It returns this complete locked aggregate:
 
@@ -734,7 +734,7 @@ export type LockedFolderTree = {
 
 The service rejects an empty root as `FOLDER_NOT_FOUND`, a non-active root as `FOLDER_NOT_ACTIVE`, root version mismatch as `FOLDER_STATE_CHANGED`, and any `deleting` row as `TRASH_PURGE_IN_PROGRESS`.
 
-- [ ] **Step 4: Apply the batch in one transaction**
+- [x] **Step 4: Apply the batch in one transaction**
 
 For every folder, set `status='trashed'`, the new `trashBatchId`, shared `trashedAt`, shared `changeSeq`, incremented version, and `updatedAt`. For every pattern:
 
@@ -753,7 +753,7 @@ updatedAt: now,
 
 Write one `folder_tree.trashed` change event containing root ID plus sorted folder and pattern IDs. Store the exact count result for idempotent replay. Do not mutate assets, tags, or OSS.
 
-- [ ] **Step 5: Prove create/delete concurrency and wire the route**
+- [x] **Step 5: Prove create/delete concurrency and wire the route**
 
 Use two real database connections and a test barrier. Start child creation while tree deletion holds the hierarchy lock; after both settle, assert either the child was committed before the delete and is trashed with the tree, or creation observed the trashed parent and failed. It must never leave an active descendant under a trashed ancestor.
 
