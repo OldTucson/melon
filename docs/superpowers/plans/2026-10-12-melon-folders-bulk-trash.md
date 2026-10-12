@@ -451,7 +451,7 @@ git commit -m "feat: add folder CRUD services"
 - Modify: `src/features/folders/folder-repository.ts`
 - Modify: `src/features/folders/folder-service.ts`
 
-- [ ] **Step 1: Write failing route tests**
+- [x] **Step 1: Write failing route tests**
 
 Mock `requireUser` and service boundaries, then verify:
 
@@ -465,7 +465,7 @@ expect((await PATCH(validRenameRequest, routeContext)).status).toBe(200);
 
 Also verify malformed UUID/body returns `400`, an `AppError` preserves its public code/status, and no route accepts `ownerId` from JSON.
 
-- [ ] **Step 2: Implement the non-mutating impact query**
+- [x] **Step 2: Implement the non-mutating impact query**
 
 Add:
 
@@ -481,7 +481,7 @@ export type FolderDeleteImpact = {
 
 Resolve the subtree with a recursive CTE including `active`, `trashed`, and `deleting` rows. Count all non-`deleted` patterns whose `folderId` is in that subtree. This endpoint is preview-only and performs no locking; the delete service in Task 7 recomputes everything under locks.
 
-- [ ] **Step 3: Implement thin authenticated routes**
+- [x] **Step 3: Implement thin authenticated routes**
 
 Use the existing pattern:
 
@@ -500,7 +500,7 @@ export const POST = withRoute(async (request: Request) => {
 
 Keep route files free of transaction logic. This task adds list, create, rename, and impact handlers only; Task 7 adds `DELETE` together with its real cascading service so the branch never contains a production route backed by a stub.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 ```bash
 npx --yes --package=node@24 -c 'npm test -- src/app/api/folders/route.test.ts src/app/api/folders/[folderId]/route.test.ts src/app/api/folders/[folderId]/delete-impact/route.test.ts'
