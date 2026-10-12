@@ -5,6 +5,65 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { closeDatabase, db } from "@/lib/db/client";
 import { resetDatabase } from "@/test/database";
 
+type PostgresConstraintError = {
+  code: string;
+  constraint_name: string;
+};
+
+const nestedFolderNameCases = [
+  ["active", true],
+  ["trashed", true],
+  ["deleting", true],
+  ["deleted", false],
+] as const;
+
+const postgresConstraintError = (
+  error: unknown,
+): PostgresConstraintError | undefined => {
+  let candidate = error;
+  const seen = new Set<unknown>();
+
+  while (
+    typeof candidate === "object" &&
+    candidate !== null &&
+    !seen.has(candidate)
+  ) {
+    seen.add(candidate);
+
+    if (
+      "code" in candidate &&
+      typeof candidate.code === "string" &&
+      "constraint_name" in candidate &&
+      typeof candidate.constraint_name === "string"
+    ) {
+      return {
+        code: candidate.code,
+        constraint_name: candidate.constraint_name,
+      };
+    }
+
+    candidate = "cause" in candidate ? candidate.cause : undefined;
+  }
+
+  return undefined;
+};
+
+const expectConstraintViolation = async (
+  operation: Promise<unknown>,
+  expected: PostgresConstraintError,
+) => {
+  try {
+    await operation;
+  } catch (error) {
+    expect(postgresConstraintError(error)).toEqual(expected);
+    return;
+  }
+
+  throw new Error(
+    `Expected PostgreSQL constraint ${expected.constraint_name} to reject the operation`,
+  );
+};
+
 const insertFolder = async (input: {
   ownerId: string;
   parentId?: string | null;
@@ -93,25 +152,28 @@ describe("folders schema", () => {
   it("rejects a parent folder owned by another tenant", async () => {
     const ownerBFolder = await insertFolder({ ownerId: ownerB });
 
-    await expect(
+    await expectConstraintViolation(
       insertFolder({ ownerId: ownerA, parentId: ownerBFolder }),
-    ).rejects.toThrow();
+      { code: "23503", constraint_name: "folders_owner_parent_fk" },
+    );
   });
 
   it("rejects a folder that is its own parent", async () => {
     const folderId = randomUUID();
 
-    await expect(
+    await expectConstraintViolation(
       insertFolder({ ownerId: ownerA, id: folderId, parentId: folderId }),
-    ).rejects.toThrow();
+      { code: "23514", constraint_name: "folders_parent_not_self" },
+    );
   });
 
   it("rejects a pattern folder owned by another tenant", async () => {
     const ownerBFolder = await insertFolder({ ownerId: ownerB });
 
-    await expect(
+    await expectConstraintViolation(
       insertPattern({ ownerId: ownerA, folderId: ownerBFolder }),
-    ).rejects.toThrow();
+      { code: "23503", constraint_name: "patterns_owner_folder_fk" },
+    );
   });
 
   it("rejects duplicate normalized root folder names", async () => {
@@ -121,13 +183,17 @@ describe("folders schema", () => {
       normalizedName: "flora",
     });
 
-    await expect(
+    await expectConstraintViolation(
       insertFolder({
         ownerId: ownerA,
         name: "FLORA",
         normalizedName: "flora",
       }),
-    ).rejects.toThrow();
+      {
+        code: "23505",
+        constraint_name: "folders_owner_root_name_live_unique",
+      },
+    );
   });
 
   it("allows the same normalized name under different parents", async () => {
@@ -155,7 +221,45 @@ describe("folders schema", () => {
     ).resolves.toBeDefined();
   });
 
-  it("releases a normalized name only after the prior folder is deleted", async () => {
+  it.each(nestedFolderNameCases)(
+    "enforces nested normalized name availability while the prior folder is %s",
+    async (status, nameIsReserved) => {
+      const parentId = await insertFolder({
+        ownerId: ownerA,
+        normalizedName: `parent-${status}`,
+      });
+      const folderId = await insertFolder({
+        ownerId: ownerA,
+        parentId,
+        name: "Flora",
+        normalizedName: "flora",
+      });
+
+      await db.execute(sql`
+        update folders
+        set status = ${status}
+        where owner_id = ${ownerA} and id = ${folderId}
+      `);
+
+      const duplicateInsert = insertFolder({
+        ownerId: ownerA,
+        parentId,
+        name: "FLORA",
+        normalizedName: "flora",
+      });
+
+      if (nameIsReserved) {
+        await expectConstraintViolation(duplicateInsert, {
+          code: "23505",
+          constraint_name: "folders_owner_parent_name_live_unique",
+        });
+      } else {
+        await expect(duplicateInsert).resolves.toBeDefined();
+      }
+    },
+  );
+
+  it("releases a root normalized name only after the prior folder is deleted", async () => {
     const folderId = await insertFolder({
       ownerId: ownerA,
       name: "Flora",
@@ -168,13 +272,17 @@ describe("folders schema", () => {
       where owner_id = ${ownerA} and id = ${folderId}
     `);
 
-    await expect(
+    await expectConstraintViolation(
       insertFolder({
         ownerId: ownerA,
         name: "Flora again",
         normalizedName: "flora",
       }),
-    ).rejects.toThrow();
+      {
+        code: "23505",
+        constraint_name: "folders_owner_root_name_live_unique",
+      },
+    );
 
     await db.execute(sql`
       update folders
