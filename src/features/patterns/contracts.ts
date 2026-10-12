@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { normalizedUuidSchema } from "@/features/storage/identifiers";
 import { hasNoNullByte } from "@/lib/validation/text";
 import { publicOperationIdSchema } from "@/lib/validation/operation-id";
 
@@ -25,20 +26,28 @@ const queryBoolean = z.union([
   z.literal("false").transform(() => false),
 ]);
 
-export const patternQuerySchema = z.object({
-  q: z.string().trim().max(100).refine(hasNoNullByte).optional(),
-  formats: z.array(z.enum(patternFormats)).max(6).default([]),
-  tagIds: z.array(z.string().uuid()).max(20).default([]),
-  tagMode: z.enum(["all", "any"]).default("all"),
-  untagged: queryBoolean.optional(),
-  favorite: queryBoolean.optional(),
-  previewStatus: z
-    .enum(["pending", "ready", "unsupported", "failed", "manual"])
-    .optional(),
-  sort: z.enum(patternSorts).default("updated_desc"),
-  cursor: z.string().min(1).max(2048).optional(),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
-});
+export const patternQuerySchema = z
+  .object({
+    q: z.string().trim().max(100).refine(hasNoNullByte).optional(),
+    formats: z.array(z.enum(patternFormats)).max(6).default([]),
+    tagIds: z.array(z.string().uuid()).max(20).default([]),
+    tagMode: z.enum(["all", "any"]).default("all"),
+    untagged: queryBoolean.optional(),
+    favorite: queryBoolean.optional(),
+    previewStatus: z
+      .enum(["pending", "ready", "unsupported", "failed", "manual"])
+      .optional(),
+    folderId: normalizedUuidSchema.optional(),
+    unfiled: queryBoolean.optional(),
+    includeDescendants: queryBoolean.default(true),
+    scope: z.enum(["library", "trash"]).default("library"),
+    sort: z.enum(patternSorts).default("updated_desc"),
+    cursor: z.string().min(1).max(2048).optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+  })
+  .refine((query) => query.folderId === undefined || query.unfiled !== true, {
+    message: "folderId and unfiled=true are mutually exclusive",
+  });
 
 export const patternPatchSchema = z
   .object({
@@ -84,6 +93,10 @@ export function parsePatternSearchParams(searchParams: URLSearchParams) {
     untagged: scalar("untagged"),
     favorite: scalar("favorite"),
     previewStatus: scalar("previewStatus"),
+    folderId: scalar("folderId"),
+    unfiled: scalar("unfiled"),
+    includeDescendants: scalar("includeDescendants"),
+    scope: scalar("scope"),
     sort: scalar("sort"),
     cursor: scalar("cursor"),
     limit: scalar("limit"),
