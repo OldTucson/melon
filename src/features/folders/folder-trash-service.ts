@@ -37,6 +37,15 @@ export type TrashFolderTreeResult = {
 };
 
 const folderIdentitySchema = z.object({ folderId: normalizedUuidSchema });
+const replayResultSchema = z
+  .object({
+    state: z.literal("trashed"),
+    trashBatchId: normalizedUuidSchema,
+    rootFolderId: normalizedUuidSchema,
+    folderCount: z.number().int().positive(),
+    patternCount: z.number().int().nonnegative(),
+  })
+  .strict();
 
 function parseOrValidationError<T>(parse: () => T): T {
   try {
@@ -79,6 +88,30 @@ function operationIdReused(): never {
   );
 }
 
+function internalReplayError(): never {
+  throw new AppError(
+    "INTERNAL_ERROR",
+    500,
+    "Stored folder trash operation result is invalid",
+  );
+}
+
+function normalizeReplayResult(
+  result: unknown,
+  rootFolderId: string,
+  trashBatchId: string,
+): TrashFolderTreeResult {
+  const parsed = replayResultSchema.safeParse(result);
+  if (
+    !parsed.success ||
+    parsed.data.rootFolderId !== rootFolderId ||
+    parsed.data.trashBatchId !== trashBatchId
+  ) {
+    internalReplayError();
+  }
+  return parsed.data;
+}
+
 export async function trashFolderTree(
   input: TrashFolderTreeInput,
 ): Promise<TrashFolderTreeResult> {
@@ -105,7 +138,11 @@ export async function trashFolderTree(
       operationKey,
     );
     if (operation.state === "replay") {
-      return operation.result as TrashFolderTreeResult;
+      return normalizeReplayResult(
+        operation.result,
+        identity.folderId,
+        mutation.operationId,
+      );
     }
 
     await lockFolderHierarchy(input.ownerId, tx);

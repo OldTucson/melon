@@ -186,6 +186,28 @@ async function waitForAdvisoryWaiters(
   );
 }
 
+async function waitForOperationClaimWaiter(
+  monitor: ReturnType<typeof postgres>,
+) {
+  return withTimeout(
+    (async () => {
+      while (true) {
+        const waiters = await monitor<{ pid: number }[]>`
+          select activity.pid
+          from pg_stat_activity activity
+          where activity.datname = current_database()
+            and activity.state = 'active'
+            and activity.wait_event_type = 'Lock'
+            and activity.query ilike '%insert into "operations"%'
+          order by activity.pid
+        `;
+        if (waiters[0]) return waiters[0].pid;
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      }
+    })(),
+  );
+}
+
 describe("folder tree trash service", () => {
   let ownerA: string;
   let ownerB: string;
@@ -725,6 +747,176 @@ describe("folder tree trash service", () => {
     expect(await readOperations(ownerA)).toHaveLength(1);
     expect(await readSyncSeq(ownerA)).toBe(1n);
   });
+
+  it("rejects malformed or identity-mismatched stored replay results without new writes", async () => {
+    const rootId = await seedFolder({
+      ownerId: ownerA,
+      name: "Corrupt replay root",
+      version: 2,
+    });
+    const patternId = await seedPattern({
+      ownerId: ownerA,
+      folderId: rootId,
+      name: "Corrupt replay pattern",
+      status: "ready",
+      version: 3,
+    });
+    const operationId = randomUUID();
+    const validResult = await trashFolderTree({
+      ownerId: ownerA,
+      folderId: rootId,
+      operationId,
+      version: 2,
+    });
+    const foldersAfterFirst = await readFolders(ownerA, [rootId]);
+    const patternsAfterFirst = await readPatterns(ownerA, [patternId]);
+    const changesAfterFirst = await readChanges(ownerA);
+    const syncSeqAfterFirst = await readSyncSeq(ownerA);
+    const invalidResults: Record<string, unknown>[] = [
+      {},
+      { ...validResult, folderCount: -1 },
+      { ...validResult, folderCount: 0 },
+      { ...validResult, patternCount: 0.5 },
+      { ...validResult, state: "pending" },
+      { ...validResult, rootFolderId: randomUUID() },
+      { ...validResult, trashBatchId: randomUUID() },
+      { ...validResult, unexpected: true },
+    ];
+
+    for (const invalidResult of invalidResults) {
+      await db
+        .update(operations)
+        .set({ result: invalidResult })
+        .where(
+          and(
+            eq(operations.ownerId, ownerA),
+            eq(operations.operationId, operationId),
+          ),
+        );
+
+      await expect(
+        trashFolderTree({
+          ownerId: ownerA,
+          folderId: rootId.toUpperCase(),
+          operationId: operationId.toUpperCase(),
+          version: 2,
+        }),
+      ).rejects.toMatchObject({ code: "INTERNAL_ERROR", status: 500 });
+      expect(await readFolders(ownerA, [rootId])).toEqual(foldersAfterFirst);
+      expect(await readPatterns(ownerA, [patternId])).toEqual(patternsAfterFirst);
+      expect(await readChanges(ownerA)).toEqual(changesAfterFirst);
+      expect(await readSyncSeq(ownerA)).toBe(syncSeqAfterFirst);
+      expect(await readOperations(ownerA)).toEqual([
+        expect.objectContaining({ operationId, result: invalidResult }),
+      ]);
+    }
+  });
+
+  it("serializes concurrent identical operations into one complete replay", async () => {
+    const databaseUrl = getServerEnv().DATABASE_URL;
+    const blocker = postgres(databaseUrl, { max: 1 });
+    const monitor = postgres(databaseUrl, { max: 1 });
+
+    try {
+      for (let round = 0; round < 3; round += 1) {
+        const rootId = await seedFolder({
+          ownerId: ownerA,
+          name: `Replay race root ${round}`,
+        });
+        const patternId = await seedPattern({
+          ownerId: ownerA,
+          folderId: rootId,
+          name: `Replay race pattern ${round}`,
+          status: "ready",
+        });
+        const operationId = randomUUID();
+        const input = {
+          ownerId: ownerA,
+          folderId: rootId,
+          operationId,
+          version: 0,
+        };
+        const lockReady = deferred<void>();
+        const releaseLock = deferred<void>();
+        let released = false;
+        const blockerTransaction = blocker.begin(async (tx) => {
+          await tx`select pg_advisory_xact_lock(hashtextextended(${ownerA}, 0))`;
+          lockReady.resolve();
+          await releaseLock.promise;
+        });
+
+        let first: ReturnType<typeof trashFolderTree> | undefined;
+        let second: ReturnType<typeof trashFolderTree> | undefined;
+        try {
+          await withTimeout(lockReady.promise);
+          first = trashFolderTree(input);
+          void first.catch(() => undefined);
+          const advisoryWaiters = await waitForAdvisoryWaiters(monitor, 1);
+          second = trashFolderTree(input);
+          void second.catch(() => undefined);
+          const operationWaiterPid = await waitForOperationClaimWaiter(monitor);
+          expect(advisoryWaiters).not.toContain(operationWaiterPid);
+
+          released = true;
+          releaseLock.resolve();
+          await withTimeout(blockerTransaction);
+          const [firstResult, secondResult] = await withTimeout(
+            Promise.all([first, second]),
+          );
+
+          expect(firstResult).toEqual({
+            state: "trashed",
+            trashBatchId: operationId,
+            rootFolderId: rootId,
+            folderCount: 1,
+            patternCount: 1,
+          });
+          expect(secondResult).toEqual(firstResult);
+          expect(await readFolders(ownerA, [rootId])).toEqual([
+            expect.objectContaining({
+              status: "trashed",
+              trashBatchId: operationId,
+              version: 1,
+              changeSeq: BigInt(round + 1),
+            }),
+          ]);
+          expect(await readPatterns(ownerA, [patternId])).toEqual([
+            expect.objectContaining({
+              status: "trashed",
+              trashBatchId: operationId,
+              version: 1,
+              changeSeq: BigInt(round + 1),
+            }),
+          ]);
+          expect(
+            (await readOperations(ownerA)).filter(
+              (operation) => operation.operationId === operationId,
+            ),
+          ).toEqual([
+            expect.objectContaining({ operationId, result: firstResult }),
+          ]);
+          expect(
+            (await readChanges(ownerA)).filter(
+              (change) => change.operationId === operationId,
+            ),
+          ).toHaveLength(1);
+          expect(await readSyncSeq(ownerA)).toBe(BigInt(round + 1));
+        } finally {
+          if (!released) releaseLock.resolve();
+          await Promise.allSettled([
+            blockerTransaction,
+            ...(first ? [first] : []),
+            ...(second ? [second] : []),
+          ]);
+        }
+      }
+    } finally {
+      await Promise.all([
+        blocker.end({ timeout: 1 }),
+        monitor.end({ timeout: 1 }),
+      ]);
+    }
+  }, 15_000);
 
   it("serializes child creation and cascade trash without leaving an active descendant", async () => {
     const databaseUrl = getServerEnv().DATABASE_URL;
