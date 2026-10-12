@@ -63,7 +63,7 @@ tests/e2e/folders-trash.spec.ts                # product workflow coverage
 - Generate: `drizzle/meta/0002_snapshot.json`
 - Modify: `drizzle/meta/_journal.json`
 
-- [ ] **Step 1: Write the failing migration smoke test**
+- [x] **Step 1: Write the failing migration smoke test**
 
 Create a raw-schema test that does not import a not-yet-created TypeScript module:
 
@@ -97,7 +97,7 @@ npx --yes --package=node@24 -c 'npm run test:integration -- src/lib/db/schema/fo
 
 Expected: FAIL because `folders` and the three pattern columns do not exist.
 
-- [ ] **Step 2: Define the folder table and invariants**
+- [x] **Step 2: Define the folder table and invariants**
 
 Create `src/lib/db/schema/folders.ts` with these exported statuses and columns:
 
@@ -144,7 +144,7 @@ export const folders = pgTable(
 
 Use the existing schema style and import `check`, `foreignKey`, and `uniqueIndex` from `drizzle-orm/pg-core`.
 
-- [ ] **Step 3: Extend patterns for single-folder ownership and trash state**
+- [x] **Step 3: Extend patterns for single-folder ownership and trash state**
 
 Make these targeted changes in `src/lib/db/schema/patterns.ts`:
 
@@ -179,7 +179,7 @@ index("patterns_owner_trash_batch_idx").on(table.ownerId, table.trashBatchId),
 
 Export `folders` from `src/lib/db/schema/index.ts` and add `"folders"` to the test reset after `"patterns"`; the reset statement's existing `CASCADE` handles dependency order.
 
-- [ ] **Step 4: Generate and inspect the migration**
+- [x] **Step 4: Generate and inspect the migration**
 
 ```bash
 npx --yes --package=node@24 -c 'npm run db:generate -- --name melon_folders_bulk_trash'
@@ -194,7 +194,7 @@ Inspect that the migration:
 - adds both composite foreign keys and both partial name indexes;
 - does not drop or rewrite existing tables.
 
-- [ ] **Step 5: Add database constraint tests and migrate both database shapes**
+- [x] **Step 5: Add database constraint tests and migrate both database shapes**
 
 Extend the integration test to prove:
 
@@ -221,7 +221,7 @@ npx --yes --package=node@24 -c 'npm run typecheck'
 
 Expected: schema tests and typecheck PASS.
 
-- [ ] **Step 6: Commit the schema slice**
+- [x] **Step 6: Commit the schema slice**
 
 ```bash
 git add drizzle src/lib/db/schema src/test/database.ts
