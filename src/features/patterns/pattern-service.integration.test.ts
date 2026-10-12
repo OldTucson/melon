@@ -11,7 +11,9 @@ import { closeDatabase, db } from "@/lib/db/client";
 import {
   assets,
   changeLog,
+  folders,
   operations,
+  patternStatuses,
   patterns,
   patternTags,
   tags,
@@ -26,7 +28,10 @@ type SeedPattern = {
   originalFilename?: string;
   extension?: "psd" | "ai" | "jpg" | "jpeg" | "png" | "procreate";
   sizeBytes?: bigint;
-  status?: "draft" | "ready" | "trashed" | "deleted";
+  folderId?: string | null;
+  status?: (typeof patternStatuses)[number];
+  trashBatchId?: string | null;
+  preTrashStatus?: (typeof patternStatuses)[number] | null;
   previewStatus?: "pending" | "ready" | "unsupported" | "failed" | "manual";
   isFavorite?: boolean;
   createdAt?: Date;
@@ -51,6 +56,7 @@ const seedPattern = async (input: SeedPattern) => {
   await db.insert(patterns).values({
     id,
     ownerId: input.ownerId,
+    folderId: input.folderId,
     name: input.name,
     originalFilename: input.originalFilename ?? `${input.name}.${extension}`,
     extension,
@@ -58,8 +64,26 @@ const seedPattern = async (input: SeedPattern) => {
     status: input.status ?? "ready",
     previewStatus: input.previewStatus ?? "ready",
     isFavorite: input.isFavorite ?? false,
+    trashBatchId: input.trashBatchId,
+    preTrashStatus: input.preTrashStatus,
     createdAt: input.createdAt,
     updatedAt: input.updatedAt,
+  });
+  return id;
+};
+
+const seedFolder = async (input: {
+  ownerId: string;
+  name: string;
+  parentId?: string | null;
+}) => {
+  const id = randomUUID();
+  await db.insert(folders).values({
+    id,
+    ownerId: input.ownerId,
+    parentId: input.parentId,
+    name: input.name,
+    normalizedName: input.name.toLowerCase(),
   });
   return id;
 };
@@ -403,24 +427,124 @@ describe("pattern service", () => {
     ).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
   });
 
-  it("excludes trashed and deleted patterns from the ordinary list while keeping trashed detail readable", async () => {
-    const ready = await seedPattern({ ownerId: ownerA, name: "Ready" });
-    const trashed = await seedPattern({
+  it("uses exact library and trash status allowlists while keeping trashed detail readable", async () => {
+    const idsByStatus = new Map<(typeof patternStatuses)[number], string>();
+    const trashBatchId = randomUUID();
+    for (const status of patternStatuses) {
+      idsByStatus.set(
+        status,
+        await seedPattern({
+          ownerId: ownerA,
+          name: status,
+          status,
+          trashBatchId:
+            status === "trashed" || status === "deleting"
+              ? trashBatchId
+              : null,
+          preTrashStatus:
+            status === "trashed" || status === "deleting" ? "ready" : null,
+        }),
+      );
+    }
+
+    const library = await listPatterns({
       ownerId: ownerA,
-      name: "Trashed",
+      input: { sort: "name_asc" },
+    });
+    expect(library.items.map((item) => item.status).sort()).toEqual(
+      ["draft", "failed", "hashing", "processing", "ready", "uploading"],
+    );
+    const trash = await listPatterns({
+      ownerId: ownerA,
+      input: { scope: "trash", sort: "name_asc" },
+    });
+    expect(trash.items.map((item) => item.status)).toEqual([
+      "deleting",
+      "trashed",
+    ]);
+    expect(trash.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          folderId: null,
+          trashBatchId,
+          preTrashStatus: "ready",
+        }),
+      ]),
+    );
+    const trashed = idsByStatus.get("trashed")!;
+    await expect(
+      getPattern({ ownerId: ownerA, patternId: trashed }),
+    ).resolves.toMatchObject({
+      id: trashed,
       status: "trashed",
+      folderId: null,
+      trashBatchId,
+      preTrashStatus: "ready",
+    });
+  });
+
+  it("filters direct, descendant, unfiled, and foreign folder scopes exactly", async () => {
+    const parent = await seedFolder({ ownerId: ownerA, name: "Parent" });
+    const child = await seedFolder({
+      ownerId: ownerA,
+      name: "Child",
+      parentId: parent,
+    });
+    const grandchild = await seedFolder({
+      ownerId: ownerA,
+      name: "Grandchild",
+      parentId: child,
+    });
+    const unrelated = await seedFolder({
+      ownerId: ownerA,
+      name: "Unrelated",
+    });
+    const foreign = await seedFolder({ ownerId: ownerB, name: "Foreign" });
+    const parentPattern = await seedPattern({
+      ownerId: ownerA,
+      folderId: parent,
+      name: "Parent pattern",
+    });
+    const childPattern = await seedPattern({
+      ownerId: ownerA,
+      folderId: child,
+      name: "Child pattern",
+    });
+    const grandchildPattern = await seedPattern({
+      ownerId: ownerA,
+      folderId: grandchild,
+      name: "Grandchild pattern",
     });
     await seedPattern({
       ownerId: ownerA,
-      name: "Deleted",
-      status: "deleted",
+      folderId: unrelated,
+      name: "Unrelated pattern",
+    });
+    const unfiledPattern = await seedPattern({
+      ownerId: ownerA,
+      folderId: null,
+      name: "Unfiled pattern",
+    });
+    await seedPattern({
+      ownerId: ownerB,
+      folderId: foreign,
+      name: "Foreign pattern",
     });
 
-    const listed = await listPatterns({ ownerId: ownerA, input: {} });
-    expect(listed.items.map((item) => item.id)).toEqual([ready]);
+    const ids = async (input: Parameters<typeof listPatterns>[0]["input"]) =>
+      (await listPatterns({ ownerId: ownerA, input })).items
+        .map((item) => item.id)
+        .sort();
     await expect(
-      getPattern({ ownerId: ownerA, patternId: trashed }),
-    ).resolves.toMatchObject({ id: trashed, status: "trashed" });
+      ids({ folderId: parent, includeDescendants: true }),
+    ).resolves.toEqual(
+      [parentPattern, childPattern, grandchildPattern].sort(),
+    );
+    await expect(
+      ids({ folderId: parent, includeDescendants: false }),
+    ).resolves.toEqual([parentPattern]);
+    await expect(ids({ unfiled: true })).resolves.toEqual([unfiledPattern]);
+    await expect(ids({ folderId: foreign })).resolves.toEqual([]);
   });
 
   it("combines format, all/any tags, favorite, preview, deleted exclusion, sort, and limit safely", async () => {
@@ -684,5 +808,92 @@ describe("pattern service", () => {
       select count(*)::text as count from change_log where owner_id = ${ownerA}
     `);
     expect(rows[0]?.count).toBe("0");
+  });
+
+  it("rejects rename and favorite patches while permanent deletion is in progress", async () => {
+    const deleting = await seedPattern({
+      ownerId: ownerA,
+      name: "Deleting",
+      status: "deleting",
+      trashBatchId: randomUUID(),
+      preTrashStatus: "ready",
+    });
+
+    for (const patch of [
+      { version: 0, name: "Renamed" },
+      { version: 0, isFavorite: true },
+    ]) {
+      await expect(
+        updatePattern({
+          ownerId: ownerA,
+          patternId: deleting,
+          operationId: randomUUID(),
+          patch,
+        }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
+    }
+
+    const [stored] = await db
+      .select({ name: patterns.name, isFavorite: patterns.isFavorite })
+      .from(patterns)
+      .where(eq(patterns.id, deleting));
+    expect(stored).toEqual({ name: "Deleting", isFavorite: false });
+  });
+
+  it("reports a state conflict when deletion starts after the patch row is locked", async () => {
+    const patternId = await seedPattern({
+      ownerId: ownerA,
+      name: "Race target",
+    });
+    const identifierSuffix = randomUUID().replaceAll("-", "");
+    const functionName = `melon_test_mark_pattern_deleting_${identifierSuffix}`;
+    const triggerName = `melon_test_mark_pattern_deleting_${identifierSuffix}`;
+    await db.execute(sql.raw(`
+      create function "${functionName}"()
+      returns trigger
+      language plpgsql
+      as $$
+      begin
+        update patterns
+        set status = 'deleting'::pattern_status
+        where owner_id = new.id and name = 'Race target';
+        return new;
+      end
+      $$
+    `));
+    await db.execute(sql.raw(`
+      create trigger "${triggerName}"
+      after update of sync_seq on users
+      for each row execute function "${functionName}"()
+    `));
+
+    try {
+      await expect(
+        updatePattern({
+          ownerId: ownerA,
+          patternId,
+          operationId: randomUUID(),
+          patch: { version: 0, name: "Should not persist" },
+        }),
+      ).rejects.toMatchObject({
+        code: "PATTERN_STATE_CHANGED",
+        status: 409,
+      });
+    } finally {
+      await db.execute(
+        sql.raw(`drop trigger "${triggerName}" on users`),
+      );
+      await db.execute(
+        sql.raw(`drop function "${functionName}"()`),
+      );
+    }
+
+    await expect(
+      getPattern({ ownerId: ownerA, patternId }),
+    ).resolves.toMatchObject({
+      name: "Race target",
+      status: "ready",
+      version: 0,
+    });
   });
 });

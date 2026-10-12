@@ -24,7 +24,11 @@ const seedUser = async (email: string) => {
   return id;
 };
 
-const seedPattern = async (ownerId: string, name: string) => {
+const seedPattern = async (
+  ownerId: string,
+  name: string,
+  status: "ready" | "deleting" = "ready",
+) => {
   const id = randomUUID();
   await db.insert(patterns).values({
     id,
@@ -33,7 +37,7 @@ const seedPattern = async (ownerId: string, name: string) => {
     originalFilename: `${name}.psd`,
     extension: "psd",
     sizeBytes: 1024n,
-    status: "ready",
+    status,
   });
   return id;
 };
@@ -103,5 +107,46 @@ describe("pattern tag read service", () => {
         listPatternTags({ ownerId: ownerA, patternId }),
       ).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
     }
+  });
+
+  it("rejects tag additions and removals while permanent deletion is in progress", async () => {
+    const removable = await seedPattern(ownerA, "Removable");
+    const deleting = await seedPattern(ownerA, "Deleting", "deleting");
+    const tag = await createTag({
+      ownerId: ownerA,
+      operationId: randomUUID(),
+      name: "Protected",
+      colorToken: "red",
+    });
+    const relation = await addTagToPattern({
+      ownerId: ownerA,
+      patternId: removable,
+      tagId: tag.id,
+      operationId: randomUUID(),
+    });
+    await db
+      .update(patterns)
+      .set({ status: "deleting" })
+      .where(eq(patterns.id, removable));
+
+    await expect(
+      addTagToPattern({
+        ownerId: ownerA,
+        patternId: deleting,
+        tagId: tag.id,
+        operationId: randomUUID(),
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
+    await expect(
+      removeTagFromPattern({
+        ownerId: ownerA,
+        patternId: removable,
+        tagId: tag.id,
+        operationId: randomUUID(),
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
+    await expect(
+      listPatternTags({ ownerId: ownerA, patternId: removable }),
+    ).resolves.toEqual({ items: [relation] });
   });
 });

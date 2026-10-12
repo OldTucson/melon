@@ -16,6 +16,7 @@ import {
 
 const tagA = "00000000-0000-4000-8000-000000000001";
 const tagB = "00000000-0000-4000-8000-000000000002";
+const folderA = "20000000-0000-4000-8000-000000000001";
 const ownerA = "10000000-0000-4000-8000-000000000001";
 const ownerB = "10000000-0000-4000-8000-000000000002";
 
@@ -79,6 +80,49 @@ describe("library query state", () => {
     expect(toPatternQuery(state).untagged).toBe(true);
     expect(serializeLibrarySearchParams(state).toString()).toBe(
       "untagged=true",
+    );
+  });
+
+  it("round-trips folder scope and preserves explicit descendant exclusion", () => {
+    const state = parseLibrarySearchParams(
+      new URLSearchParams(
+        `folderId=${folderA}&includeDescendants=false&scope=trash`,
+      ),
+    );
+
+    expect(toPatternQuery(state)).toMatchObject({
+      folderId: folderA,
+      includeDescendants: false,
+      scope: "trash",
+    });
+    expect(serializeLibrarySearchParams(state).toString()).toBe(
+      `folderId=${folderA}&includeDescendants=false&scope=trash`,
+    );
+  });
+
+  it("lets the unfiled view exclude a stale folder selection", () => {
+    const state = parseLibrarySearchParams(
+      new URLSearchParams(`folderId=${folderA}&unfiled=true`),
+    );
+
+    expect(state).toMatchObject({ unfiled: "true" });
+    expect(state).not.toHaveProperty("folderId");
+    expect(toPatternQuery(state)).toMatchObject({ unfiled: true });
+    expect(serializeLibrarySearchParams(state).toString()).toBe("unfiled=true");
+  });
+
+  it("omits folder query defaults while retaining explicit false", () => {
+    const defaults = patternQuerySchema.parse({ folderId: folderA });
+    const direct = patternQuerySchema.parse({
+      folderId: folderA,
+      includeDescendants: false,
+    });
+
+    expect(serializeLibrarySearchParams(defaults).toString()).toBe(
+      `folderId=${folderA}`,
+    );
+    expect(serializeLibrarySearchParams(direct).toString()).toBe(
+      `folderId=${folderA}&includeDescendants=false`,
     );
   });
 

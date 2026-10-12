@@ -12,6 +12,10 @@ export type LibrarySearchState = {
   untagged?: string | boolean;
   favorite?: string | boolean;
   previewStatus?: string;
+  folderId?: string;
+  unfiled?: string | boolean;
+  includeDescendants: string | boolean;
+  scope: string;
   sort: string;
   cursor?: string;
   limit: string | number;
@@ -43,6 +47,7 @@ export function parseLibrarySearchParams(
     ...searchParams.getAll("tagIds"),
     ...searchParams.getAll("tag"),
   ];
+  const unfiled = scalar("unfiled");
 
   return {
     q: scalar("q"),
@@ -52,6 +57,10 @@ export function parseLibrarySearchParams(
     untagged: scalar("untagged"),
     favorite: scalar("favorite"),
     previewStatus: scalar("previewStatus"),
+    ...(unfiled === "true" ? {} : { folderId: scalar("folderId") }),
+    unfiled,
+    includeDescendants: scalar("includeDescendants") ?? true,
+    scope: scalar("scope") ?? "library",
     sort: scalar("sort") ?? "updated_desc",
     cursor: scalar("cursor"),
     limit: scalar("limit") ?? 50,
@@ -86,6 +95,16 @@ export function serializeLibrarySearchParams(
     result.set("favorite", String(state.favorite));
   }
   if (state.previewStatus) result.set("previewStatus", state.previewStatus);
+  if (state.unfiled !== true && state.unfiled !== "true" && state.folderId) {
+    result.set("folderId", state.folderId);
+  }
+  if (state.unfiled !== undefined) {
+    result.set("unfiled", String(state.unfiled));
+  }
+  if (state.includeDescendants === false || state.includeDescendants === "false") {
+    result.set("includeDescendants", "false");
+  }
+  if (state.scope !== "library") result.set("scope", state.scope);
   if (state.sort !== "updated_desc") result.set("sort", state.sort);
   if (state.cursor) result.set("cursor", state.cursor);
   if (Number(state.limit) !== 50) result.set("limit", String(state.limit));

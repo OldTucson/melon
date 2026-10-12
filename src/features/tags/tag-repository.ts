@@ -7,6 +7,7 @@ import {
   eq,
   getTableColumns,
   ne,
+  notInArray,
   sql,
 } from "drizzle-orm";
 
@@ -207,7 +208,7 @@ export async function lockTaggablePattern(
       and(
         eq(patterns.ownerId, ownerId),
         eq(patterns.id, patternId),
-        ne(patterns.status, "deleted"),
+        notInArray(patterns.status, ["deleting", "deleted"]),
       ),
     )
     .limit(1)

@@ -9,6 +9,7 @@ import {
   gt,
   getTableColumns,
   inArray,
+  isNull,
   lt,
   ne,
   notExists,
@@ -20,7 +21,7 @@ import {
 import { alias } from "drizzle-orm/pg-core";
 
 import { db, type DbTransaction } from "@/lib/db/client";
-import { assets, patterns, patternTags } from "@/lib/db/schema";
+import { assets, folders, patterns, patternTags } from "@/lib/db/schema";
 
 import type { PatternPatch, PatternQuery } from "./contracts";
 import type { PatternCursor } from "./pattern-cursor";
@@ -35,6 +36,15 @@ export type PatternRowWithAssets = PatternRow & {
 const previewAssets = alias(assets, "preview_assets");
 const thumbnailAssets = alias(assets, "thumbnail_assets");
 const sourceAssets = alias(assets, "source_assets");
+const libraryStatuses: PatternRow["status"][] = [
+  "draft",
+  "hashing",
+  "uploading",
+  "processing",
+  "ready",
+  "failed",
+];
+const trashStatuses: PatternRow["status"][] = ["trashed", "deleting"];
 
 const escapeLike = (value: string) => value.replace(/[\\%_]/g, "\\$&");
 
@@ -91,8 +101,39 @@ export async function listPatternRows(
 ) {
   const predicates: SQL[] = [
     eq(patterns.ownerId, ownerId),
-    notInArray(patterns.status, ["trashed", "deleted"]),
+    inArray(
+      patterns.status,
+      query.scope === "trash" ? trashStatuses : libraryStatuses,
+    ),
   ];
+
+  if (query.unfiled) {
+    predicates.push(isNull(patterns.folderId));
+  } else if (query.folderId) {
+    if (query.includeDescendants) {
+      predicates.push(sql`${patterns.folderId} in (
+        with recursive folder_scope(owner_id, id) as (
+          select ${folders.ownerId}, ${folders.id}
+          from ${folders}
+          where ${folders.ownerId} = ${ownerId}
+            and ${folders.id} = ${query.folderId}
+          union all
+          select child.owner_id, child.id
+          from ${folders} as child
+          inner join folder_scope as parent
+            on child.owner_id = parent.owner_id
+           and child.parent_id = parent.id
+          where child.owner_id = ${ownerId}
+            and parent.owner_id = ${ownerId}
+        )
+        select id
+        from folder_scope
+        where owner_id = ${ownerId}
+      )`);
+    } else {
+      predicates.push(eq(patterns.folderId, query.folderId));
+    }
+  }
 
   if (query.q) {
     const contains = `%${escapeLike(query.q)}%`;
@@ -259,7 +300,7 @@ export async function lockPatternRow(
       and(
         eq(patterns.ownerId, ownerId),
         eq(patterns.id, patternId),
-        ne(patterns.status, "deleted"),
+        notInArray(patterns.status, ["deleting", "deleted"]),
       ),
     )
     .limit(1)
@@ -293,7 +334,7 @@ export async function updatePatternRow(
         eq(patterns.ownerId, ownerId),
         eq(patterns.id, input.patternId),
         eq(patterns.version, input.patch.version),
-        ne(patterns.status, "deleted"),
+        notInArray(patterns.status, ["deleting", "deleted"]),
       ),
     )
     .returning();

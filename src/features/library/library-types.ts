@@ -1,5 +1,8 @@
 import type { PatternQuery } from "@/features/patterns/contracts";
 import type { TagColorToken } from "@/features/tags/contracts";
+import type { patterns } from "@/lib/db/schema";
+
+type PatternStatus = (typeof patterns.$inferSelect)["status"];
 
 export type PatternItem = {
   id: string;
@@ -10,7 +13,10 @@ export type PatternItem = {
   detectedMimeType: string | null;
   sizeBytes: string;
   contentHash: string | null;
-  status: string;
+  status: PatternStatus;
+  folderId: string | null;
+  trashBatchId: string | null;
+  preTrashStatus: PatternStatus | null;
   previewStatus: "pending" | "ready" | "unsupported" | "failed" | "manual";
   previewAssetId?: string | null;
   thumbnailAssetId?: string | null;

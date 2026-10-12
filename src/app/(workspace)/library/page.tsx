@@ -6,10 +6,9 @@ import { requireUser } from "@/features/auth/session";
 import { LibraryView } from "@/features/library/library-view";
 import type { PatternPage } from "@/features/library/library-types";
 import {
-  parseLibrarySearchParams,
   searchParamsRecordToURLSearchParams,
-  toPatternQuery,
 } from "@/features/library/query-state";
+import { parsePatternSearchParams } from "@/features/patterns/contracts";
 import { listPatterns } from "@/features/patterns/pattern-service";
 import { createQueryClient } from "@/lib/query/client";
 import { queryKeys } from "@/lib/query/keys";
@@ -25,7 +24,8 @@ export default async function LibraryPage({
   );
   let query;
   try {
-    query = toPatternQuery(parseLibrarySearchParams(rawSearchParams));
+    query = parsePatternSearchParams(rawSearchParams);
+    if (query.scope === "trash") redirect("/library");
   } catch (error) {
     if (error instanceof ZodError) redirect("/library");
     throw error;
