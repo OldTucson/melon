@@ -524,7 +524,7 @@ git commit -m "feat: expose folder APIs"
 - Modify: `src/features/library/library-types.ts`
 - Modify: `src/app/(workspace)/library/page.tsx`
 
-- [ ] **Step 1: Write failing repository/service tests**
+- [x] **Step 1: Write failing repository/service tests**
 
 Seed a parent, child, unrelated folder, unfiled patterns, and every pattern status. Assert:
 
@@ -540,7 +540,7 @@ expect(allLibraryItems).not.toContainEqual(expect.objectContaining({ status: "de
 
 Add query-state tests proving round-trip serialization for `folderId` and `includeDescendants=false`, and proving `unfiled=true` excludes `folderId`.
 
-- [ ] **Step 2: Replace negative status filtering with allowlists**
+- [x] **Step 2: Replace negative status filtering with allowlists**
 
 In `listPatternRows`, replace:
 
@@ -558,7 +558,7 @@ query.scope === "trash"
 
 Use `eq(patterns.folderId, query.folderId)` for direct scope and a recursive folder CTE for descendants. `unfiled=true` adds `isNull(patterns.folderId)`. Resolve folder scope with `ownerId` in every recursive term so another tenant's UUID can never broaden the query.
 
-- [ ] **Step 3: Return location and trash metadata in the DTO**
+- [x] **Step 3: Return location and trash metadata in the DTO**
 
 Add these exact properties in `toPatternDto` and `PatternItem`:
 
@@ -570,11 +570,11 @@ preTrashStatus: row.preTrashStatus,
 
 Type `status` as the schema-derived pattern status union rather than generic `string`. Keep OSS URLs out of the DTO.
 
-- [ ] **Step 4: Close existing mutation paths during permanent deletion**
+- [x] **Step 4: Close existing mutation paths during permanent deletion**
 
 Add regression tests proving a `deleting` pattern cannot be renamed, favorited, or have tag relations added/removed. Keep trashed detail readable for the trash service, but change write predicates from “not deleted” to “not deleting and not deleted”. Return `PATTERN_STATE_CHANGED` for a pattern patch that was locked before its state changed; tag relation endpoints retain their neutral `NOT_FOUND` behavior.
 
-- [ ] **Step 5: Wire page parsing and verify**
+- [x] **Step 5: Wire page parsing and verify**
 
 The server page parses the new search params through `parsePatternSearchParams`. The client serializer omits defaults (`includeDescendants=true`, `scope=library`) to keep URLs concise, but retains explicit `false`.
 
