@@ -1010,6 +1010,68 @@ describe("pattern service", () => {
     expect(foreignRow).toEqual({ name: "Foreign", version: 0 });
   });
 
+  it("normalizes uppercase pattern identities before idempotent replay", async () => {
+    const patternId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    await seedPattern({ id: patternId, ownerId: ownerA, name: "Before" });
+    const operationId = randomUUID();
+    const patch = { version: 0, name: "After" };
+    const uppercasePatternId = patternId.toUpperCase();
+
+    const first = await updatePattern({
+      ownerId: ownerA,
+      patternId: uppercasePatternId,
+      operationId,
+      patch,
+    });
+    expect(first).toMatchObject({ id: patternId, name: "After", version: 1 });
+
+    const readMutationState = async () => {
+      const [pattern] = await db
+        .select({
+          name: patterns.name,
+          version: patterns.version,
+          changeSeq: patterns.changeSeq,
+          updatedAt: patterns.updatedAt,
+        })
+        .from(patterns)
+        .where(and(eq(patterns.ownerId, ownerA), eq(patterns.id, patternId)));
+      const [owner] = await db
+        .select({ syncSeq: users.syncSeq })
+        .from(users)
+        .where(eq(users.id, ownerA));
+      const logRows = await db
+        .select()
+        .from(changeLog)
+        .where(eq(changeLog.ownerId, ownerA));
+      const operationRows = await db
+        .select()
+        .from(operations)
+        .where(eq(operations.ownerId, ownerA));
+      return { pattern, owner, logRows, operationRows };
+    };
+    const afterFirst = await readMutationState();
+
+    await expect(
+      updatePattern({
+        ownerId: ownerA,
+        patternId: uppercasePatternId,
+        operationId,
+        patch,
+      }),
+    ).resolves.toEqual(first);
+    const afterReplay = await readMutationState();
+
+    expect(afterReplay).toEqual(afterFirst);
+    expect(afterReplay.pattern).toMatchObject({
+      name: "After",
+      version: 1,
+      changeSeq: 1n,
+    });
+    expect(afterReplay.owner?.syncSeq).toBe(1n);
+    expect(afterReplay.logRows).toHaveLength(1);
+    expect(afterReplay.operationRows).toHaveLength(1);
+  });
+
   it("normalizes legacy pattern update replays without writing again", async () => {
     const patternId = await seedPattern({
       ownerId: ownerA,

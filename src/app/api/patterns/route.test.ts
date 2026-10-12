@@ -165,9 +165,11 @@ describe("pattern Route Handlers", () => {
 
   it("passes only the authenticated owner and validated patch envelope", async () => {
     const operationId = randomUUID();
+    const uppercasePatternId = "ABCDEFAB-CDEF-4ABC-8DEF-ABCDEFABCDEF";
+    const normalizedPatternId = uppercasePatternId.toLowerCase();
     const { PATCH } = await import("./[patternId]/route");
     const response = await PATCH(
-      new Request(`http://localhost/api/patterns/${patternId}`, {
+      new Request(`http://localhost/api/patterns/${uppercasePatternId}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -180,14 +182,14 @@ describe("pattern Route Handlers", () => {
           },
         }),
       }),
-      { params: Promise.resolve({ patternId }) },
+      { params: Promise.resolve({ patternId: uppercasePatternId }) },
     );
 
     expect(response.status).toBe(200);
     expectRequestId(response);
     expect(mocks.updatePattern).toHaveBeenCalledWith({
       ownerId,
-      patternId,
+      patternId: normalizedPatternId,
       operationId,
       patch: { version: 0, name: "Renamed" },
     });

@@ -38,7 +38,7 @@ import {
 } from "./pattern-repository";
 
 const mutationIdentitySchema = z.object({
-  patternId: z.string().uuid(),
+  patternId: normalizedUuidSchema,
   operationId: publicOperationIdSchema,
 });
 
