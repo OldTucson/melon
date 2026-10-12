@@ -25,6 +25,14 @@ export type FolderCountRow = FolderRow & {
   recursivePatternCount: number;
 };
 
+export type FolderDeleteImpactRow = {
+  folderCount: number;
+  patternCount: number;
+  alreadyTrashedFolderCount: number;
+  alreadyTrashedPatternCount: number;
+  hasDeletingEntities: boolean;
+};
+
 export type InsertFolderInput = {
   id: string;
   parentId: string | null;
@@ -64,6 +72,14 @@ type RawFolderCountRow = {
   updatedAt: Date | string;
   directPatternCount: bigint | number | string;
   recursivePatternCount: bigint | number | string;
+};
+
+type RawFolderDeleteImpactRow = {
+  folderCount: bigint | number | string;
+  patternCount: bigint | number | string;
+  alreadyTrashedFolderCount: bigint | number | string;
+  alreadyTrashedPatternCount: bigint | number | string;
+  hasDeletingEntities: boolean;
 };
 
 type FolderQueryExecutor = Pick<DbTransaction, "execute">;
@@ -185,6 +201,90 @@ export function listActiveFolderRows(
   options: ListActiveFolderRowsOptions = {},
 ) {
   return queryActiveFolderRows(options.tx ?? db, ownerId, options.rootId);
+}
+
+export async function getFolderDeleteImpactRow(
+  ownerId: string,
+  folderId: string,
+): Promise<FolderDeleteImpactRow | undefined> {
+  const [row] = await db.execute<RawFolderDeleteImpactRow>(sql`
+    with recursive subtree (owner_id, id, status) as (
+      select root.owner_id, root.id, root.status
+      from folders root
+      where root.owner_id = ${ownerId}
+        and root.id = ${folderId}
+        and root.status in (
+          'active'::folder_status,
+          'trashed'::folder_status,
+          'deleting'::folder_status
+        )
+
+      union all
+
+      select child.owner_id, child.id, child.status
+      from subtree parent
+      join folders child
+        on child.owner_id = ${ownerId}
+       and child.owner_id = parent.owner_id
+       and child.parent_id = parent.id
+       and child.status in (
+         'active'::folder_status,
+         'trashed'::folder_status,
+         'deleting'::folder_status
+       )
+      where parent.owner_id = ${ownerId}
+    ), folder_impact as (
+      select
+        count(*) as "folderCount",
+        count(*) filter (
+          where subtree.status = 'trashed'::folder_status
+        ) as "alreadyTrashedFolderCount",
+        coalesce(
+          bool_or(subtree.status = 'deleting'::folder_status),
+          false
+        ) as "hasDeletingFolders"
+      from subtree
+      where subtree.owner_id = ${ownerId}
+    ), pattern_impact as (
+      select
+        count(pattern.id) as "patternCount",
+        count(pattern.id) filter (
+          where pattern.status = 'trashed'::pattern_status
+        ) as "alreadyTrashedPatternCount",
+        coalesce(
+          bool_or(pattern.status = 'deleting'::pattern_status),
+          false
+        ) as "hasDeletingPatterns"
+      from subtree
+      join patterns pattern
+        on pattern.owner_id = ${ownerId}
+       and pattern.owner_id = subtree.owner_id
+       and pattern.folder_id = subtree.id
+       and pattern.status <> 'deleted'::pattern_status
+      where subtree.owner_id = ${ownerId}
+    )
+    select
+      folder_impact."folderCount",
+      pattern_impact."patternCount",
+      folder_impact."alreadyTrashedFolderCount",
+      pattern_impact."alreadyTrashedPatternCount",
+      (
+        folder_impact."hasDeletingFolders"
+        or pattern_impact."hasDeletingPatterns"
+      ) as "hasDeletingEntities"
+    from folder_impact
+    cross join pattern_impact
+    where folder_impact."folderCount" > 0
+  `);
+
+  if (!row) return undefined;
+  return {
+    folderCount: Number(row.folderCount),
+    patternCount: Number(row.patternCount),
+    alreadyTrashedFolderCount: Number(row.alreadyTrashedFolderCount),
+    alreadyTrashedPatternCount: Number(row.alreadyTrashedPatternCount),
+    hasDeletingEntities: row.hasDeletingEntities,
+  };
 }
 
 export async function lockFolderRow(

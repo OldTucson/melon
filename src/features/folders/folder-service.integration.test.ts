@@ -6,6 +6,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import * as folderRepository from "@/features/folders/folder-repository";
 import {
   createFolder,
+  getFolderDeleteImpact,
   listFolders,
   renameFolder,
 } from "@/features/folders/folder-service";
@@ -150,11 +151,173 @@ describe("folder service", () => {
 
   it("keeps the folder repository runtime API focused", () => {
     expect(Object.keys(folderRepository).sort()).toEqual([
+      "getFolderDeleteImpactRow",
       "insertFolderRow",
       "listActiveFolderRows",
       "lockFolderRow",
       "renameFolderRow",
     ]);
+  });
+
+  it("previews the full non-deleted subtree with status counts and no writes", async () => {
+    const root = await seedFolder({ ownerId: ownerA, name: "Impact root" });
+    const activeChild = await seedFolder({
+      ownerId: ownerA,
+      parentId: root,
+      name: "Active child",
+    });
+    const trashedGrandchild = await seedFolder({
+      ownerId: ownerA,
+      parentId: activeChild,
+      name: "Trashed grandchild",
+      status: "trashed",
+    });
+    const deletingChild = await seedFolder({
+      ownerId: ownerA,
+      parentId: root,
+      name: "Deleting child",
+      status: "deleting",
+    });
+    const deletedBoundary = await seedFolder({
+      ownerId: ownerA,
+      parentId: root,
+      name: "Deleted boundary",
+      status: "deleted",
+    });
+    const hiddenBelowDeleted = await seedFolder({
+      ownerId: ownerA,
+      parentId: deletedBoundary,
+      name: "Hidden below deleted",
+    });
+    const unrelated = await seedFolder({
+      ownerId: ownerA,
+      name: "Unrelated impact folder",
+    });
+    const foreign = await seedFolder({
+      ownerId: ownerB,
+      name: "Foreign impact folder",
+    });
+
+    await seedPattern({ ownerId: ownerA, folderId: root, status: "ready" });
+    await seedPattern({ ownerId: ownerA, folderId: root, status: "trashed" });
+    await seedPattern({
+      ownerId: ownerA,
+      folderId: activeChild,
+      status: "deleting",
+    });
+    await seedPattern({
+      ownerId: ownerA,
+      folderId: trashedGrandchild,
+      status: "trashed",
+    });
+    await seedPattern({
+      ownerId: ownerA,
+      folderId: deletingChild,
+      status: "failed",
+    });
+    await seedPattern({ ownerId: ownerA, folderId: root, status: "deleted" });
+    await seedPattern({ ownerId: ownerA, folderId: deletedBoundary });
+    await seedPattern({ ownerId: ownerA, folderId: hiddenBelowDeleted });
+    await seedPattern({ ownerId: ownerA, folderId: unrelated });
+    await seedPattern({ ownerId: ownerB, folderId: foreign });
+
+    const foldersBefore = await db
+      .select()
+      .from(folders)
+      .where(eq(folders.ownerId, ownerA))
+      .orderBy(asc(folders.id));
+    const patternsBefore = await db
+      .select()
+      .from(patterns)
+      .where(eq(patterns.ownerId, ownerA))
+      .orderBy(asc(patterns.id));
+
+    await expect(
+      getFolderDeleteImpact({ ownerId: ownerA, folderId: root }),
+    ).resolves.toEqual({
+      folderCount: 4,
+      patternCount: 5,
+      alreadyTrashedFolderCount: 1,
+      alreadyTrashedPatternCount: 2,
+      hasDeletingEntities: true,
+    });
+
+    await expect(
+      db
+        .select()
+        .from(folders)
+        .where(eq(folders.ownerId, ownerA))
+        .orderBy(asc(folders.id)),
+    ).resolves.toEqual(foldersBefore);
+    await expect(
+      db
+        .select()
+        .from(patterns)
+        .where(eq(patterns.ownerId, ownerA))
+        .orderBy(asc(patterns.id)),
+    ).resolves.toEqual(patternsBefore);
+    expect(await ownerChanges(ownerA)).toEqual([]);
+    expect(await ownerSyncSeq(ownerA)).toBe(0n);
+  });
+
+  it("previews trashed and deleting roots while rejecting unavailable roots", async () => {
+    const trashedRoot = await seedFolder({
+      ownerId: ownerA,
+      name: "Trashed root impact",
+      status: "trashed",
+    });
+    const deletingRoot = await seedFolder({
+      ownerId: ownerA,
+      name: "Deleting root impact",
+      status: "deleting",
+    });
+    const deletedRoot = await seedFolder({
+      ownerId: ownerA,
+      name: "Deleted root impact",
+      status: "deleted",
+    });
+    const foreignRoot = await seedFolder({
+      ownerId: ownerB,
+      name: "Foreign root impact",
+    });
+    await seedPattern({
+      ownerId: ownerA,
+      folderId: trashedRoot,
+      status: "trashed",
+    });
+    await seedPattern({
+      ownerId: ownerA,
+      folderId: deletingRoot,
+      status: "ready",
+    });
+
+    await expect(
+      getFolderDeleteImpact({ ownerId: ownerA, folderId: trashedRoot }),
+    ).resolves.toEqual({
+      folderCount: 1,
+      patternCount: 1,
+      alreadyTrashedFolderCount: 1,
+      alreadyTrashedPatternCount: 1,
+      hasDeletingEntities: false,
+    });
+    await expect(
+      getFolderDeleteImpact({ ownerId: ownerA, folderId: deletingRoot }),
+    ).resolves.toEqual({
+      folderCount: 1,
+      patternCount: 1,
+      alreadyTrashedFolderCount: 0,
+      alreadyTrashedPatternCount: 0,
+      hasDeletingEntities: true,
+    });
+
+    for (const folderId of [deletedRoot, foreignRoot, randomUUID()]) {
+      await expect(
+        getFolderDeleteImpact({ ownerId: ownerA, folderId }),
+      ).rejects.toMatchObject({ code: "FOLDER_NOT_FOUND", status: 404 });
+    }
+    await expect(
+      getFolderDeleteImpact({ ownerId: ownerA, folderId: "not-a-uuid" }),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR", status: 400 });
   });
 
   it("hydrates one target folder without returning owner-wide rows", async () => {

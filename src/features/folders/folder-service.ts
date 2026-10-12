@@ -21,6 +21,7 @@ import {
   parseFolderName,
 } from "./contracts";
 import {
+  getFolderDeleteImpactRow,
   insertFolderRow,
   listActiveFolderRows,
   lockFolderRow,
@@ -41,6 +42,14 @@ export type RenameFolderInput = {
   operationId: string;
   name: string;
   version: number;
+};
+
+export type FolderDeleteImpact = {
+  folderCount: number;
+  patternCount: number;
+  alreadyTrashedFolderCount: number;
+  alreadyTrashedPatternCount: number;
+  hasDeletingEntities: boolean;
 };
 
 const renameIdentitySchema = z.object({
@@ -148,6 +157,21 @@ async function requireFolderDto(
 
 export async function listFolders(input: { ownerId: string }) {
   return (await listActiveFolderRows(input.ownerId)).map(toFolderDto);
+}
+
+export async function getFolderDeleteImpact(input: {
+  ownerId: string;
+  folderId: string;
+}): Promise<FolderDeleteImpact> {
+  const identity = parseOrValidationError(() =>
+    renameIdentitySchema.parse({ folderId: input.folderId }),
+  );
+  const impact = await getFolderDeleteImpactRow(
+    input.ownerId,
+    identity.folderId,
+  );
+  if (!impact) folderNotFound();
+  return impact;
 }
 
 export async function createFolder(input: CreateFolderInput) {
