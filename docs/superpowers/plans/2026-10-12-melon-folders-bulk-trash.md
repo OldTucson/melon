@@ -241,7 +241,7 @@ git commit -m "feat: add folder and trash data model"
 - Create: `src/features/patterns/contracts.test.ts`
 - Modify: `src/lib/http/app-error.ts`
 
-- [ ] **Step 1: Write failing contract tests**
+- [x] **Step 1: Write failing contract tests**
 
 Cover Unicode normalization, name bounds, query exclusivity, unique IDs, the 100-item limit, and action-specific payload fields:
 
@@ -274,7 +274,7 @@ npx --yes --package=node@24 -c 'npm test -- src/features/folders/contracts.test.
 
 Expected: FAIL because the new schemas and query fields are missing.
 
-- [ ] **Step 2: Implement exact folder schemas**
+- [x] **Step 2: Implement exact folder schemas**
 
 ```ts
 export const folderNameInputSchema = z.string().trim().min(1).max(80).refine(hasNoNullByte);
@@ -300,7 +300,7 @@ export const folderTrashMutationSchema = z.object({
 });
 ```
 
-- [ ] **Step 3: Implement the discriminated batch union**
+- [x] **Step 3: Implement the discriminated batch union**
 
 ```ts
 const patternRefSchema = z.object({
@@ -325,7 +325,7 @@ Export `parsePatternBatchMutation(input: unknown)` as the only public parser. It
 
 Add restore and purge schemas that require a new `operationId`, unique pattern IDs for ordinary pattern actions, and only `trashBatchId` for folder-batch actions. Give their array parsers the same explicit batch-limit mapping.
 
-- [ ] **Step 4: Extend the pattern query contract explicitly**
+- [x] **Step 4: Extend the pattern query contract explicitly**
 
 Add:
 
@@ -338,7 +338,7 @@ scope: z.enum(["library", "trash"]).default("library"),
 
 Refine the object so `folderId` and `unfiled=true` are mutually exclusive. Parse and serialize all four values; `scope=trash` must not be used by the library page because `/trash` has its own grouped read model.
 
-- [ ] **Step 5: Add public error codes and verify**
+- [x] **Step 5: Add public error codes and verify**
 
 Add these exact `AppErrorCode` values:
 
