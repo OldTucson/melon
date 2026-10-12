@@ -154,6 +154,7 @@ describe("folder service", () => {
       "getFolderDeleteImpactRow",
       "insertFolderRow",
       "listActiveFolderRows",
+      "lockFolderHierarchy",
       "lockFolderRow",
       "renameFolderRow",
     ]);

@@ -84,6 +84,15 @@ type RawFolderDeleteImpactRow = {
 
 type FolderQueryExecutor = Pick<DbTransaction, "execute">;
 
+export async function lockFolderHierarchy(
+  ownerId: string,
+  tx: DbTransaction,
+) {
+  await tx.execute(
+    sql`select pg_advisory_xact_lock(hashtextextended(${ownerId}, 0))`,
+  );
+}
+
 const toDate = (value: Date | string) =>
   value instanceof Date ? value : new Date(value);
 

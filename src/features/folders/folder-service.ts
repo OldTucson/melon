@@ -24,6 +24,7 @@ import {
   getFolderDeleteImpactRow,
   insertFolderRow,
   listActiveFolderRows,
+  lockFolderHierarchy,
   lockFolderRow,
   renameFolderRow,
   type FolderCountRow,
@@ -201,6 +202,7 @@ export async function createFolder(input: CreateFolderInput) {
       if (operation.state === "mismatch") operationIdReused();
 
       if (create.parentId !== null) {
+        await lockFolderHierarchy(input.ownerId, tx);
         const parent = await lockFolderRow(input.ownerId, tx, create.parentId);
         if (!parent) folderNotFound();
         if (parent.status !== "active") folderNotActive();

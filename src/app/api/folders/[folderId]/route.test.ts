@@ -7,6 +7,7 @@ import { AppError } from "@/lib/http/app-error";
 const mocks = vi.hoisted(() => ({
   requireUser: vi.fn(),
   renameFolder: vi.fn(),
+  trashFolderTree: vi.fn(),
 }));
 
 vi.mock("@/features/auth/session", () => ({
@@ -14,6 +15,9 @@ vi.mock("@/features/auth/session", () => ({
 }));
 vi.mock("@/features/folders/folder-service", () => ({
   renameFolder: mocks.renameFolder,
+}));
+vi.mock("@/features/folders/folder-trash-service", () => ({
+  trashFolderTree: mocks.trashFolderTree,
 }));
 vi.mock("@/lib/env/server", () => ({
   getServerEnv: () => ({ APP_ORIGIN: "http://localhost:3000" }),
@@ -31,6 +35,13 @@ describe("folder item Route Handlers", () => {
       id: folderId,
       name: "Caf\u00e9",
       version: 2,
+    });
+    mocks.trashFolderTree.mockResolvedValue({
+      state: "trashed",
+      trashBatchId: "40000000-0000-4000-8000-000000000004",
+      rootFolderId: folderId,
+      folderCount: 3,
+      patternCount: 4,
     });
   });
 
@@ -65,7 +76,126 @@ describe("folder item Route Handlers", () => {
     expect(mocks.renameFolder).not.toHaveBeenCalledWith(
       expect.objectContaining({ ownerId: attackerId }),
     );
-    expect("DELETE" in route).toBe(false);
+  });
+
+  it("trashes the path folder using only the authenticated owner", async () => {
+    const operationId = "40000000-0000-4000-8000-000000000004";
+    const route = await import("./route");
+    const response = await route.DELETE(
+      new Request(`${ORIGIN}/api/folders/${folderId}`, {
+        method: "DELETE",
+        headers: { "content-type": "application/json", origin: ORIGIN },
+        body: JSON.stringify({
+          operationId: operationId.toUpperCase(),
+          version: 7,
+          ownerId: attackerId,
+          folderId: randomUUID(),
+          folderCount: 1,
+        }),
+      }),
+      { params: Promise.resolve({ folderId: folderId.toUpperCase() }) },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      state: "trashed",
+      trashBatchId: operationId,
+      rootFolderId: folderId,
+      folderCount: 3,
+      patternCount: 4,
+    });
+    expect(mocks.trashFolderTree).toHaveBeenCalledWith({
+      ownerId,
+      folderId,
+      operationId,
+      version: 7,
+    });
+    expect(mocks.trashFolderTree).not.toHaveBeenCalledWith(
+      expect.objectContaining({ ownerId: attackerId }),
+    );
+  });
+
+  it("rejects cross-origin deletes before calling the service", async () => {
+    const route = await import("./route");
+    const response = await route.DELETE(
+      new Request(`${ORIGIN}/api/folders/${folderId}`, {
+        method: "DELETE",
+        headers: {
+          "content-type": "application/json",
+          origin: "https://evil.test",
+        },
+        body: JSON.stringify({ operationId: randomUUID(), version: 0 }),
+      }),
+      { params: Promise.resolve({ folderId }) },
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "FORBIDDEN_ORIGIN",
+        message: "Request origin is not allowed",
+      },
+    });
+    expect(mocks.trashFolderTree).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed delete paths and bodies", async () => {
+    const route = await import("./route");
+    const cases = [
+      {
+        folderId: "not-a-uuid",
+        body: JSON.stringify({ operationId: randomUUID(), version: 0 }),
+      },
+      { folderId, body: "not-json" },
+      {
+        folderId,
+        body: JSON.stringify({ operationId: randomUUID(), version: -1 }),
+      },
+    ];
+
+    for (const input of cases) {
+      const response = await route.DELETE(
+        new Request(`${ORIGIN}/api/folders/${input.folderId}`, {
+          method: "DELETE",
+          headers: { "content-type": "application/json", origin: ORIGIN },
+          body: input.body,
+        }),
+        { params: Promise.resolve({ folderId: input.folderId }) },
+      );
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: { code: "VALIDATION_ERROR", message: "Invalid request" },
+      });
+    }
+    expect(mocks.trashFolderTree).not.toHaveBeenCalled();
+  });
+
+  it("preserves public delete errors from the service", async () => {
+    mocks.trashFolderTree.mockRejectedValueOnce(
+      new AppError(
+        "TRASH_PURGE_IN_PROGRESS",
+        409,
+        "Trash purge is in progress",
+      ),
+    );
+    const route = await import("./route");
+    const response = await route.DELETE(
+      new Request(`${ORIGIN}/api/folders/${folderId}`, {
+        method: "DELETE",
+        headers: { "content-type": "application/json", origin: ORIGIN },
+        body: JSON.stringify({ operationId: randomUUID(), version: 0 }),
+      }),
+      { params: Promise.resolve({ folderId }) },
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "TRASH_PURGE_IN_PROGRESS",
+        message: "Trash purge is in progress",
+      },
+    });
   });
 
   it("rejects cross-origin renames before calling the service", async () => {
