@@ -202,6 +202,10 @@ export async function batchPatterns(input: {
       );
     }
 
+    const targetFolder =
+      mutation.action === "move" && mutation.folderId !== null
+        ? await lockFolderRow(input.ownerId, tx, mutation.folderId)
+        : undefined;
     const rows = await lockPatternRows(input.ownerId, tx, patternIds);
     if (rows.length !== sortedRefs.length) patternNotFound();
     if (operation.state === "mismatch") operationIdReused();
@@ -219,9 +223,8 @@ export async function batchPatterns(input: {
     }
 
     if (mutation.action === "move" && mutation.folderId !== null) {
-      const folder = await lockFolderRow(input.ownerId, tx, mutation.folderId);
-      if (!folder) folderNotFound();
-      if (folder.status !== "active") folderNotActive();
+      if (!targetFolder) folderNotFound();
+      if (targetFolder.status !== "active") folderNotActive();
     }
 
     const affectedPatternIds =

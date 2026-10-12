@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { and, asc, eq, inArray } from "drizzle-orm";
+import postgres from "postgres";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { lockPatternRows } from "@/features/patterns/pattern-batch-repository";
@@ -16,6 +17,7 @@ import {
   users,
 } from "@/lib/db/schema";
 import { resetDatabase } from "@/test/database";
+import { getServerEnv } from "@/lib/env/server";
 
 type PatternStatus = (typeof patternStatuses)[number];
 type FolderStatus = (typeof folders.$inferInsert)["status"];
@@ -129,6 +131,56 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs = 5_000) {
   } finally {
     if (timeout) clearTimeout(timeout);
   }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function waitUntilBlockedByFolderTransaction(
+  monitor: ReturnType<typeof postgres>,
+  blockerPid: number,
+) {
+  while (true) {
+    const blocked = await monitor<{ pid: number }[]>`
+      select activity.pid
+      from pg_stat_activity activity
+      where activity.datname = current_database()
+        and activity.state = 'active'
+        and activity.wait_event_type = 'Lock'
+        and ${blockerPid} = any(pg_blocking_pids(activity.pid))
+        and activity.query ilike '%folders%'
+        and activity.query ilike '%for update%'
+    `;
+    if (blocked[0]) return blocked[0].pid;
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+function errorChainHas(
+  error: unknown,
+  property: "code" | "status",
+  value: unknown,
+) {
+  let candidate = error;
+  const seen = new Set<unknown>();
+  while (
+    typeof candidate === "object" &&
+    candidate !== null &&
+    !seen.has(candidate)
+  ) {
+    seen.add(candidate);
+    const record = candidate as Record<string, unknown>;
+    if (record[property] === value) return true;
+    candidate = record.cause;
+  }
+  return false;
 }
 
 describe("pattern batch service", () => {
@@ -1019,6 +1071,109 @@ describe("pattern batch service", () => {
     ]);
     expect(await readChanges(ownerA)).toHaveLength(1);
     expect(await readOperations(ownerA)).toHaveLength(1);
+    expect(await readSyncSeq(ownerA)).toBe(1n);
+  });
+
+  it("locks a move target before patterns to match folder-tree transaction ordering", async () => {
+    const source = await seedFolder({ ownerId: ownerA, name: "Lock source" });
+    const target = await seedFolder({ ownerId: ownerA, name: "Lock target" });
+    const pattern = await seedPattern({ ownerId: ownerA, folderId: source });
+    const operationId = randomUUID();
+    const databaseUrl = getServerEnv().DATABASE_URL;
+    const blocker = postgres(databaseUrl, {
+      max: 1,
+      connection: {
+        application_name: "pattern-batch-folder-lock-blocker",
+      },
+    });
+    const monitor = postgres(databaseUrl, {
+      max: 1,
+      connection: {
+        application_name: "pattern-batch-folder-lock-monitor",
+      },
+    });
+    const folderLocked = deferred<number>();
+    const requestPatternLock = deferred<void>();
+    let blockerTransaction: Promise<unknown> | undefined;
+    let batch: Promise<Awaited<ReturnType<typeof batchPatterns>>> | undefined;
+
+    try {
+      blockerTransaction = blocker.begin(async (tx) => {
+        await tx`set local lock_timeout = '750ms'`;
+        await tx`set local statement_timeout = '1500ms'`;
+        const [backend] = await tx<{ pid: number }[]>`
+          select pg_backend_pid() as pid
+        `;
+        if (!backend) throw new Error("LOCK_BLOCKER_PID_MISSING");
+        await tx`
+          select id
+          from folders
+          where owner_id = ${ownerA}
+            and id = ${target}
+          for update
+        `;
+        folderLocked.resolve(backend.pid);
+        await requestPatternLock.promise;
+        await tx`
+          select id
+          from patterns
+          where owner_id = ${ownerA}
+            and id = ${pattern.id}
+          for update
+        `;
+      });
+
+      const blockerPid = await withTimeout(folderLocked.promise);
+      batch = batchPatterns({
+        ownerId: ownerA,
+        mutation: {
+          operationId,
+          action: "move",
+          patterns: [pattern],
+          folderId: target,
+        },
+      });
+      await withTimeout(
+        waitUntilBlockedByFolderTransaction(monitor, blockerPid),
+      );
+      requestPatternLock.resolve(undefined);
+
+      const [blockerOutcome, batchOutcome] = await withTimeout(
+        Promise.allSettled([blockerTransaction, batch]),
+      );
+      for (const outcome of [blockerOutcome, batchOutcome]) {
+        if (outcome.status === "rejected") {
+          expect(errorChainHas(outcome.reason, "code", "40P01")).toBe(false);
+          expect(errorChainHas(outcome.reason, "status", 500)).toBe(false);
+        }
+      }
+      expect(blockerOutcome).toMatchObject({ status: "fulfilled" });
+      expect(batchOutcome).toMatchObject({ status: "fulfilled" });
+    } finally {
+      requestPatternLock.resolve(undefined);
+      await Promise.allSettled(
+        [blockerTransaction, batch].filter(
+          (promise): promise is Promise<unknown> => promise !== undefined,
+        ),
+      );
+      await Promise.all([blocker.end({ timeout: 1 }), monitor.end({ timeout: 1 })]);
+    }
+
+    await expect(readPatterns(ownerA, [pattern.id])).resolves.toEqual([
+      expect.objectContaining({
+        id: pattern.id,
+        folderId: target,
+        version: 1,
+        changeSeq: 1n,
+      }),
+    ]);
+    await expect(readChanges(ownerA)).resolves.toEqual([
+      expect.objectContaining({
+        operationId,
+        operation: "patterns.moved",
+        payload: { patternIds: [pattern.id] },
+      }),
+    ]);
     expect(await readSyncSeq(ownerA)).toBe(1n);
   });
 });
