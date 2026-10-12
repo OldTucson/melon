@@ -595,7 +595,7 @@ git commit -m "feat: filter patterns by folder"
 - Create: `src/app/api/patterns/batch/route.ts`
 - Create: `src/app/api/patterns/batch/route.test.ts`
 
-- [ ] **Step 1: Write the failing all-or-none tests**
+- [x] **Step 1: Write the failing all-or-none tests**
 
 Cover move, favorite, trash, target-folder validation, mixed ownership, stale version, invalid status, duplicate IDs, idempotent replay, and deadlock-safe input ordering. The critical rollback assertion is:
 
@@ -618,7 +618,7 @@ expect(await readPattern(first.id)).toMatchObject({ folderId: first.folderId, ve
 
 For trash, assert one shared `trashBatchId=operationId`, preserved `folderId`, `preTrashStatus` set to the prior status, and no OSS calls.
 
-- [ ] **Step 2: Implement stable row locking and validation**
+- [x] **Step 2: Implement stable row locking and validation**
 
 The repository accepts sorted unique IDs and executes one owner-scoped select with `FOR UPDATE`. The service then validates exact cardinality, versions, and status:
 
@@ -637,7 +637,7 @@ for (const ref of sortedRefs) {
 
 For `move`, lock the target folder and require `active`. For `favorite`, set one boolean. For `trash`, set `status='trashed'`, `preTrashStatus` from the locked row, `trashBatchId=operationId`, and one shared `trashedAt`.
 
-- [ ] **Step 3: Emit one event and one shared sequence**
+- [x] **Step 3: Emit one event and one shared sequence**
 
 Allocate one `changeSeq`, update every row with it, increment each version, and write one change log row:
 
@@ -659,7 +659,7 @@ await tx.insert(changeLog).values({
 
 The stored operation result contains fresh DTOs in deterministic ID order.
 
-- [ ] **Step 4: Add the route and verify**
+- [x] **Step 4: Add the route and verify**
 
 `POST /api/patterns/batch` calls `parsePatternBatchMutation`, derives `ownerId` from session, and delegates to `batchPatterns`.
 
