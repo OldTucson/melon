@@ -26,11 +26,13 @@ export const folderDtoSchema = z
   })
   .strict();
 export type FolderDto = z.infer<typeof folderDtoSchema>;
+/** Local-only cache state; never accepted by the strict API DTO schema. */
+export type FolderCacheItem = FolderDto & { optimisticCreate?: true };
 
 /** WorkspaceShell owns fetching; every consumer observes this same cache. */
 export function useFoldersQuery(load = false) {
   const ownerId = useQueryOwnerId();
-  return useQuery({
+  return useQuery<FolderCacheItem[]>({
     queryKey: queryKeys.folders(ownerId),
     enabled: load,
     queryFn: async () => {

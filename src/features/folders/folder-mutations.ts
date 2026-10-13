@@ -6,7 +6,7 @@ import { ApiResponseError, readApiResponse } from "@/lib/query/client";
 import { queryKeys } from "@/lib/query/keys";
 import { useQueryOwnerId } from "@/lib/query/provider";
 import { parseFolderName } from "./contracts";
-import { folderDtoSchema, type FolderDto } from "./folder-client";
+import { folderDtoSchema, type FolderCacheItem } from "./folder-client";
 import { folderSubtree } from "./folder-tree-model";
 
 const retry = (count: number, error: Error) =>
@@ -105,9 +105,10 @@ export function useCreateFolderMutation() {
     },
     onMutate: async (variables) => {
       await client.cancelQueries({ queryKey: key, exact: true });
-      const snapshot = client.getQueryData<FolderDto[]>(key);
+      const snapshot = client.getQueryData<FolderCacheItem[]>(key);
       const timestamp = new Date().toISOString();
-      const optimistic: FolderDto = {
+      const optimistic: FolderCacheItem = {
+        optimisticCreate: true,
         id: variables.operationId,
         ownerId,
         parentId: variables.input.parentId,
@@ -123,7 +124,7 @@ export function useCreateFolderMutation() {
         directPatternCount: 0,
         recursivePatternCount: 0,
       };
-      client.setQueryData<FolderDto[]>(key, (old) => [
+      client.setQueryData<FolderCacheItem[]>(key, (old) => [
         ...(old ?? []),
         optimistic,
       ]);
@@ -131,7 +132,7 @@ export function useCreateFolderMutation() {
     },
     onError: (_error, _variables, context) => {
       if (context)
-        client.setQueryData<FolderDto[]>(key, (old) =>
+        client.setQueryData<FolderCacheItem[]>(key, (old) =>
           old?.filter(
             (folder) =>
               folder.id !== context.optimistic.id ||
@@ -140,7 +141,7 @@ export function useCreateFolderMutation() {
         );
     },
     onSuccess: (dto, variables) => {
-      client.setQueryData<FolderDto[]>(key, (old) => {
+      client.setQueryData<FolderCacheItem[]>(key, (old) => {
         const items = (old ?? []).filter(
           (folder) => folder.id !== variables.operationId,
         );
@@ -187,13 +188,13 @@ export function useRenameFolderMutation() {
     },
     onMutate: async (variables) => {
       await client.cancelQueries({ queryKey: key, exact: true });
-      const snapshot = client.getQueryData<FolderDto[]>(key);
+      const snapshot = client.getQueryData<FolderCacheItem[]>(key);
       const before = snapshot?.find((folder) => folder.id === variables.id);
       const optimistic = {
         ...parseFolderName(variables.patch.name),
         version: variables.patch.version + 1,
       };
-      client.setQueryData<FolderDto[]>(key, (old) =>
+      client.setQueryData<FolderCacheItem[]>(key, (old) =>
         old?.map((folder) =>
           folder.id === variables.id &&
           folder.version === variables.patch.version
@@ -206,7 +207,7 @@ export function useRenameFolderMutation() {
     onError: (_error, variables, context) => {
       if (!context?.before) return;
       const { before, optimistic } = context;
-      client.setQueryData<FolderDto[]>(key, (old) =>
+      client.setQueryData<FolderCacheItem[]>(key, (old) =>
         old?.map((folder) =>
           folder.id === variables.id &&
           folder.version === optimistic.version &&
@@ -223,7 +224,7 @@ export function useRenameFolderMutation() {
       );
     },
     onSuccess: (dto) =>
-      client.setQueryData<FolderDto[]>(key, (old) =>
+      client.setQueryData<FolderCacheItem[]>(key, (old) =>
         old?.map((folder) =>
           folder.id === dto.id && folder.version <= dto.version ? dto : folder,
         ),
@@ -258,7 +259,7 @@ export function useTrashFolderMutation() {
       return result;
     },
     onSuccess: (_result, variables) =>
-      client.setQueryData<FolderDto[]>(key, (old) => {
+      client.setQueryData<FolderCacheItem[]>(key, (old) => {
         if (!old) return old;
         const removed = folderSubtree(old, variables.id);
         return old.filter((folder) => !removed.has(folder.id));

@@ -18,7 +18,11 @@ import { useId, useRef, useState } from "react";
 import { useSelectionStore } from "@/features/library/selection-store";
 import { queryKeys } from "@/lib/query/keys";
 import { useQueryOwnerId } from "@/lib/query/provider";
-import { type FolderDto, useFoldersQuery } from "./folder-client";
+import {
+  type FolderDto,
+  type FolderCacheItem,
+  useFoldersQuery,
+} from "./folder-client";
 import { FolderDeleteDialog } from "./folder-delete-dialog";
 import {
   type FolderDeleteImpact,
@@ -140,7 +144,7 @@ export function FolderTree() {
     submitting.current = true;
     setError(null);
     const snapshot =
-      client.getQueryData<FolderDto[]>(queryKeys.folders(ownerId)) ?? [];
+      client.getQueryData<FolderCacheItem[]>(queryKeys.folders(ownerId)) ?? [];
     const removed = folderSubtree(snapshot, deletion.folder.id);
     try {
       await trash.mutateAsync({
@@ -150,7 +154,8 @@ export function FolderTree() {
       });
       if (search.get("folderId") && removed.has(search.get("folderId")!)) {
         const active =
-          client.getQueryData<FolderDto[]>(queryKeys.folders(ownerId)) ?? [];
+          client.getQueryData<FolderCacheItem[]>(queryKeys.folders(ownerId)) ??
+          [];
         const seen = new Set<string>();
         let ancestor = deletion.folder.parentId;
         while (ancestor && !seen.has(ancestor)) {
@@ -222,7 +227,7 @@ export function FolderTree() {
       </form>
     );
   const renderNode = (
-    node: FolderNode<FolderDto>,
+    node: FolderNode<FolderCacheItem>,
     depth: number,
   ): React.ReactNode => {
     const { folder, children } = node,
@@ -254,7 +259,19 @@ export function FolderTree() {
           ) : (
             <span className="folder-spacer" />
           )}
-          {draft?.kind === "rename" && draft.folder.id === folder.id ? (
+          {folder.optimisticCreate ? (
+            <div
+              className="folder-link"
+              role="status"
+              aria-label={`正在创建${folder.name}`}
+              aria-busy="true"
+              title={folder.name}
+            >
+              <Folder aria-hidden="true" />
+              <span>{folder.name}</span>
+              <span className="folder-count">创建中</span>
+            </div>
+          ) : draft?.kind === "rename" && draft.folder.id === folder.id ? (
             editor()
           ) : (
             <Link
@@ -285,7 +302,9 @@ export function FolderTree() {
                 type="button"
                 className="folder-icon-button"
                 aria-label={`${folder.name}的操作`}
-                disabled={pending || impactPending}
+                disabled={
+                  Boolean(folder.optimisticCreate) || pending || impactPending
+                }
               >
                 <MoreHorizontal aria-hidden="true" />
               </button>

@@ -198,7 +198,7 @@ export function BulkActionBar({
                     文件夹载入失败
                   </DropdownMenu.Item>
                 ) : (
-                  folders.data?.map((folder) => (
+                  folders.data?.filter((folder) => !folder.optimisticCreate).map((folder) => (
                     <DropdownMenu.Item
                       className="bulk-folder-item"
                       key={folder.id}

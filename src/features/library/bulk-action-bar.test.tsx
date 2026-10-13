@@ -11,6 +11,7 @@ import { parseLibrarySearchParams, toPatternQuery } from "./query-state";
 import type { PatternItem } from "./library-types";
 import { BulkActionBar } from "./bulk-action-bar";
 import { useSelectionStore } from "./selection-store";
+import { useCreateFolderMutation } from "@/features/folders/folder-mutations";
 
 const ownerId = "10000000-0000-4000-8000-000000000000";
 const query = toPatternQuery(parseLibrarySearchParams(new URLSearchParams()));
@@ -42,7 +43,15 @@ const items = [1, 2].map((index): PatternItem => ({
   updatedAt: "2026-10-08T00:00:00.000Z",
 }));
 
-function renderBar() {
+function CreateFolderButton() {
+  const mutation = useCreateFolderMutation();
+  return <button onClick={() => mutation.mutate({
+    operationId: "30000000-0000-4000-8000-000000000001",
+    input: {name: "等待创建", parentId: null},
+  })}>创建测试文件夹</button>;
+}
+
+function renderBar(includeCreator = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return {
     client,
@@ -50,6 +59,7 @@ function renderBar() {
       <QueryClientProvider client={client}>
         <QueryOwnerProvider ownerId={ownerId}>
           <Tooltip.Provider>
+            {includeCreator && <CreateFolderButton />}
             <BulkActionBar
               activeQuery={query}
               loadedPatterns={items}
@@ -78,6 +88,33 @@ describe("bulk action bar", () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+  });
+
+  it("excludes a pending create from move targets until its real folder ID is reconciled", async () => {
+    const realId = "20000000-0000-4000-8000-000000000009";
+    let finish!: (response: Response) => void;
+    const fetcher = vi.fn<typeof fetch>()
+      .mockImplementationOnce(() => new Promise<Response>(resolve => {finish = resolve;}))
+      .mockResolvedValueOnce(Response.json({patterns: items.map(item => ({...item, folderId: realId, version: item.version + 1}))}));
+    vi.stubGlobal("fetch", fetcher);
+    const {client} = renderBar(true);
+    act(() => client.setQueryData(queryKeys.folders(ownerId), []));
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", {name: "创建测试文件夹"}));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", {name: "移动"}));
+    expect(screen.getByRole("menuitem", {name: "未分类"})).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", {name: "等待创建"})).not.toBeInTheDocument();
+    await act(async () => finish(Response.json({
+      id: realId, ownerId, parentId: null, name: "等待创建", normalizedName: "等待创建",
+      status: "active", version: 0, trashBatchId: null, trashedAt: null, deletedAt: null,
+      changeSeq: "1", createdAt: "2026-10-08T00:00:00.000Z", updatedAt: "2026-10-08T00:00:00.000Z",
+      directPatternCount: 0, recursivePatternCount: 0,
+    }, {status: 201})));
+    await user.click(await screen.findByRole("menuitem", {name: "等待创建"}));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(String(fetcher.mock.calls[1]![1]?.body))).toMatchObject({action: "move", folderId: realId});
+    expect(client.getQueryData<Array<{id: string}>>(queryKeys.folders(ownerId))?.map(folder => folder.id)).toEqual([realId]);
   });
 
   it("cancels trash without sending a request", async () => {

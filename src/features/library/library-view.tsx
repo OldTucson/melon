@@ -54,7 +54,9 @@ export function LibraryView({ initialQuery }: { initialQuery: PatternQuery }) {
   const activeFolder = !initialQuery.unfiled
     ? folders.data?.find(
         (folder) =>
-          folder.id === initialQuery.folderId && folder.status === "active",
+          folder.id === initialQuery.folderId &&
+          folder.status === "active" &&
+          !folder.optimisticCreate,
       )
     : undefined;
   const [viewMode, setViewMode] = useState<LibraryViewMode>("grid");

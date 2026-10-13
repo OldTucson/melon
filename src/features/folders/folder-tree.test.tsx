@@ -105,6 +105,45 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("folder tree interactions", () => {
+  it("shows pending creation without a link or row actions, then enables the authoritative ID", async () => {
+    let finish!: (response: Response) => void;
+    const fetcher = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    const { user } = setup();
+    await user.click(screen.getByRole("button", { name: "新建文件夹" }));
+    await user.type(screen.getByRole("textbox"), "等待创建{Enter}");
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("等待创建")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "等待创建" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("status", { name: "正在创建等待创建" }),
+    ).toHaveAttribute("aria-busy", "true");
+    expect(
+      screen.getByRole("button", { name: "等待创建的操作" }),
+    ).toBeDisabled();
+    const realId = "20000000-0000-4000-8000-000000000009";
+    await act(async () =>
+      finish(
+        response(
+          { ...root, id: realId, name: "等待创建", normalizedName: "等待创建" },
+          201,
+        ),
+      ),
+    );
+    expect(
+      await screen.findByRole("link", { name: "等待创建" }),
+    ).toHaveAttribute("href", `/library?folderId=${realId}`);
+    expect(
+      screen.getByRole("button", { name: "等待创建的操作" }),
+    ).not.toBeDisabled();
+  });
   it("provides an accessible rail toggle that closes with Escape", async () => {
     const { user } = setup();
     const toggle = screen.getByRole("button", { name: "浏览文件夹" });
