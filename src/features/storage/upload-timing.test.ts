@@ -7,6 +7,7 @@ import {
   REAL_OSS_TEST_CLEANUP_TIMEOUT_MS,
   REAL_OSS_TEST_PHASE_MARGIN_MS,
   REAL_OSS_TEST_RUNNER_MARGIN_MS,
+  REAL_OSS_TEST_SHUTDOWN_TIMEOUT_MS,
   REAL_OSS_TEST_TIMEOUT_MS,
   UPLOAD_CREDENTIAL_ISSUE_TIMEOUT_MS,
   UPLOAD_CREDENTIAL_LIFETIME_MS,
@@ -24,7 +25,7 @@ describe("upload timing contract", () => {
     expect(UPLOAD_WRITE_DRAIN_GRACE_MS).toBe(150_000);
   });
 
-  it("gives the real OSS body and cleanup independent proven budgets", () => {
+  it("gives body, shutdown, and cleanup independent proven budgets", () => {
     expect(REAL_OSS_TEST_BODY_REQUEST_COUNT).toBe(10);
     expect(REAL_OSS_TEST_CLEANUP_REQUEST_COUNT).toBe(5);
     expect(REAL_OSS_TEST_PHASE_MARGIN_MS).toBe(30_000);
@@ -37,13 +38,19 @@ describe("upload timing contract", () => {
       REAL_OSS_TEST_CLEANUP_REQUEST_COUNT * UPLOAD_REQUEST_TIMEOUT_MS +
         REAL_OSS_TEST_PHASE_MARGIN_MS,
     );
+    expect(REAL_OSS_TEST_SHUTDOWN_TIMEOUT_MS).toBe(
+      UPLOAD_REQUEST_TIMEOUT_MS + REAL_OSS_TEST_PHASE_MARGIN_MS,
+    );
     expect(REAL_OSS_TEST_TIMEOUT_MS).toBe(
       REAL_OSS_TEST_BODY_TIMEOUT_MS +
+        REAL_OSS_TEST_SHUTDOWN_TIMEOUT_MS +
         REAL_OSS_TEST_CLEANUP_TIMEOUT_MS +
         REAL_OSS_TEST_RUNNER_MARGIN_MS,
     );
     expect(REAL_OSS_TEST_TIMEOUT_MS).toBeGreaterThan(
-      REAL_OSS_TEST_BODY_TIMEOUT_MS + REAL_OSS_TEST_CLEANUP_TIMEOUT_MS,
+      REAL_OSS_TEST_BODY_TIMEOUT_MS +
+        REAL_OSS_TEST_SHUTDOWN_TIMEOUT_MS +
+        REAL_OSS_TEST_CLEANUP_TIMEOUT_MS,
     );
   });
 });

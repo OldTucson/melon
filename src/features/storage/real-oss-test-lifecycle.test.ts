@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchBytesWithTimeout,
   runRealOssTestLifecycle,
+  runRequestWithTimeout,
 } from "./real-oss-test-lifecycle";
 
 afterEach(() => {
@@ -30,28 +31,105 @@ describe("real OSS test lifecycle", () => {
       /cleanupTimeoutMs:\s*REAL_OSS_TEST_CLEANUP_TIMEOUT_MS/,
     );
     expect(source).toMatch(
+      /shutdownTimeoutMs:\s*REAL_OSS_TEST_SHUTDOWN_TIMEOUT_MS/,
+    );
+    expect(source).toMatch(
+      /runRequestWithTimeout\(\s*\(\)\s*=>\s*issuer\.issue\(\{ ownerId, patternId \}\),\s*UPLOAD_REQUEST_TIMEOUT_MS/,
+    );
+    expect(source).toMatch(
       /fetchBytesWithTimeout\([\s\S]*timeoutMs:\s*UPLOAD_REQUEST_TIMEOUT_MS/,
     );
+    expect(
+      source.match(/signal\.throwIfAborted\(\)/g)?.length,
+    ).toBeGreaterThanOrEqual(8);
+    expect(source).toMatch(
+      /uploadId\s*=\s*initiated\.uploadId;\s*signal\.throwIfAborted\(\)/,
+    );
+    expect(source).toMatch(/completed\s*=\s*true;\s*signal\.throwIfAborted\(\)/);
     expect(source).toMatch(/retryMax:\s*0/);
   });
 
-  it("cancels a timed-out body and still runs cleanup", async () => {
+  it("times out a non-abortable request and consumes its late rejection", async () => {
+    vi.useFakeTimers();
+    let rejectRequest!: (error: Error) => void;
+    let continued = false;
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+
+    try {
+      const result = (async () => {
+        await runRequestWithTimeout(
+          () =>
+            new Promise<never>((_resolve, reject) => {
+              rejectRequest = reject;
+            }),
+          10,
+        );
+        continued = true;
+      })();
+      const rejection = expect(result).rejects.toMatchObject({
+        code: "REAL_OSS_REQUEST_TIMEOUT",
+      });
+
+      await vi.advanceTimersByTimeAsync(10);
+      await rejection;
+      expect(continued).toBe(false);
+
+      vi.useRealTimers();
+      rejectRequest(new Error("late STS rejection"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandled).not.toHaveBeenCalled();
+      expect(continued).toBe(false);
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+  });
+
+  it.each([
+    ["body", { bodyTimeoutMs: 0 }],
+    ["shutdown", { shutdownTimeoutMs: 0 }],
+    ["cleanup", { cleanupTimeoutMs: 0 }],
+  ])("validates the %s timeout before starting any work", async (_name, override) => {
+    const body = vi.fn(async () => "uploaded");
+    const cleanup = vi.fn(async () => undefined);
+
+    await expect(
+      runRealOssTestLifecycle({
+        body,
+        bodyTimeoutMs: 10,
+        cancelBody: () => undefined,
+        cleanup,
+        cleanupTimeoutMs: 10,
+        shutdownTimeoutMs: 10,
+        ...override,
+      }),
+    ).rejects.toThrow("REAL_OSS_TIMEOUT_INVALID");
+
+    expect(body).not.toHaveBeenCalled();
+    expect(cleanup).not.toHaveBeenCalled();
+  });
+
+  it("waits for a timed-out body to stop before cleanup", async () => {
     vi.useFakeTimers();
     const events: string[] = [];
     let bodySignal: AbortSignal | undefined;
     const result = runRealOssTestLifecycle({
-      body: (signal) => {
+      body: async (signal) => {
         bodySignal = signal;
-        return new Promise<never>((_resolve, reject) => {
+        await new Promise<void>((resolve) => {
           signal.addEventListener(
             "abort",
             () => {
               events.push("aborted");
-              reject(signal.reason);
+              setTimeout(() => {
+                events.push("late-write");
+                resolve();
+              }, 5);
             },
             { once: true },
           );
         });
+        events.push("body-stopped");
       },
       bodyTimeoutMs: 10,
       cancelBody: () => {
@@ -61,17 +139,69 @@ describe("real OSS test lifecycle", () => {
         events.push("cleanup");
       },
       cleanupTimeoutMs: 10,
+      shutdownTimeoutMs: 20,
     });
     const rejection = expect(result).rejects.toMatchObject({
       code: "REAL_OSS_BODY_TIMEOUT",
     });
 
     await vi.advanceTimersByTimeAsync(10);
+    expect(events).toEqual(["aborted", "cancelled"]);
+
+    await vi.advanceTimersByTimeAsync(5);
     await rejection;
 
     expect(bodySignal?.aborted).toBe(true);
-    expect(events).toContain("cancelled");
-    expect(events.at(-1)).toBe("cleanup");
+    expect(events).toEqual([
+      "aborted",
+      "cancelled",
+      "late-write",
+      "body-stopped",
+      "cleanup",
+    ]);
+  });
+
+  it("does not clean up if a timed-out body cannot become quiescent", async () => {
+    vi.useFakeTimers();
+    let rejectBody!: (error: Error) => void;
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    const cleanup = vi.fn(async () => undefined);
+
+    try {
+      const result = runRealOssTestLifecycle({
+        body: () =>
+          new Promise<never>((_resolve, reject) => {
+            rejectBody = reject;
+          }),
+        bodyTimeoutMs: 10,
+        cancelBody: () => undefined,
+        cleanup,
+        cleanupTimeoutMs: 10,
+        shutdownTimeoutMs: 20,
+      });
+      const rejection = expect(result).rejects.toSatisfy(
+        (error: unknown) =>
+          error instanceof AggregateError &&
+          error.errors.some(
+            (item) =>
+              item instanceof Error &&
+              "code" in item &&
+              item.code === "REAL_OSS_BODY_SHUTDOWN_TIMEOUT",
+          ),
+      );
+
+      await vi.advanceTimersByTimeAsync(30);
+      await rejection;
+      expect(cleanup).not.toHaveBeenCalled();
+
+      vi.useRealTimers();
+      rejectBody(new Error("late body rejection"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
   });
 
   it("gives cleanup its own deadline after a successful body", async () => {
@@ -82,6 +212,7 @@ describe("real OSS test lifecycle", () => {
       cancelBody: () => undefined,
       cleanup: () => new Promise<never>(() => undefined),
       cleanupTimeoutMs: 20,
+      shutdownTimeoutMs: 10,
     });
     const rejection = expect(result).rejects.toMatchObject({
       code: "REAL_OSS_CLEANUP_TIMEOUT",
@@ -89,6 +220,41 @@ describe("real OSS test lifecycle", () => {
 
     await vi.advanceTimersByTimeAsync(20);
     await rejection;
+  });
+
+  it("consumes a cleanup rejection that arrives after its deadline", async () => {
+    vi.useFakeTimers();
+    let rejectCleanup!: (error: Error) => void;
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+
+    try {
+      const result = runRealOssTestLifecycle({
+        body: async () => "uploaded",
+        bodyTimeoutMs: 10,
+        cancelBody: () => undefined,
+        cleanup: () =>
+          new Promise<never>((_resolve, reject) => {
+            rejectCleanup = reject;
+          }),
+        cleanupTimeoutMs: 10,
+        shutdownTimeoutMs: 10,
+      });
+      const rejection = expect(result).rejects.toMatchObject({
+        code: "REAL_OSS_CLEANUP_TIMEOUT",
+      });
+
+      await vi.advanceTimersByTimeAsync(10);
+      await rejection;
+      expect(vi.getTimerCount()).toBe(0);
+
+      vi.useRealTimers();
+      rejectCleanup(new Error("late cleanup rejection"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
   });
 
   it("keeps body and cleanup failures observable together", async () => {
@@ -106,6 +272,7 @@ describe("real OSS test lifecycle", () => {
           throw cleanupError;
         },
         cleanupTimeoutMs: 10,
+        shutdownTimeoutMs: 10,
       }),
     ).rejects.toSatisfy(
       (error: unknown) =>
@@ -124,6 +291,7 @@ describe("real OSS test lifecycle", () => {
         cancelBody: () => undefined,
         cleanup: () => Promise.reject(undefined),
         cleanupTimeoutMs: 10,
+        shutdownTimeoutMs: 10,
       });
     } catch {
       rejected = true;

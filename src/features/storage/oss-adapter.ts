@@ -17,6 +17,7 @@ import {
   parseOssConnectionConfig,
   parseSignedGetInput,
 } from "./validation";
+import { UPLOAD_REQUEST_TIMEOUT_MS } from "./upload-timing";
 
 const resolvedCredentialSchema = z.object({
   accessKeyId: z.string().min(1),
@@ -28,6 +29,7 @@ const resolvedTemporaryCredentialSchema = resolvedCredentialSchema.extend({
 });
 
 type ResolvedCredential = z.output<typeof resolvedCredentialSchema>;
+type OssOptionsWithRetryMax = OSS.Options & { retryMax: number };
 
 type OssSdkClient = Pick<
   OSS,
@@ -103,7 +105,7 @@ async function createDefaultClient(
     };
   };
 
-  return new OSS({
+  const options: OssOptionsWithRetryMax = {
     accessKeyId: initial.accessKeyId,
     accessKeySecret: initial.accessKeySecret,
     ...(initial.securityToken
@@ -118,7 +120,10 @@ async function createDefaultClient(
     cname: config.cname,
     secure: new URL(config.endpoint).protocol === "https:",
     authorizationV4: true,
-  });
+    retryMax: 0,
+    timeout: UPLOAD_REQUEST_TIMEOUT_MS,
+  };
+  return new OSS(options);
 }
 
 function createSnapshotSignerClient(

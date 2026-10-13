@@ -12,6 +12,7 @@ import {
 import {
   REAL_OSS_TEST_BODY_TIMEOUT_MS,
   REAL_OSS_TEST_CLEANUP_TIMEOUT_MS,
+  REAL_OSS_TEST_SHUTDOWN_TIMEOUT_MS,
   REAL_OSS_TEST_TIMEOUT_MS,
   UPLOAD_REQUEST_TIMEOUT_MS,
 } from "@/features/storage/upload-timing";
@@ -21,6 +22,7 @@ import { createAlibabaOssAdapter } from "./oss-adapter";
 import {
   fetchBytesWithTimeout,
   runRealOssTestLifecycle,
+  runRequestWithTimeout,
 } from "./real-oss-test-lifecycle";
 
 type OssOptionsWithRetryMax = OSS.Options & { retryMax: number };
@@ -134,7 +136,12 @@ describeRealOss("real OSS adapter", () => {
 
       await runRealOssTestLifecycle({
         body: async (signal) => {
-          const credentials = await issuer.issue({ ownerId, patternId });
+          signal.throwIfAborted();
+          const credentials = await runRequestWithTimeout(
+            () => issuer.issue({ ownerId, patternId }),
+            UPLOAD_REQUEST_TIMEOUT_MS,
+          );
+          signal.throwIfAborted();
           const clientOptions: OssOptionsWithRetryMax = {
             accessKeyId: credentials.accessKeyId,
             accessKeySecret: credentials.accessKeySecret,
@@ -156,6 +163,7 @@ describeRealOss("real OSS adapter", () => {
             headers: { "x-oss-forbid-overwrite": "true" },
           });
           uploadId = initiated.uploadId;
+          signal.throwIfAborted();
           const firstPart = await client.uploadPart(
             key,
             uploadId,
@@ -164,6 +172,7 @@ describeRealOss("real OSS adapter", () => {
             0,
             partSize,
           );
+          signal.throwIfAborted();
           const firstPartEtag = Object.entries(firstPart.res.headers).find(
             ([name]) => name.toLowerCase() === "etag",
           )?.[1];
@@ -195,32 +204,39 @@ describeRealOss("real OSS adapter", () => {
             },
           });
           completed = true;
+          signal.throwIfAborted();
 
           expect(resumedFractions[0]).toBeGreaterThanOrEqual(0.5);
           expect(resumedUploadIds).toContain(uploadId);
-          await expect(adapter.headObject(key)).resolves.toMatchObject({
+          const metadata = await adapter.headObject(key);
+          signal.throwIfAborted();
+          expect(metadata).toMatchObject({
             contentType: "image/png",
             sizeBytes: payload.byteLength,
           });
-          await expect(adapter.readRange(key, 0, 63)).resolves.toEqual(
-            Uint8Array.from(payload.subarray(0, 64)),
-          );
+          const range = await adapter.readRange(key, 0, 63);
+          signal.throwIfAborted();
+          expect(range).toEqual(Uint8Array.from(payload.subarray(0, 64)));
 
           const signedUrl = await adapter.createSignedGet({
             key,
             filename: "real-oss-check.png",
             expiresSeconds: 300,
           });
+          signal.throwIfAborted();
           const { bytes, response } = await fetchBytesWithTimeout(signedUrl, {
             signal,
             timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS,
           });
+          signal.throwIfAborted();
           expect(response.status).toBe(200);
           const downloaded = Buffer.from(bytes);
           expect(createHash("sha256").update(downloaded).digest("hex")).toBe(
             createHash("sha256").update(payload).digest("hex"),
           );
-          await expect(adapter.listObjectKeys(prefix)).resolves.toEqual([key]);
+          const listed = await adapter.listObjectKeys(prefix);
+          signal.throwIfAborted();
+          expect(listed).toEqual([key]);
         },
         bodyTimeoutMs: REAL_OSS_TEST_BODY_TIMEOUT_MS,
         cancelBody: () => uploadClient?.cancel(),
@@ -234,6 +250,7 @@ describeRealOss("real OSS adapter", () => {
             uploadId,
           }),
         cleanupTimeoutMs: REAL_OSS_TEST_CLEANUP_TIMEOUT_MS,
+        shutdownTimeoutMs: REAL_OSS_TEST_SHUTDOWN_TIMEOUT_MS,
       });
     },
     REAL_OSS_TEST_TIMEOUT_MS,

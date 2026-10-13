@@ -4,6 +4,7 @@ export interface RealOssTestLifecycleOptions<T> {
   cancelBody(): void;
   cleanup(): Promise<void>;
   cleanupTimeoutMs: number;
+  shutdownTimeoutMs: number;
 }
 
 export interface FetchBytesOptions {
@@ -14,8 +15,10 @@ export interface FetchBytesOptions {
 
 type DeadlineCode =
   | "REAL_OSS_BODY_TIMEOUT"
+  | "REAL_OSS_BODY_SHUTDOWN_TIMEOUT"
   | "REAL_OSS_CLEANUP_TIMEOUT"
-  | "REAL_OSS_FETCH_TIMEOUT";
+  | "REAL_OSS_FETCH_TIMEOUT"
+  | "REAL_OSS_REQUEST_TIMEOUT";
 
 class RealOssTestDeadlineError extends Error {
   readonly code: DeadlineCode;
@@ -40,23 +43,13 @@ async function withDeadline<T>(
   code: DeadlineCode,
   onTimeout?: (error: RealOssTestDeadlineError) => void,
 ) {
-  const duration = requireTimeout(timeoutMs);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
       const deadlineError = new RealOssTestDeadlineError(code);
-      try {
-        onTimeout?.(deadlineError);
-        reject(deadlineError);
-      } catch (cancellationError) {
-        reject(
-          new AggregateError(
-            [deadlineError, cancellationError],
-            "REAL_OSS_TIMEOUT_CANCELLATION_FAILED",
-          ),
-        );
-      }
-    }, duration);
+      reject(deadlineError);
+      onTimeout?.(deadlineError);
+    }, timeoutMs);
   });
 
   try {
@@ -69,10 +62,19 @@ async function withDeadline<T>(
 export async function runRealOssTestLifecycle<T>(
   options: RealOssTestLifecycleOptions<T>,
 ): Promise<T> {
+  const bodyTimeoutMs = requireTimeout(options.bodyTimeoutMs);
+  const shutdownTimeoutMs = requireTimeout(options.shutdownTimeoutMs);
+  const cleanupTimeoutMs = requireTimeout(options.cleanupTimeoutMs);
   const bodyController = new AbortController();
   const bodyPromise = Promise.resolve().then(() =>
     options.body(bodyController.signal),
   );
+  const bodySettled = bodyPromise.then(
+    () => undefined,
+    () => undefined,
+  );
+  let bodyTimedOut = false;
+  let cancellationError: unknown;
   let bodyOutcome:
     | { ok: true; value: T }
     | { error: unknown; ok: false };
@@ -82,16 +84,46 @@ export async function runRealOssTestLifecycle<T>(
       ok: true,
       value: await withDeadline(
         bodyPromise,
-        options.bodyTimeoutMs,
+        bodyTimeoutMs,
         "REAL_OSS_BODY_TIMEOUT",
         (deadlineError) => {
+          bodyTimedOut = true;
           bodyController.abort(deadlineError);
-          options.cancelBody();
+          try {
+            options.cancelBody();
+          } catch (error) {
+            cancellationError = error;
+          }
         },
       ),
     };
   } catch (error) {
     bodyOutcome = { error, ok: false };
+  }
+
+  if (bodyTimedOut) {
+    const bodyTimeoutError = bodyOutcome.ok
+      ? new RealOssTestDeadlineError("REAL_OSS_BODY_TIMEOUT")
+      : bodyOutcome.error;
+    const timeoutError = cancellationError
+      ? new AggregateError(
+          [bodyTimeoutError, cancellationError],
+          "REAL_OSS_TIMEOUT_CANCELLATION_FAILED",
+        )
+      : bodyTimeoutError;
+    try {
+      await withDeadline(
+        bodySettled,
+        shutdownTimeoutMs,
+        "REAL_OSS_BODY_SHUTDOWN_TIMEOUT",
+      );
+    } catch (shutdownError) {
+      throw new AggregateError(
+        [timeoutError, shutdownError],
+        "REAL_OSS_BODY_SHUTDOWN_FAILED",
+      );
+    }
+    bodyOutcome = { error: timeoutError, ok: false };
   }
 
   let cleanupOutcome:
@@ -100,7 +132,7 @@ export async function runRealOssTestLifecycle<T>(
   try {
     await withDeadline(
       Promise.resolve().then(options.cleanup),
-      options.cleanupTimeoutMs,
+      cleanupTimeoutMs,
       "REAL_OSS_CLEANUP_TIMEOUT",
     );
     cleanupOutcome = { ok: true };
@@ -119,10 +151,20 @@ export async function runRealOssTestLifecycle<T>(
   return bodyOutcome.value;
 }
 
+export async function runRequestWithTimeout<T>(
+  operation: () => Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  const duration = requireTimeout(timeoutMs);
+  const request = Promise.resolve().then(operation);
+  return withDeadline(request, duration, "REAL_OSS_REQUEST_TIMEOUT");
+}
+
 export async function fetchBytesWithTimeout(
   url: string,
   options: FetchBytesOptions,
 ): Promise<{ bytes: ArrayBuffer; response: Response }> {
+  const timeoutMs = requireTimeout(options.timeoutMs);
   const controller = new AbortController();
   const abortFromParent = () => controller.abort(options.signal?.reason);
   if (options.signal?.aborted) {
@@ -142,7 +184,7 @@ export async function fetchBytesWithTimeout(
   try {
     return await withDeadline(
       request,
-      options.timeoutMs,
+      timeoutMs,
       "REAL_OSS_FETCH_TIMEOUT",
       (deadlineError) => controller.abort(deadlineError),
     );
