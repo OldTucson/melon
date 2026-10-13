@@ -56,6 +56,15 @@ type CleanupInput = {
 
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
 
+function isPurgeDeferred(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "TRASH_PURGE_DEFERRED"
+  );
+}
+
 export async function runTrashCleanup(input: CleanupInput) {
   let processed = 0;
   let failures = 0;
@@ -65,6 +74,7 @@ export async function runTrashCleanup(input: CleanupInput) {
     try {
       await work();
     } catch (error) {
+      if (isPurgeDeferred(error)) return;
       failures += 1;
       input.reportError(context, error);
     }

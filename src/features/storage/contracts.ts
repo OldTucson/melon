@@ -17,6 +17,7 @@ export interface BrowserCredentialIssuer {
 }
 
 export interface OssAdapter {
+  listObjectKeys(prefix: string): Promise<string[]>;
   headObject(key: string): Promise<{
     sizeBytes: number;
     contentType: string;
@@ -27,6 +28,7 @@ export interface OssAdapter {
     endInclusive: number,
   ): Promise<Uint8Array>;
   deleteObjects(keys: string[]): Promise<void>;
+  deleteObjectsUnderPrefix(prefix: string, keys: string[]): Promise<void>;
   createSignedGet(input: {
     key: string;
     filename: string;

@@ -4,9 +4,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   assertDistinctDerivedAssetIds,
+  assertObjectKeyWithinPatternPrefix,
   assertObjectKeyBelongsToPattern,
   objectKeyBelongsToPattern,
   parseObjectKey,
+  patternObjectPrefix,
   previewObjectKey,
   sourceObjectKey,
   thumbnailObjectKey,
@@ -19,6 +21,30 @@ const previewAssetId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const thumbnailAssetId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
 
 describe("OSS object keys", () => {
+  it("builds a canonical pattern prefix and scopes arbitrary child keys", () => {
+    const prefix = patternObjectPrefix({
+      ownerId: ownerId.toUpperCase(),
+      patternId: patternId.toUpperCase(),
+    });
+
+    expect(prefix).toBe(`users/${ownerId}/patterns/${patternId}/`);
+    expect(
+      assertObjectKeyWithinPatternPrefix(
+        prefix,
+        `${prefix}derived/uncommitted-preview.tmp`,
+      ),
+    ).toBe(`${prefix}derived/uncommitted-preview.tmp`);
+    expect(() =>
+      assertObjectKeyWithinPatternPrefix(
+        prefix,
+        `users/${ownerId}/patterns/${randomUUID()}/derived/escape.tmp`,
+      ),
+    ).toThrow(/outside/i);
+    expect(() =>
+      assertObjectKeyWithinPatternPrefix(`${prefix}derived/`, `${prefix}x`),
+    ).toThrow(/prefix/i);
+  });
+
   it("builds a lowercase source key from UUID-only identity fields", () => {
     expect(
       sourceObjectKey({ ownerId, patternId, assetId, extension: "PSD" }),

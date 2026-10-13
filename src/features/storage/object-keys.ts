@@ -37,6 +37,11 @@ const objectIdentityShape = {
   assetId: normalizedUuidSchema,
 };
 
+const patternIdentitySchema = z.object({
+  ownerId: normalizedUuidSchema,
+  patternId: normalizedUuidSchema,
+});
+
 const objectKeyInputSchema = z.discriminatedUnion("role", [
   z.object({
     ...objectIdentityShape,
@@ -97,6 +102,46 @@ function formatObjectKey(parts: ObjectKeyParts) {
     parts.kind,
     `${parts.assetId}.${parts.extension}`,
   ].join("/");
+}
+
+export function patternObjectPrefix(
+  input: z.input<typeof patternIdentitySchema>,
+) {
+  const parsed = patternIdentitySchema.parse(input);
+  return `users/${parsed.ownerId}/patterns/${parsed.patternId}/`;
+}
+
+export function assertCanonicalPatternPrefix(prefix: string) {
+  const segments = prefix.split("/");
+  if (
+    segments.length !== 5 ||
+    segments[0] !== "users" ||
+    segments[2] !== "patterns" ||
+    segments[4] !== ""
+  ) {
+    throw new Error("Invalid OSS pattern prefix");
+  }
+  try {
+    const canonical = patternObjectPrefix({
+      ownerId: segments[1]!,
+      patternId: segments[3]!,
+    });
+    if (canonical !== prefix) throw new Error("Noncanonical OSS pattern prefix");
+    return canonical;
+  } catch {
+    throw new Error("Invalid OSS pattern prefix");
+  }
+}
+
+export function assertObjectKeyWithinPatternPrefix(
+  prefix: string,
+  key: string,
+) {
+  const canonicalPrefix = assertCanonicalPatternPrefix(prefix);
+  if (typeof key !== "string" || !key.startsWith(canonicalPrefix)) {
+    throw new Error("OSS object key is outside the requested pattern prefix");
+  }
+  return key;
 }
 
 export function storageObjectKey(input: z.input<typeof objectKeyInputSchema>) {

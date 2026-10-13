@@ -6,6 +6,10 @@ import { z } from "zod";
 import { createAlibabaCredential } from "./alibaba-credential";
 import type { OssAdapter, OssConnectionConfig } from "./contracts";
 import {
+  assertCanonicalPatternPrefix,
+  assertObjectKeyWithinPatternPrefix,
+} from "./object-keys";
+import {
   assertCanonicalObjectKey,
   assertValidObjectRange,
   OSS_DELETE_BATCH_SIZE,
@@ -27,7 +31,7 @@ type ResolvedCredential = z.output<typeof resolvedCredentialSchema>;
 
 type OssSdkClient = Pick<
   OSS,
-  "head" | "get" | "deleteMulti" | "signatureUrlV4"
+  "head" | "get" | "listV2" | "deleteMulti" | "signatureUrlV4"
 >;
 
 type OssSdkClientFactory = (
@@ -191,6 +195,48 @@ export function createAlibabaOssAdapter(
   };
 
   return {
+    async listObjectKeys(prefix) {
+      const canonicalPrefix = assertCanonicalPatternPrefix(prefix);
+      const client = await getClient();
+      const keys: string[] = [];
+      const seenTokens = new Set<string>();
+      let continuationToken: string | undefined;
+
+      do {
+        const result = await client.listV2({
+          prefix: canonicalPrefix,
+          "max-keys": 1_000,
+          ...(continuationToken
+            ? { "continuation-token": continuationToken }
+            : {}),
+        });
+        if (!Array.isArray(result.objects)) {
+          throw new Error("OSS_LIST_RESPONSE_INVALID");
+        }
+        for (const object of result.objects) {
+          keys.push(
+            assertObjectKeyWithinPatternPrefix(
+              canonicalPrefix,
+              object.name,
+            ),
+          );
+        }
+        if (!result.isTruncated) break;
+        const next = result.nextContinuationToken;
+        if (
+          typeof next !== "string" ||
+          next.length === 0 ||
+          seenTokens.has(next)
+        ) {
+          throw new Error("OSS_LIST_RESPONSE_INVALID");
+        }
+        seenTokens.add(next);
+        continuationToken = next;
+      } while (true);
+
+      return keys;
+    },
+
     async headObject(key) {
       assertCanonicalObjectKey(key);
       const result = await (await getClient()).head(key);
@@ -223,6 +269,26 @@ export function createAlibabaOssAdapter(
 
     async deleteObjects(keys) {
       const parsedKeys = parseDeleteObjectKeys(keys);
+      if (parsedKeys.length === 0) return;
+      const client = await getClient();
+
+      for (
+        let start = 0;
+        start < parsedKeys.length;
+        start += OSS_DELETE_BATCH_SIZE
+      ) {
+        await client.deleteMulti(
+          parsedKeys.slice(start, start + OSS_DELETE_BATCH_SIZE),
+          { quiet: true },
+        );
+      }
+    },
+
+    async deleteObjectsUnderPrefix(prefix, keys) {
+      const canonicalPrefix = assertCanonicalPatternPrefix(prefix);
+      const parsedKeys = keys.map((key) =>
+        assertObjectKeyWithinPatternPrefix(canonicalPrefix, key),
+      );
       if (parsedKeys.length === 0) return;
       const client = await getClient();
 

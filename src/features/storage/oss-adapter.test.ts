@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import OSS from "ali-oss";
 import { describe, expect, it, vi } from "vitest";
 
-import { sourceObjectKey } from "./object-keys";
+import { patternObjectPrefix, sourceObjectKey } from "./object-keys";
 import {
   createAlibabaOssAdapter,
   createDefaultCredentialResolver,
@@ -54,6 +54,11 @@ function createSdk() {
       content: Buffer.from([10, 20, 30, 40]),
     }),
     deleteMulti: vi.fn().mockResolvedValue({ deleted: [key] }),
+    listV2: vi.fn().mockResolvedValue({
+      objects: [],
+      isTruncated: false,
+      nextContinuationToken: "",
+    }),
     signatureUrl: vi
       .fn()
       .mockReturnValue("https://assets.example.test/legacy-signed-object"),
@@ -253,6 +258,111 @@ describe("createAlibabaOssAdapter", () => {
 
     await adapter.deleteObjects([key]);
     expect(sdk.deleteMulti).toHaveBeenCalledWith([key], { quiet: true });
+  });
+
+  it("lists every object under a canonical pattern prefix with V2 pagination", async () => {
+    const sdk = createSdk();
+    const prefix = patternObjectPrefix({
+      ownerId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      patternId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    });
+    const first = `${prefix}source/uncommitted-one.tmp`;
+    const second = `${prefix}derived/uncommitted-two.tmp`;
+    sdk.listV2
+      .mockResolvedValueOnce({
+        objects: [{ name: first }],
+        isTruncated: true,
+        nextContinuationToken: "next-page",
+      })
+      .mockResolvedValueOnce({
+        objects: [{ name: second }],
+        isTruncated: false,
+        nextContinuationToken: "",
+      });
+    const adapter = createAlibabaOssAdapter(config, {
+      createClient: async () => sdk,
+    });
+
+    await expect(adapter.listObjectKeys(prefix)).resolves.toEqual([
+      first,
+      second,
+    ]);
+    expect(sdk.listV2).toHaveBeenNthCalledWith(1, {
+      prefix,
+      "max-keys": 1_000,
+    });
+    expect(sdk.listV2).toHaveBeenNthCalledWith(2, {
+      prefix,
+      "max-keys": 1_000,
+      "continuation-token": "next-page",
+    });
+  });
+
+  it("validates list prefixes and rejects an OSS response outside its scope", async () => {
+    const sdk = createSdk();
+    const createClient = vi.fn().mockResolvedValue(sdk);
+    const adapter = createAlibabaOssAdapter(config, { createClient });
+
+    await expect(adapter.listObjectKeys("users/not-a-prefix/")).rejects.toThrow(
+      /prefix/i,
+    );
+    expect(createClient).not.toHaveBeenCalled();
+
+    const prefix = patternObjectPrefix({
+      ownerId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      patternId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    });
+    sdk.listV2.mockResolvedValueOnce({
+      objects: [{ name: `${prefix}../outside.tmp` }, { name: "foreign/key" }],
+      isTruncated: false,
+      nextContinuationToken: "",
+    });
+    await expect(adapter.listObjectKeys(prefix)).rejects.toThrow(/outside/i);
+    expect(sdk.deleteMulti).not.toHaveBeenCalled();
+  });
+
+  it("deletes arbitrary listed keys only within their canonical pattern prefix", async () => {
+    const sdk = createSdk();
+    const adapter = createAlibabaOssAdapter(config, {
+      createClient: async () => sdk,
+    });
+    const prefix = patternObjectPrefix({
+      ownerId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      patternId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    });
+    const uncommitted = `${prefix}derived/uncommitted-preview.tmp`;
+
+    await adapter.deleteObjectsUnderPrefix(prefix, [uncommitted]);
+    expect(sdk.deleteMulti).toHaveBeenCalledWith([uncommitted], { quiet: true });
+    await expect(
+      adapter.deleteObjectsUnderPrefix(prefix, ["foreign/key"]),
+    ).rejects.toThrow(/outside/i);
+    expect(sdk.deleteMulti).toHaveBeenCalledOnce();
+  });
+
+  it("deletes 1001 prefix-scoped keys in OSS-sized batches", async () => {
+    const sdk = createSdk();
+    const adapter = createAlibabaOssAdapter(config, {
+      createClient: async () => sdk,
+    });
+    const prefix = patternObjectPrefix({
+      ownerId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      patternId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    });
+    const keys = Array.from(
+      { length: 1_001 },
+      (_, index) => `${prefix}uncommitted/${index}.tmp`,
+    );
+
+    await adapter.deleteObjectsUnderPrefix(prefix, keys);
+
+    expect(sdk.deleteMulti.mock.calls.map(([batch]) => batch.length)).toEqual([
+      1_000,
+      1,
+    ]);
+    expect(sdk.deleteMulti.mock.calls.flatMap(([batch]) => batch)).toEqual(
+      keys,
+    );
   });
 
   it.each([

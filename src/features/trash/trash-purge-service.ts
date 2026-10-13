@@ -5,6 +5,7 @@ import { z, ZodError } from "zod";
 import { lockFolderHierarchy } from "@/features/folders/folder-repository";
 import type { OssAdapter } from "@/features/storage/contracts";
 import { normalizedUuidSchema } from "@/features/storage/identifiers";
+import { patternObjectPrefix } from "@/features/storage/object-keys";
 import { createAlibabaOssAdapter } from "@/features/storage/oss-adapter";
 import { nextChangeSeq } from "@/lib/db/change-seq";
 import { db } from "@/lib/db/client";
@@ -23,12 +24,12 @@ import {
   parsePatternPurgeMutation,
 } from "./contracts";
 import {
+  abortPurgeUploadSessions,
   deletePurgeRelations,
   finalizeFolderTombstones,
   finalizePatternTombstones,
   listFolderCandidatesByBatchIds,
   listFolderBatchPurgePatternIds,
-  listPurgeObjectKeys,
   listPurgePatternCandidates,
   lockFolderBatchPatterns,
   lockPatternsInTrashBatches,
@@ -98,7 +99,7 @@ type TrashPurgeServiceDependencies = {
 
 type ClaimOutcome =
   | { state: "complete"; result: PurgeCompleteResult }
-  | { state: "pending"; target: PurgeTarget };
+  | { state: "pending"; target: PurgeTarget; safeAfter: Date | null };
 
 const compareIds = (left: string, right: string) =>
   left < right ? -1 : left > right ? 1 : 0;
@@ -169,6 +170,14 @@ function purgeInProgress(): never {
     "TRASH_PURGE_IN_PROGRESS",
     409,
     "Trash purge is in progress",
+  );
+}
+
+function purgeDeferred(safeAfter: Date): never {
+  throw new AppError(
+    "TRASH_PURGE_DEFERRED",
+    409,
+    `Trash purge is deferred until ${safeAfter.toISOString()}`,
   );
 }
 
@@ -390,13 +399,19 @@ export function createTrashPurgeService(
       requireExactRows(updated, input.target.patternIds, () =>
         invalidPendingTarget("Pending purge target changed while claiming"),
       );
+      const safeAfter = await abortPurgeUploadSessions(
+        input.ownerId,
+        tx,
+        input.target.patternIds,
+        now(),
+      );
       if (!isReplay) {
         await storeOperationResult(input.ownerId, tx, input.operationId, {
           state: "pending",
           target: input.target,
         });
       }
-      return { state: "pending", target: input.target };
+      return { state: "pending", target: input.target, safeAfter };
     });
   }
 
@@ -510,13 +525,19 @@ export function createTrashPurgeService(
           ),
         );
       }
+      const safeAfter = await abortPurgeUploadSessions(
+        input.ownerId,
+        tx,
+        patternIds,
+        now(),
+      );
       if (!isReplay) {
         await storeOperationResult(input.ownerId, tx, input.operationId, {
           state: "pending",
           target: input.target,
         });
       }
-      return { state: "pending", target: input.target };
+      return { state: "pending", target: input.target, safeAfter };
     });
   }
 
@@ -728,6 +749,7 @@ export function createTrashPurgeService(
     ownerId: string;
     operationId: string;
     target: PurgeTarget;
+    safeAfter: Date | null;
   }) {
     let patternIds: string[];
     if (input.target.kind === "patterns") {
@@ -742,14 +764,18 @@ export function createTrashPurgeService(
       ).map((row) => row.id);
     }
 
-    const keys =
-      patternIds.length === 0
-        ? []
-        : (await listPurgeObjectKeys(input.ownerId, patternIds, database)).map(
-            (row) => row.objectKey,
-          );
+    if (input.safeAfter && now() < input.safeAfter) {
+      purgeDeferred(input.safeAfter);
+    }
     try {
-      await oss.deleteObjects(keys);
+      for (const patternId of patternIds) {
+        const prefix = patternObjectPrefix({
+          ownerId: input.ownerId,
+          patternId,
+        });
+        const keys = await oss.listObjectKeys(prefix);
+        await oss.deleteObjectsUnderPrefix(prefix, keys);
+      }
     } catch {
       const completed = await handleOssFailure(input);
       if (completed) return completed;
@@ -785,6 +811,7 @@ export function createTrashPurgeService(
       ownerId: input.ownerId,
       operationId: mutation.operationId,
       target,
+      safeAfter: claimed.safeAfter,
     });
   }
 
@@ -813,6 +840,7 @@ export function createTrashPurgeService(
       ownerId: input.ownerId,
       operationId: mutation.operationId,
       target,
+      safeAfter: claimed.safeAfter,
     });
   }
 

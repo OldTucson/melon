@@ -7,6 +7,10 @@ import type {
 } from "@/features/storage/contracts";
 import { normalizedUuidSchema } from "@/features/storage/identifiers";
 import {
+  assertCanonicalPatternPrefix,
+  assertObjectKeyWithinPatternPrefix,
+} from "@/features/storage/object-keys";
+import {
   assertCanonicalObjectKey,
   assertValidObjectRange,
   OSS_DELETE_BATCH_SIZE,
@@ -49,6 +53,13 @@ export class FakeOssAdapter implements OssAdapter {
     this.contentTypes.set(canonicalKey, contentType);
   }
 
+  async listObjectKeys(prefix: string) {
+    const canonicalPrefix = assertCanonicalPatternPrefix(prefix);
+    return [...this.objects.keys()]
+      .filter((key) => key.startsWith(canonicalPrefix))
+      .sort();
+  }
+
   async headObject(key: string) {
     const value = this.require(key);
     return {
@@ -71,6 +82,29 @@ export class FakeOssAdapter implements OssAdapter {
 
   async deleteObjects(keys: string[]) {
     const parsedKeys = parseDeleteObjectKeys(keys);
+
+    for (
+      let start = 0;
+      start < parsedKeys.length;
+      start += OSS_DELETE_BATCH_SIZE
+    ) {
+      const batch = parsedKeys.slice(start, start + OSS_DELETE_BATCH_SIZE);
+      this.deleteCalls.push(batch);
+      if (this.failDeleteCall === this.deleteCalls.length) {
+        throw new Error("OSS_DELETE_FAILED");
+      }
+      for (const key of batch) {
+        this.objects.delete(key);
+        this.contentTypes.delete(key);
+      }
+    }
+  }
+
+  async deleteObjectsUnderPrefix(prefix: string, keys: string[]) {
+    const canonicalPrefix = assertCanonicalPatternPrefix(prefix);
+    const parsedKeys = keys.map((key) =>
+      assertObjectKeyWithinPatternPrefix(canonicalPrefix, key),
+    );
 
     for (
       let start = 0;

@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
-import { sourceObjectKey } from "@/features/storage/object-keys";
+import {
+  patternObjectPrefix,
+  sourceObjectKey,
+} from "@/features/storage/object-keys";
 
 import { FakeCredentialIssuer, FakeOssAdapter } from "./fake-oss";
 
@@ -88,6 +91,23 @@ describe("FakeOssAdapter", () => {
     expect(fake.objects.size).toBe(0);
     expect(fake.signedGets).toHaveLength(0);
     expect(fake.deleteCalls).toHaveLength(0);
+  });
+
+  it("lists and deletes uncommitted objects within a pattern prefix", async () => {
+    const fake = new FakeOssAdapter();
+    const prefix = patternObjectPrefix({ ownerId, patternId });
+    const uncommitted = `${prefix}derived/uncommitted-preview.tmp`;
+    fake.objects.set(uncommitted, Uint8Array.from([1]));
+    fake.objects.set(key, Uint8Array.from([2]));
+
+    await expect(fake.listObjectKeys(prefix)).resolves.toEqual(
+      [key, uncommitted].sort(),
+    );
+    await fake.deleteObjectsUnderPrefix(prefix, [uncommitted, key]);
+    expect(fake.objects.size).toBe(0);
+    await expect(
+      fake.deleteObjectsUnderPrefix(prefix, ["foreign/key"]),
+    ).rejects.toThrow(/outside/i);
   });
 
   it("records delete batches of at most 1,000 keys and accepts missing objects", async () => {

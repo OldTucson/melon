@@ -71,6 +71,13 @@ class BlockingCredentialIssuer implements BrowserCredentialIssuer {
   }
 }
 
+class SlowCredentialIssuer implements BrowserCredentialIssuer {
+  async issue() {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return browserCredentials();
+  }
+}
+
 class BlockingHeadOssAdapter extends FakeOssAdapter {
   readonly started = deferred<void>();
   readonly headRelease = deferred<void>();
@@ -236,6 +243,87 @@ describe("upload service lifecycle", () => {
     expect(await db.select().from(patterns)).toHaveLength(1);
     expect(await db.select().from(assets)).toHaveLength(1);
     expect(await db.select().from(uploadSessions)).toHaveLength(1);
+  });
+
+  it("persists an issuance fence before STS and the exact credential expiration afterward", async () => {
+    const blockedIssuer = new BlockingCredentialIssuer();
+    const blockedService = createUploadService({
+      database: db,
+      oss,
+      credentialIssuer: blockedIssuer,
+      now: () => now,
+    });
+    const input = initInput();
+    const pending = blockedService.initialize({ ownerId: ownerA, input });
+    await blockedIssuer.started.promise;
+
+    const [duringIssue] = await db
+      .select({
+        credentialIssueFenceAt: uploadSessions.credentialIssueFenceAt,
+        credentialsExpireAt: uploadSessions.credentialsExpireAt,
+      })
+      .from(uploadSessions)
+      .where(
+        and(
+          eq(uploadSessions.ownerId, ownerA),
+          eq(uploadSessions.operationId, input.operationId),
+        ),
+      );
+    expect(duringIssue?.credentialIssueFenceAt?.getTime()).toBeGreaterThan(
+      now.getTime() + 15 * 60 * 1_000,
+    );
+    expect(duringIssue?.credentialIssueFenceAt?.getTime()).toBeLessThan(
+      now.getTime() + 16 * 60 * 1_000,
+    );
+    expect(duringIssue?.credentialsExpireAt).toBeNull();
+
+    const credentials = browserCredentials();
+    blockedIssuer.response.resolve(credentials);
+    await expect(pending).resolves.toMatchObject({ credentials });
+
+    const [afterIssue] = await db
+      .select({
+        credentialIssueFenceAt: uploadSessions.credentialIssueFenceAt,
+        credentialsExpireAt: uploadSessions.credentialsExpireAt,
+      })
+      .from(uploadSessions)
+      .where(
+        and(
+          eq(uploadSessions.ownerId, ownerA),
+          eq(uploadSessions.operationId, input.operationId),
+        ),
+      );
+    expect(afterIssue?.credentialIssueFenceAt).toBeNull();
+    expect(afterIssue?.credentialsExpireAt?.toISOString()).toBe(
+      credentials.expiration,
+    );
+  });
+
+  it("bounds credential issuance and retains the conservative fence on timeout", async () => {
+    const timedService = createUploadService({
+      database: db,
+      oss,
+      credentialIssuer: new SlowCredentialIssuer(),
+      credentialIssueTimeoutMs: 5,
+      now: () => now,
+    });
+    const input = initInput();
+
+    await expect(
+      timedService.initialize({ ownerId: ownerA, input }),
+    ).rejects.toMatchObject({
+      code: "UPLOAD_CREDENTIALS_UNAVAILABLE",
+      status: 503,
+    });
+
+    const [session] = await db
+      .select()
+      .from(uploadSessions)
+      .where(eq(uploadSessions.operationId, input.operationId));
+    expect(session?.credentialIssueFenceAt?.getTime()).toBe(
+      now.getTime() + 15 * 60 * 1_000 + 5,
+    );
+    expect(session?.credentialsExpireAt).toBeNull();
   });
 
   it.each(["cancel", "complete", "expire"] as const)(
@@ -411,6 +499,56 @@ describe("upload service lifecycle", () => {
         }),
       ).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
     }
+  });
+
+  it("never resurrects a deleting pattern through any upload lifecycle call", async () => {
+    const input = initInput();
+    const initialized = await service.initialize({ ownerId: ownerA, input });
+    await db
+      .update(patterns)
+      .set({ status: "deleting" })
+      .where(eq(patterns.id, initialized.pattern.id));
+    await db
+      .update(uploadSessions)
+      .set({ status: "aborted" })
+      .where(eq(uploadSessions.id, initialized.session.id));
+
+    await expect(service.initialize({ ownerId: ownerA, input })).rejects.toMatchObject({
+      code: "UPLOAD_SESSION_INVALID_STATE",
+      status: 409,
+    });
+    await expect(
+      service.refreshCredentials({
+        ownerId: ownerA,
+        sessionId: initialized.session.id,
+        operationId: initialized.operationId,
+      }),
+    ).rejects.toMatchObject({ code: "UPLOAD_SESSION_INVALID_STATE", status: 409 });
+    await expect(
+      service.complete({
+        ownerId: ownerA,
+        sessionId: initialized.session.id,
+        input: sourceCompletion(initialized),
+      }),
+    ).rejects.toMatchObject({ code: "UPLOAD_SESSION_INVALID_STATE", status: 409 });
+    await expect(
+      service.cancel({
+        ownerId: ownerA,
+        sessionId: initialized.session.id,
+        input: { operationId: initialized.operationId },
+      }),
+    ).rejects.toMatchObject({ code: "UPLOAD_SESSION_INVALID_STATE", status: 409 });
+
+    const [pattern] = await db
+      .select()
+      .from(patterns)
+      .where(eq(patterns.id, initialized.pattern.id));
+    const [session] = await db
+      .select()
+      .from(uploadSessions)
+      .where(eq(uploadSessions.id, initialized.session.id));
+    expect(pattern?.status).toBe("deleting");
+    expect(session?.status).toBe("aborted");
   });
 
   it("expires refresh at the exact boundary and persists diagnostics", async () => {

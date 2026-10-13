@@ -42,6 +42,12 @@ export const uploadSessions = pgTable(
     sizeBytes: bigint("size_bytes", { mode: "bigint" }).notNull(),
     status: uploadStatusEnum("status").notNull().default("initialized"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    credentialIssueFenceAt: timestamp("credential_issue_fence_at", {
+      withTimezone: true,
+    }),
+    credentialsExpireAt: timestamp("credentials_expire_at", {
+      withTimezone: true,
+    }),
     lastErrorCode: text("last_error_code"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

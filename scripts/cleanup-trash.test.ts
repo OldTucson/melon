@@ -99,4 +99,25 @@ describe("trash cleanup command", () => {
     expect(services.purgePatterns).toHaveBeenCalledTimes(2);
     expect(reportError).toHaveBeenCalledTimes(1);
   });
+
+  it("treats a credential-fence deferral as pending work, not a failure", async () => {
+    const services = createServices();
+    const deferred = Object.assign(new Error("credential fence active"), {
+      code: "TRASH_PURGE_DEFERRED",
+    });
+    vi.mocked(services.purgePatterns)
+      .mockRejectedValueOnce(deferred)
+      .mockResolvedValueOnce({ state: "complete" });
+    const reportError = vi.fn();
+
+    const result = await runTrashCleanup({
+      services,
+      now: new Date("2026-10-13T00:00:00.000Z"),
+      createOperationId: () => newOperationId,
+      reportError,
+    });
+
+    expect(result).toEqual({ processed: 3, failures: 0 });
+    expect(reportError).not.toHaveBeenCalled();
+  });
 });

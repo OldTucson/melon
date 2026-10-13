@@ -3,8 +3,16 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
-import type { OssAdapter } from "@/features/storage/contracts";
-import { sourceObjectKey } from "@/features/storage/object-keys";
+import { trashFolderTree } from "@/features/folders/folder-trash-service";
+import type {
+  BrowserCredentialIssuer,
+  BrowserOssCredentials,
+  OssAdapter,
+} from "@/features/storage/contracts";
+import {
+  patternObjectPrefix,
+  sourceObjectKey,
+} from "@/features/storage/object-keys";
 import { closeDatabase, db } from "@/lib/db/client";
 import {
   assets,
@@ -21,6 +29,7 @@ import { AppError } from "@/lib/http/app-error";
 import { createOperationKey } from "@/lib/db/operation";
 import { resetDatabase } from "@/test/database";
 import { FakeOssAdapter } from "@/test/fake-oss";
+import { createUploadService } from "@/features/uploads/upload-service";
 
 import { createTrashPurgeService } from "./trash-purge-service";
 import { listExpiredTrashTargets } from "./trash-purge-repository";
@@ -129,9 +138,9 @@ async function expectAppError(
   }
 }
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((resolvePromise) => {
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
     resolve = resolvePromise;
   });
   return { promise, resolve };
@@ -179,7 +188,9 @@ describe("trash permanent purge", () => {
       headObject: oss.headObject.bind(oss),
       readRange: oss.readRange.bind(oss),
       createSignedGet: oss.createSignedGet.bind(oss),
-      deleteObjects: async (keys) => {
+      deleteObjects: oss.deleteObjects.bind(oss),
+      listObjectKeys: oss.listObjectKeys.bind(oss),
+      deleteObjectsUnderPrefix: async (prefix, keys) => {
         const [pattern] = await db
           .select({ status: patterns.status })
           .from(patterns)
@@ -197,7 +208,7 @@ describe("trash permanent purge", () => {
           patternStatus: pattern!.status,
           operationState: operation?.result,
         });
-        await oss.deleteObjects(keys);
+        await oss.deleteObjectsUnderPrefix(prefix, keys);
       },
     };
     const service = createTrashPurgeService({
@@ -323,6 +334,310 @@ describe("trash permanent purge", () => {
       deletedFolderCount: 0,
     });
     expect(oss.deleteCalls).toHaveLength(2);
+  });
+
+  it("maps an OSS prefix-list failure to the retryable purge error", async () => {
+    const ownerId = await seedUser("purge-list-failure@example.test");
+    const trashBatchId = randomUUID();
+    const patternId = await seedTrashedPattern({
+      ownerId,
+      trashBatchId,
+      name: "List failure",
+    });
+    class ListingFailureOss extends FakeOssAdapter {
+      override async listObjectKeys(): Promise<string[]> {
+        throw new Error("OSS_LIST_FAILED");
+      }
+    }
+    const oss = new ListingFailureOss();
+    await seedSourceAsset(ownerId, patternId, oss);
+    const service = createTrashPurgeService({
+      database: db,
+      oss,
+      now: () => now,
+    });
+
+    await expectAppError(
+      service.purgePatterns({
+        ownerId,
+        operationId: randomUUID(),
+        patternIds: [patternId],
+      }),
+      "OSS_DELETE_FAILED",
+      502,
+    );
+    const [failedPattern] = await db
+      .select()
+      .from(patterns)
+      .where(eq(patterns.id, patternId));
+    expect(failedPattern).toMatchObject({
+      status: "deleting",
+      lastErrorCode: "OSS_DELETE_FAILED",
+    });
+    expect(await db.select().from(assets)).toHaveLength(1);
+  });
+
+  it("deletes every object under the pattern prefix, including uncommitted objects", async () => {
+    const ownerId = await seedUser("purge-prefix@example.test");
+    const patternId = await seedTrashedPattern({
+      ownerId,
+      trashBatchId: randomUUID(),
+      name: "Prefix cleanup",
+    });
+    const oss = new FakeOssAdapter();
+    const source = await seedSourceAsset(ownerId, patternId, oss);
+    const prefix = patternObjectPrefix({ ownerId, patternId });
+    const uncommitted = `${prefix}derived/uncommitted-preview.tmp`;
+    const unrelatedPatternId = randomUUID();
+    const unrelated = sourceObjectKey({
+      ownerId,
+      patternId: unrelatedPatternId,
+      assetId: randomUUID(),
+      extension: "psd",
+    });
+    oss.objects.set(uncommitted, Uint8Array.from([4, 5, 6]));
+    oss.putObject(unrelated, Uint8Array.from([7]));
+    const service = createTrashPurgeService({
+      database: db,
+      oss,
+      now: () => now,
+    });
+
+    await service.purgePatterns({
+      ownerId,
+      operationId: randomUUID(),
+      patternIds: [patternId],
+    });
+
+    expect(oss.objects.has(source.objectKey)).toBe(false);
+    expect(oss.objects.has(uncommitted)).toBe(false);
+    expect(oss.objects.has(unrelated)).toBe(true);
+  });
+
+  it("aborts upload sessions and defers without failure until every write credential expires", async () => {
+    const ownerId = await seedUser("purge-credential-fence@example.test");
+    const patternId = await seedTrashedPattern({
+      ownerId,
+      trashBatchId: randomUUID(),
+      name: "Credential fence",
+    });
+    const oss = new FakeOssAdapter();
+    const source = await seedSourceAsset(ownerId, patternId, oss);
+    const safeAfter = new Date(now.getTime() + 5 * 60 * 1_000);
+    const sessionId = randomUUID();
+    await db.insert(uploadSessions).values({
+      id: sessionId,
+      ownerId,
+      patternId,
+      operationId: randomUUID(),
+      sourceObjectKey: source.objectKey,
+      fileFingerprint: {},
+      sizeBytes: 12n,
+      status: "uploading",
+      expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1_000),
+      credentialIssueFenceAt: new Date(now.getTime() + 60_000),
+      credentialsExpireAt: safeAfter,
+    });
+    let currentNow = now;
+    const operationId = randomUUID();
+    const service = createTrashPurgeService({
+      database: db,
+      oss,
+      now: () => currentNow,
+    });
+
+    await expectAppError(
+      service.purgePatterns({ ownerId, operationId, patternIds: [patternId] }),
+      "TRASH_PURGE_DEFERRED",
+      409,
+    );
+    const [pendingPattern] = await db
+      .select()
+      .from(patterns)
+      .where(eq(patterns.id, patternId));
+    const [abortedSession] = await db
+      .select()
+      .from(uploadSessions)
+      .where(eq(uploadSessions.id, sessionId));
+    expect(pendingPattern).toMatchObject({
+      status: "deleting",
+      lastErrorCode: null,
+    });
+    expect(abortedSession).toMatchObject({
+      status: "aborted",
+      lastErrorCode: "UPLOAD_ABORTED_BY_PURGE",
+    });
+    expect(oss.deleteCalls).toHaveLength(0);
+    expect(oss.objects.has(source.objectKey)).toBe(true);
+
+    currentNow = new Date(safeAfter.getTime() + 1);
+    await expect(
+      service.purgePatterns({ ownerId, operationId, patternIds: [patternId] }),
+    ).resolves.toEqual({
+      state: "complete",
+      deletedPatternCount: 1,
+      deletedFolderCount: 0,
+    });
+    expect(oss.objects.has(source.objectKey)).toBe(false);
+    expect(await db.select().from(changeLog)).toHaveLength(1);
+  });
+
+  it("lets purge fence an in-flight credential issue without returning write access", async () => {
+    const ownerId = await seedUser("purge-inflight-credential@example.test");
+    const folderId = randomUUID();
+    await db.insert(folders).values({
+      id: folderId,
+      ownerId,
+      name: "Pending upload",
+      normalizedName: "pending upload",
+      status: "active",
+    });
+    const started = deferred();
+    const response = deferred<BrowserOssCredentials>();
+    const credentialIssuer: BrowserCredentialIssuer = {
+      async issue() {
+        started.resolve(undefined);
+        return response.promise;
+      },
+    };
+    let currentNow = new Date("2026-10-09T10:00:00.000Z");
+    const oss = new FakeOssAdapter();
+    const upload = createUploadService({
+      database: db,
+      oss,
+      credentialIssuer,
+      now: () => currentNow,
+    });
+    const uploadInput = {
+      operationId: randomUUID(),
+      patternId: randomUUID(),
+      sourceAssetId: randomUUID(),
+      originalFilename: "pending.psd",
+      extension: "psd" as const,
+      sizeBytes: 12,
+      lastModified: 1_700_000_000_000,
+      contentHash: "d".repeat(64),
+    };
+    const initialization = upload.initialize({ ownerId, input: uploadInput });
+    await started.promise;
+    await db
+      .update(patterns)
+      .set({ folderId })
+      .where(eq(patterns.id, uploadInput.patternId));
+    const trashBatchId = randomUUID();
+    await trashFolderTree({
+      ownerId,
+      folderId,
+      operationId: trashBatchId,
+      version: 0,
+    });
+    const purgeOperationId = randomUUID();
+    const purge = createTrashPurgeService({
+      database: db,
+      oss,
+      now: () => currentNow,
+    });
+
+    await expectAppError(
+      purge.purgeFolderBatch({
+        ownerId,
+        operationId: purgeOperationId,
+        trashBatchId,
+      }),
+      "TRASH_PURGE_DEFERRED",
+      409,
+    );
+    response.resolve({
+      accessKeyId: "STS.in-flight",
+      accessKeySecret: "temporary-secret",
+      securityToken: "temporary-token",
+      expiration: "2026-10-09T10:15:00.000Z",
+      region: "oss-cn-hangzhou",
+      bucket: "melon-test-assets",
+      endpoint: "https://assets.example.test",
+      cname: true,
+    });
+    await expect(initialization).rejects.toMatchObject({
+      code: "UPLOAD_SESSION_INVALID_STATE",
+    });
+    const [fencedSession] = await db
+      .select()
+      .from(uploadSessions)
+      .where(eq(uploadSessions.operationId, uploadInput.operationId));
+    expect(fencedSession).toMatchObject({
+      status: "aborted",
+      credentialIssueFenceAt: null,
+      credentialsExpireAt: new Date("2026-10-09T10:15:00.000Z"),
+    });
+
+    currentNow = new Date("2026-10-09T10:15:00.001Z");
+    await expect(
+      purge.purgeFolderBatch({
+        ownerId,
+        operationId: purgeOperationId,
+        trashBatchId,
+      }),
+    ).resolves.toEqual({
+      state: "complete",
+      deletedPatternCount: 1,
+      deletedFolderCount: 1,
+    });
+  });
+
+  it("replays after OSS succeeds but finalization fails and emits one event", async () => {
+    const ownerId = await seedUser("purge-finalize-retry@example.test");
+    const patternId = await seedTrashedPattern({
+      ownerId,
+      trashBatchId: randomUUID(),
+      name: "Finalize retry",
+    });
+    const oss = new FakeOssAdapter();
+    await seedSourceAsset(ownerId, patternId, oss);
+    let transactions = 0;
+    const flakyDatabase = new Proxy(db, {
+      get(target, property, receiver) {
+        if (property !== "transaction") {
+          return Reflect.get(target, property, receiver);
+        }
+        return async (...args: Parameters<typeof db.transaction>) => {
+          transactions += 1;
+          if (transactions === 2) throw new Error("FINALIZATION_UNAVAILABLE");
+          return db.transaction(...args);
+        };
+      },
+    });
+    const operationId = randomUUID();
+    const flakyService = createTrashPurgeService({
+      database: flakyDatabase,
+      oss,
+      now: () => now,
+    });
+
+    await expect(
+      flakyService.purgePatterns({
+        ownerId,
+        operationId,
+        patternIds: [patternId],
+      }),
+    ).rejects.toThrow("FINALIZATION_UNAVAILABLE");
+    expect(oss.objects.size).toBe(0);
+    expect(await db.select().from(assets)).toHaveLength(1);
+    expect(await db.select().from(changeLog)).toHaveLength(0);
+
+    const service = createTrashPurgeService({
+      database: db,
+      oss,
+      now: () => now,
+    });
+    await expect(
+      service.purgePatterns({ ownerId, operationId, patternIds: [patternId] }),
+    ).resolves.toEqual({
+      state: "complete",
+      deletedPatternCount: 1,
+      deletedFolderCount: 0,
+    });
+    expect(await db.select().from(changeLog)).toHaveLength(1);
+    expect(oss.deleteCalls).toHaveLength(1);
   });
 
   it("purges a complete folder batch and clears self references in tombstones", async () => {
@@ -577,11 +892,11 @@ describe("trash permanent purge", () => {
     class BlockingOss extends FakeOssAdapter {
       arrivals = 0;
 
-      override async deleteObjects(keys: string[]) {
+      override async deleteObjectsUnderPrefix(prefix: string, keys: string[]) {
         this.arrivals += 1;
         if (this.arrivals === 2) bothDeleting.resolve();
         await release.promise;
-        return super.deleteObjects(keys);
+        return super.deleteObjectsUnderPrefix(prefix, keys);
       }
     }
     const oss = new BlockingOss();
@@ -706,5 +1021,68 @@ describe("trash permanent purge", () => {
         left.trashBatchId.localeCompare(right.trashBatchId),
       ),
     );
+  });
+
+  it("excludes an entire ordinary batch when any member is deleting or has a pending purge", async () => {
+    const ownerId = await seedUser("purge-expired-pending@example.test");
+    const deletingBatchId = randomUUID();
+    const pendingBatchId = randomUUID();
+    const corruptBatchId = randomUUID();
+    const deletingId = await seedTrashedPattern({
+      ownerId,
+      trashBatchId: deletingBatchId,
+      name: "Deleting member",
+    });
+    await seedTrashedPattern({
+      ownerId,
+      trashBatchId: deletingBatchId,
+      name: "Untouched sibling",
+    });
+    await db
+      .update(patterns)
+      .set({ status: "deleting" })
+      .where(eq(patterns.id, deletingId));
+
+    const pendingId = await seedTrashedPattern({
+      ownerId,
+      trashBatchId: pendingBatchId,
+      name: "Pending member",
+    });
+    await seedTrashedPattern({
+      ownerId,
+      trashBatchId: pendingBatchId,
+      name: "Pending sibling",
+    });
+    await db.insert(operations).values({
+      ownerId,
+      operationId: randomUUID(),
+      kind: createOperationKey("trash.patterns.purge", {
+        patternIds: [pendingId],
+      }),
+      result: {
+        state: "pending",
+        target: { kind: "patterns", patternIds: [pendingId] },
+      },
+    });
+    await seedTrashedPattern({
+      ownerId,
+      trashBatchId: corruptBatchId,
+      name: "Corrupt pending sibling",
+    });
+    await db.insert(operations).values({
+      ownerId,
+      operationId: randomUUID(),
+      kind: createOperationKey("trash.patterns.purge", {
+        patternIds: [randomUUID()],
+      }),
+      result: {
+        state: "pending",
+        target: { kind: "patterns", patternIds: "corrupt" },
+      },
+    });
+
+    await expect(
+      listExpiredTrashTargets(new Date("2026-09-13T00:00:00.000Z")),
+    ).resolves.toEqual([]);
   });
 });

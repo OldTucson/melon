@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 
 import { createAlibabaBrowserCredentialIssuer } from "@/features/storage/cloud-credentials";
+import { lockFolderHierarchy } from "@/features/folders/folder-repository";
 import type {
   BrowserCredentialIssuer,
   BrowserOssCredentials,
@@ -48,6 +49,8 @@ import {
 import { derivePatternName, sanitizeDownloadName } from "./filenames";
 
 const UPLOAD_SESSION_DURATION_MS = 24 * 60 * 60 * 1000;
+const CREDENTIAL_MAX_LIFETIME_MS = 15 * 60 * 1000;
+const DEFAULT_CREDENTIAL_ISSUE_TIMEOUT_MS = 30_000;
 const DEFAULT_VERIFICATION_TIMEOUT_MS = 10_000;
 const CLEANUP_WARNING = "UPLOAD_MULTIPART_CLEANUP_PENDING" as const;
 
@@ -89,6 +92,7 @@ type UploadServiceDependencies = {
   credentialIssuer: BrowserCredentialIssuer;
   now: () => Date;
   verificationTimeoutMs?: number;
+  credentialIssueTimeoutMs?: number;
 };
 
 type ServiceOutcome<T> =
@@ -186,6 +190,10 @@ function invalidSessionState() {
     409,
     "Upload session is not active",
   );
+}
+
+function uploadPatternClosed(status: PatternRow["status"]) {
+  return status === "trashed" || status === "deleting" || status === "deleted";
 }
 
 function expiredSession() {
@@ -288,6 +296,54 @@ async function lockOwnedSession(
     .limit(1)
     .for("update");
   return session;
+}
+
+async function lockOwnedUploadState(
+  tx: DbTransaction,
+  ownerId: string,
+  sessionId: string,
+) {
+  await lockFolderHierarchy(ownerId, tx);
+  const [candidate] = await tx
+    .select({ patternId: uploadSessions.patternId })
+    .from(uploadSessions)
+    .where(
+      and(
+        eq(uploadSessions.ownerId, ownerId),
+        eq(uploadSessions.id, sessionId),
+      ),
+    )
+    .limit(1);
+  if (!candidate) return undefined;
+
+  const [pattern] = await tx
+    .select()
+    .from(patterns)
+    .where(
+      and(
+        eq(patterns.ownerId, ownerId),
+        eq(patterns.id, candidate.patternId),
+      ),
+    )
+    .limit(1)
+    .for("update");
+  const session = await lockOwnedSession(tx, ownerId, sessionId);
+  if (!pattern || !session || session.patternId !== pattern.id) {
+    throw new Error("UPLOAD_STATE_INVALID");
+  }
+  return { pattern, session };
+}
+
+function credentialIssueFence(now: Date, credentialIssueTimeoutMs: number) {
+  return new Date(
+    now.getTime() + CREDENTIAL_MAX_LIFETIME_MS + credentialIssueTimeoutMs,
+  );
+}
+
+function credentialExpiration(value: string) {
+  const expiration = new Date(value);
+  if (!Number.isFinite(expiration.getTime())) throw credentialFailure();
+  return expiration;
 }
 
 async function readLifecycleOperation(
@@ -424,11 +480,18 @@ async function issueCredentials(
   issuer: BrowserCredentialIssuer,
   ownerId: string,
   patternId: string,
+  timeoutMs: number,
 ) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return await issuer.issue({ ownerId, patternId });
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(credentialFailure()), timeoutMs);
+    });
+    return await Promise.race([issuer.issue({ ownerId, patternId }), timeout]);
   } catch {
     throw credentialFailure();
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -437,15 +500,38 @@ async function revalidateIssuedCredentials(
   ownerId: string,
   sessionId: string,
   operationId: string,
+  expiration: string,
   now: () => Date,
 ) {
   return database.transaction<
     ServiceOutcome<{ session: ReturnType<typeof toSessionDto> }>
   >(async (tx) => {
-    const session = await lockOwnedSession(tx, ownerId, sessionId);
-    if (!session) return { ok: false, error: notFound("session") };
+    const issuedAt = now();
+    const expiresAt = credentialExpiration(expiration);
+    const state = await lockOwnedUploadState(tx, ownerId, sessionId);
+    if (!state) return { ok: false, error: notFound("session") };
+    const { pattern, session } = state;
     if (session.operationId !== operationId) {
       return { ok: false, error: operationMismatch() };
+    }
+    await tx
+      .update(uploadSessions)
+      .set({
+        credentialIssueFenceAt: null,
+        credentialsExpireAt:
+          session.credentialsExpireAt && session.credentialsExpireAt > expiresAt
+            ? session.credentialsExpireAt
+            : expiresAt,
+        updatedAt: issuedAt,
+      })
+      .where(
+        and(
+          eq(uploadSessions.ownerId, ownerId),
+          eq(uploadSessions.id, sessionId),
+        ),
+      );
+    if (uploadPatternClosed(pattern.status)) {
+      return { ok: false, error: invalidSessionState() };
     }
     if (session.status === "completed" || session.status === "aborted") {
       return { ok: false, error: invalidSessionState() };
@@ -463,6 +549,9 @@ async function revalidateIssuedCredentials(
     }
     if (session.status === "completing") {
       return { ok: false, error: invalidSessionState() };
+    }
+    if (expiresAt <= issuedAt) {
+      return { ok: false, error: credentialFailure() };
     }
     return { ok: true, value: { session: toSessionDto(session) } };
   });
@@ -488,8 +577,17 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
   const { database, oss, credentialIssuer, now } = dependencies;
   const verificationTimeoutMs =
     dependencies.verificationTimeoutMs ?? DEFAULT_VERIFICATION_TIMEOUT_MS;
+  const credentialIssueTimeoutMs =
+    dependencies.credentialIssueTimeoutMs ??
+    DEFAULT_CREDENTIAL_ISSUE_TIMEOUT_MS;
   if (!Number.isSafeInteger(verificationTimeoutMs) || verificationTimeoutMs <= 0) {
     throw new Error("UPLOAD_VERIFICATION_TIMEOUT_INVALID");
+  }
+  if (
+    !Number.isSafeInteger(credentialIssueTimeoutMs) ||
+    credentialIssueTimeoutMs <= 0
+  ) {
+    throw new Error("UPLOAD_CREDENTIAL_TIMEOUT_INVALID");
   }
 
   return {
@@ -520,8 +618,16 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
         if (operation.state === "mismatch") throw operationMismatch();
         if (operation.state === "replay") {
           const replay = lifecycleResult(operation.result).initialized;
-          const session = await lockOwnedSession(tx, ownerId, replay.session.id);
-          if (!session) throw new Error("UPLOAD_SESSION_MISSING");
+          const state = await lockOwnedUploadState(
+            tx,
+            ownerId,
+            replay.session.id,
+          );
+          if (!state) throw new Error("UPLOAD_SESSION_MISSING");
+          const { pattern, session } = state;
+          if (uploadPatternClosed(pattern.status)) {
+            return { ok: false, error: invalidSessionState() };
+          }
           if (session.status === "completed" || session.status === "aborted") {
             return { ok: false, error: invalidSessionState() };
           }
@@ -536,9 +642,25 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
             );
             return { ok: false, error: expiredSession() };
           }
+          await tx
+            .update(uploadSessions)
+            .set({
+              credentialIssueFenceAt: credentialIssueFence(
+                now(),
+                credentialIssueTimeoutMs,
+              ),
+              updatedAt: now(),
+            })
+            .where(
+              and(
+                eq(uploadSessions.ownerId, ownerId),
+                eq(uploadSessions.id, session.id),
+              ),
+            );
           return { ok: true, value: replay };
         }
 
+        await lockFolderHierarchy(ownerId, tx);
         const timestamp = now();
         const sessionId = randomUUID();
         const expiresAt = new Date(
@@ -603,6 +725,10 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
             sizeBytes: BigInt(parsed.sizeBytes),
             status: "initialized",
             expiresAt,
+            credentialIssueFenceAt: credentialIssueFence(
+              timestamp,
+              credentialIssueTimeoutMs,
+            ),
             createdAt: timestamp,
             updatedAt: timestamp,
           })
@@ -643,12 +769,14 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
         credentialIssuer,
         ownerId,
         initialized.pattern.id,
+        credentialIssueTimeoutMs,
       );
       const revalidated = await revalidateIssuedCredentials(
         database,
         ownerId,
         initialized.session.id,
         initialized.operationId,
+        credentials.expiration,
         now,
       );
       if (!revalidated.ok) throw revalidated.error;
@@ -668,10 +796,14 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
       const outcome = await database.transaction<
         ServiceOutcome<{ session: ReturnType<typeof toSessionDto> }>
       >(async (tx) => {
-        const session = await lockOwnedSession(tx, ownerId, sessionId);
-        if (!session) return { ok: false, error: notFound("session") };
+        const state = await lockOwnedUploadState(tx, ownerId, sessionId);
+        if (!state) return { ok: false, error: notFound("session") };
+        const { pattern, session } = state;
         if (session.operationId !== operationId) {
           return { ok: false, error: operationMismatch() };
+        }
+        if (uploadPatternClosed(pattern.status)) {
+          return { ok: false, error: invalidSessionState() };
         }
         if (session.status === "completed" || session.status === "aborted") {
           return { ok: false, error: invalidSessionState() };
@@ -695,6 +827,10 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
           .update(uploadSessions)
           .set({
             status: "uploading",
+            credentialIssueFenceAt: credentialIssueFence(
+              timestamp,
+              credentialIssueTimeoutMs,
+            ),
             lastErrorCode: null,
             updatedAt: timestamp,
           })
@@ -722,12 +858,14 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
         credentialIssuer,
         ownerId,
         outcome.value.session.patternId,
+        credentialIssueTimeoutMs,
       );
       const revalidated = await revalidateIssuedCredentials(
         database,
         ownerId,
         sessionId,
         operationId,
+        credentials.expiration,
         now,
       );
       if (!revalidated.ok) throw revalidated.error;
@@ -751,10 +889,14 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
       const preparation = await database.transaction<
         ServiceOutcome<Preparation>
       >(async (tx) => {
-        const session = await lockOwnedSession(tx, ownerId, sessionId);
-        if (!session) return { ok: false, error: notFound("session") };
+        const state = await lockOwnedUploadState(tx, ownerId, sessionId);
+        if (!state) return { ok: false, error: notFound("session") };
+        const { pattern, session } = state;
         if (session.operationId !== parsed.operationId) {
           return { ok: false, error: operationMismatch() };
+        }
+        if (uploadPatternClosed(pattern.status)) {
+          return { ok: false, error: invalidSessionState() };
         }
         const lifecycle = await readLifecycleOperation(
           tx,
@@ -869,10 +1011,14 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
 
       const persistVerificationError = async (error: AppError) =>
         database.transaction<ServiceOutcome<CompletionResult>>(async (tx) => {
-          const session = await lockOwnedSession(tx, ownerId, sessionId);
-          if (!session) return { ok: false, error: notFound("session") };
+          const state = await lockOwnedUploadState(tx, ownerId, sessionId);
+          if (!state) return { ok: false, error: notFound("session") };
+          const { pattern, session } = state;
           if (session.operationId !== parsed.operationId) {
             return { ok: false, error: operationMismatch() };
+          }
+          if (uploadPatternClosed(pattern.status)) {
+            return { ok: false, error: invalidSessionState() };
           }
           const lifecycle = await readLifecycleOperation(
             tx,
@@ -923,10 +1069,14 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
 
       const outcome = await database.transaction<ServiceOutcome<CompletionResult>>(
         async (tx) => {
-          const session = await lockOwnedSession(tx, ownerId, sessionId);
-          if (!session) return { ok: false, error: notFound("session") };
+          const state = await lockOwnedUploadState(tx, ownerId, sessionId);
+          if (!state) return { ok: false, error: notFound("session") };
+          const { pattern, session } = state;
           if (session.operationId !== parsed.operationId) {
             return { ok: false, error: operationMismatch() };
+          }
+          if (uploadPatternClosed(pattern.status)) {
+            return { ok: false, error: invalidSessionState() };
           }
           const lifecycle = await readLifecycleOperation(
             tx,
@@ -1123,10 +1273,14 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
       const parsed = parseUploadCancel(input.input);
       const outcome = await database.transaction<ServiceOutcome<CancelResult>>(
         async (tx) => {
-          const session = await lockOwnedSession(tx, ownerId, sessionId);
-          if (!session) return { ok: false, error: notFound("session") };
+          const state = await lockOwnedUploadState(tx, ownerId, sessionId);
+          if (!state) return { ok: false, error: notFound("session") };
+          const { pattern, session } = state;
           if (session.operationId !== parsed.operationId) {
             return { ok: false, error: operationMismatch() };
+          }
+          if (uploadPatternClosed(pattern.status)) {
+            return { ok: false, error: invalidSessionState() };
           }
           const lifecycle = await readLifecycleOperation(
             tx,

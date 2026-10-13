@@ -6,6 +6,7 @@ import {
   eq,
   inArray,
   isNotNull,
+  like,
   ne,
   or,
   sql,
@@ -176,6 +177,59 @@ export async function markFoldersDeleting(
     .where(and(eq(folders.ownerId, ownerId), inArray(folders.id, folderIds)))
     .returning({ id: folders.id });
   return rows.sort((left, right) => left.id.localeCompare(right.id));
+}
+
+export async function abortPurgeUploadSessions(
+  ownerId: string,
+  tx: DbTransaction,
+  patternIds: readonly string[],
+  now: Date,
+) {
+  if (patternIds.length === 0) return null;
+  requireSortedUniqueNormalizedIds(patternIds);
+  const sessions = await tx
+    .select()
+    .from(uploadSessions)
+    .where(
+      and(
+        eq(uploadSessions.ownerId, ownerId),
+        inArray(uploadSessions.patternId, patternIds),
+      ),
+    )
+    .orderBy(asc(uploadSessions.id))
+    .for("update");
+
+  if (sessions.length > 0) {
+    await tx
+      .update(uploadSessions)
+      .set({
+        status: "aborted",
+        lastErrorCode: "UPLOAD_ABORTED_BY_PURGE",
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(uploadSessions.ownerId, ownerId),
+          inArray(
+            uploadSessions.id,
+            sessions.map((session) => session.id),
+          ),
+        ),
+      );
+  }
+
+  let safeAfter: Date | null = null;
+  for (const session of sessions) {
+    for (const candidate of [
+      session.credentialIssueFenceAt,
+      session.credentialsExpireAt,
+    ]) {
+      if (candidate && (!safeAfter || candidate > safeAfter)) {
+        safeAfter = candidate;
+      }
+    }
+  }
+  return safeAfter;
 }
 
 export function listPurgeObjectKeys(
@@ -361,17 +415,18 @@ export async function listExpiredTrashTargets(
   cutoff: Date,
   executor: Pick<DbTransaction, "select"> = db,
 ): Promise<ExpiredTrashTarget[]> {
-  const [folderRows, patternRows] = await Promise.all([
+  const [folderRows, patternRows, pendingOperations] = await Promise.all([
     executor
       .select({
         ownerId: folders.ownerId,
         trashBatchId: folders.trashBatchId,
         trashedAt: folders.trashedAt,
+        status: folders.status,
       })
       .from(folders)
       .where(
         and(
-          eq(folders.status, "trashed"),
+          inArray(folders.status, ["trashed", "deleting"]),
           isNotNull(folders.trashBatchId),
           isNotNull(folders.trashedAt),
         ),
@@ -383,28 +438,104 @@ export async function listExpiredTrashTargets(
         ownerId: patterns.ownerId,
         trashBatchId: patterns.trashBatchId,
         trashedAt: patterns.trashedAt,
+        status: patterns.status,
       })
       .from(patterns)
       .where(
         and(
-          eq(patterns.status, "trashed"),
+          inArray(patterns.status, ["trashed", "deleting"]),
           isNotNull(patterns.trashBatchId),
           isNotNull(patterns.trashedAt),
         ),
       )
       .orderBy(asc(patterns.ownerId), asc(patterns.trashBatchId), asc(patterns.id)),
+    executor
+      .select({ ownerId: operations.ownerId, result: operations.result })
+      .from(operations)
+      .where(
+        and(
+          or(
+            like(operations.kind, "trash.patterns.purge:%"),
+            like(operations.kind, "trash.folder-batch.purge:%"),
+          ),
+          sql`${operations.result} ->> 'state' = 'pending'`,
+        ),
+      ),
   ]);
 
-  const folderBatchKeys = new Map<string, Date>();
+  const pendingPatternKeys = new Set<string>();
+  const pendingFolderBatchKeys = new Set<string>();
+  const ownersWithCorruptPendingOperations = new Set<string>();
+  for (const operation of pendingOperations) {
+    const result = operation.result;
+    if (typeof result !== "object" || result === null) {
+      ownersWithCorruptPendingOperations.add(operation.ownerId);
+      continue;
+    }
+    const target = result.target;
+    if (typeof target !== "object" || target === null) {
+      ownersWithCorruptPendingOperations.add(operation.ownerId);
+      continue;
+    }
+    if (
+      "kind" in target &&
+      target.kind === "patterns" &&
+      "patternIds" in target &&
+      Array.isArray(target.patternIds) &&
+      target.patternIds.length > 0 &&
+      target.patternIds.every(
+        (patternId) =>
+          typeof patternId === "string" &&
+          normalizedUuidSchema.safeParse(patternId).success,
+      ) &&
+      new Set(target.patternIds).size === target.patternIds.length
+    ) {
+      for (const patternId of target.patternIds) {
+        pendingPatternKeys.add(`${operation.ownerId}:${patternId}`);
+      }
+    } else if (
+      "kind" in target &&
+      target.kind === "folder_batch" &&
+      "trashBatchId" in target &&
+      typeof target.trashBatchId === "string" &&
+      normalizedUuidSchema.safeParse(target.trashBatchId).success
+    ) {
+      pendingFolderBatchKeys.add(
+        `${operation.ownerId}:${target.trashBatchId}`,
+      );
+    } else {
+      ownersWithCorruptPendingOperations.add(operation.ownerId);
+    }
+  }
+
+  const folderBatchKeys = new Map<
+    string,
+    { earliest: Date; blocked: boolean }
+  >();
   for (const row of folderRows) {
     if (!row.trashBatchId || !row.trashedAt) continue;
     const key = `${row.ownerId}:${row.trashBatchId}`;
-    const earliest = folderBatchKeys.get(key);
-    if (!earliest || row.trashedAt < earliest) folderBatchKeys.set(key, row.trashedAt);
+    const existing = folderBatchKeys.get(key);
+    if (existing) {
+      if (row.trashedAt < existing.earliest) existing.earliest = row.trashedAt;
+      if (row.status === "deleting") existing.blocked = true;
+    } else {
+      folderBatchKeys.set(key, {
+        earliest: row.trashedAt,
+        blocked:
+          row.status === "deleting" || pendingFolderBatchKeys.has(key),
+      });
+    }
   }
   const patternBatches = new Map<
     string,
-    { ownerId: string; trashBatchId: string; earliest: Date; patternIds: string[] }
+    {
+      ownerId: string;
+      trashBatchId: string;
+      earliest: Date;
+      patternIds: string[];
+      blocked: boolean;
+    }
   >();
   for (const row of patternRows) {
     if (!row.trashBatchId || !row.trashedAt) continue;
@@ -413,31 +544,59 @@ export async function listExpiredTrashTargets(
     if (existing) {
       existing.patternIds.push(row.id);
       if (row.trashedAt < existing.earliest) existing.earliest = row.trashedAt;
+      if (
+        row.status === "deleting" ||
+        pendingPatternKeys.has(`${row.ownerId}:${row.id}`)
+      ) {
+        existing.blocked = true;
+      }
     } else {
       patternBatches.set(key, {
         ownerId: row.ownerId,
         trashBatchId: row.trashBatchId,
         earliest: row.trashedAt,
         patternIds: [row.id],
+        blocked:
+          row.status === "deleting" ||
+          pendingPatternKeys.has(`${row.ownerId}:${row.id}`) ||
+          pendingFolderBatchKeys.has(key),
       });
     }
   }
 
   const targets: ExpiredTrashTarget[] = [];
-  for (const [key, earliest] of folderBatchKeys) {
-    const patternEarliest = patternBatches.get(key)?.earliest;
-    const batchEarliest =
-      patternEarliest && patternEarliest < earliest ? patternEarliest : earliest;
-    if (batchEarliest > cutoff) continue;
+  for (const [key, folderBatch] of folderBatchKeys) {
     const separator = key.indexOf(":");
+    const ownerId = key.slice(0, separator);
+    const patternBatch = patternBatches.get(key);
+    if (
+      ownersWithCorruptPendingOperations.has(ownerId) ||
+      folderBatch.blocked ||
+      patternBatch?.blocked
+    ) {
+      continue;
+    }
+    const patternEarliest = patternBatch?.earliest;
+    const batchEarliest =
+      patternEarliest && patternEarliest < folderBatch.earliest
+        ? patternEarliest
+        : folderBatch.earliest;
+    if (batchEarliest > cutoff) continue;
     targets.push({
       kind: "folder_batch",
-      ownerId: key.slice(0, separator),
+      ownerId,
       trashBatchId: key.slice(separator + 1),
     });
   }
   for (const [key, batch] of patternBatches) {
-    if (folderBatchKeys.has(key) || batch.earliest > cutoff) continue;
+    if (
+      folderBatchKeys.has(key) ||
+      batch.blocked ||
+      ownersWithCorruptPendingOperations.has(batch.ownerId) ||
+      batch.earliest > cutoff
+    ) {
+      continue;
+    }
     targets.push({
       kind: "patterns",
       ownerId: batch.ownerId,
