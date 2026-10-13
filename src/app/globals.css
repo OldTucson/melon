@@ -675,9 +675,11 @@ textarea:focus-visible,
 }
 
 .toolbar-toggle {
+  flex: 0 0 auto;
   height: 32px;
   padding: 0 9px;
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .toolbar-toggle[aria-pressed="true"] {
@@ -1731,15 +1733,19 @@ textarea:focus-visible,
 
 @media (max-width: 1200px) {
   .library-layout {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(280px, 1fr) 340px;
   }
 
   .library-inspector {
-    position: absolute;
+    position: static;
     top: 0;
     right: 0;
     bottom: 0;
-    box-shadow: -14px 0 32px rgb(0 0 0 / 12%);
+    box-shadow: none;
+  }
+
+  .compact-field > span {
+    display: none;
   }
 }
 
@@ -1790,6 +1796,10 @@ textarea:focus-visible,
 }
 
 @media (max-width: 720px) {
+  .library-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .workspace {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: 48px minmax(0, 1fr) 52px;
@@ -1962,6 +1972,7 @@ textarea:focus-visible,
     position: absolute;
     width: min(340px, 100%);
     min-width: 0;
+    box-shadow: -14px 0 32px rgb(0 0 0 / 12%);
   }
 
   .preview-dialog {

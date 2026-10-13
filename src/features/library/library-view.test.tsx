@@ -152,7 +152,7 @@ describe("Mac-first workspace", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps the specified desktop, inspector, rail, and iPad overflow geometry", () => {
+  it("keeps the specified desktop, inspector, rail, and iPad reflow geometry", () => {
     const client = createClient([]);
     render(
       <QueryClientProvider client={client}>
@@ -183,7 +183,19 @@ describe("Mac-first workspace", () => {
       /@media\s*\(max-width:\s*1100px\)[\s\S]*grid-template-columns:\s*56px minmax\(0,\s*1fr\) auto/,
     );
     expect(css).toMatch(
-      /@media\s*\(max-width:\s*1200px\)[\s\S]*\.library-inspector\s*\{[^}]*position:\s*absolute/,
+      /@media\s*\(max-width:\s*1200px\)[\s\S]*?\.library-layout\s*\{[^}]*grid-template-columns:\s*minmax\(280px,\s*1fr\) 340px/,
+    );
+    expect(css).toMatch(
+      /@media\s*\(max-width:\s*1200px\)[\s\S]*?\.library-inspector\s*\{[^}]*position:\s*static/,
+    );
+    expect(css).toMatch(
+      /\.toolbar-toggle\s*\{[^}]*flex:\s*0 0 auto[^}]*white-space:\s*nowrap/,
+    );
+    expect(css).toMatch(
+      /@media\s*\(max-width:\s*1200px\)[\s\S]*?\.compact-field\s*>\s*span\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).toMatch(
+      /@media\s*\(max-width:\s*720px\)[\s\S]*?\.library-layout\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/,
     );
     expect(css).toMatch(/\.workspace\s*\{[^}]*overflow-x:\s*clip/s);
   });
