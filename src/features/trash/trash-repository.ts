@@ -23,6 +23,10 @@ export type TrashPatternReadRow = TrashPatternRow & {
   previewAssetId: string | null;
   thumbnailAssetId: string | null;
 };
+export type TrashPatternFolderRow = Pick<
+  TrashFolderRow,
+  "id" | "status" | "trashBatchId"
+>;
 
 type RestoreRowsInput = {
   ids: readonly string[];
@@ -96,8 +100,36 @@ export async function listTrashRows(
       ),
     )
     .orderBy(asc(patterns.trashBatchId), asc(patterns.id));
+  const patternFolderIds = [
+    ...new Set(
+      patternRows.flatMap((pattern) =>
+        pattern.folderId === null ? [] : [pattern.folderId],
+      ),
+    ),
+  ].sort();
+  const patternFolderRows: TrashPatternFolderRow[] =
+    patternFolderIds.length === 0
+      ? []
+      : await executor
+          .select({
+            id: folders.id,
+            status: folders.status,
+            trashBatchId: folders.trashBatchId,
+          })
+          .from(folders)
+          .where(
+            and(
+              eq(folders.ownerId, ownerId),
+              inArray(folders.id, patternFolderIds),
+            ),
+          )
+          .orderBy(asc(folders.id));
 
-  return { folders: folderRows, patterns: patternRows };
+  return {
+    folders: folderRows,
+    patterns: patternRows,
+    patternFolders: patternFolderRows,
+  };
 }
 
 export async function lockTrashPatternRows(
@@ -138,6 +170,22 @@ export async function findNonDeletedFolderBatchIds(
   return rows.flatMap((row) =>
     row.trashBatchId === null ? [] : [row.trashBatchId],
   );
+}
+
+export async function listFolderStatesById(
+  ownerId: string,
+  tx: DbTransaction,
+  folderIds: readonly string[],
+) {
+  if (folderIds.length === 0) return [];
+  requireSortedUniqueNormalizedIds(folderIds);
+  return tx
+    .select({ id: folders.id, status: folders.status })
+    .from(folders)
+    .where(
+      and(eq(folders.ownerId, ownerId), inArray(folders.id, [...folderIds])),
+    )
+    .orderBy(asc(folders.id));
 }
 
 export async function restorePatternRows(

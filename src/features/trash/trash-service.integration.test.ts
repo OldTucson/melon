@@ -5,6 +5,7 @@ import postgres from "postgres";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createFolder } from "@/features/folders/folder-service";
+import { trashFolderTree } from "@/features/folders/folder-trash-service";
 import { closeDatabase, db } from "@/lib/db/client";
 import {
   assets,
@@ -227,6 +228,33 @@ async function waitForOperationClaimWaiter(
             and activity.state = 'active'
             and activity.wait_event_type = 'Lock'
             and activity.query ilike '%insert into "operations"%'
+          order by activity.pid
+        `;
+        if (waiters[0]) return waiters[0].pid;
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      }
+    })(),
+  );
+}
+
+async function waitForPatternLockWaiter(
+  monitor: ReturnType<typeof postgres>,
+  blockerPids: readonly number[],
+  excludedPids: readonly number[] = [],
+) {
+  return withTimeout(
+    (async () => {
+      while (true) {
+        const waiters = await monitor<{ pid: number }[]>`
+          select activity.pid
+          from pg_stat_activity activity
+          where activity.datname = current_database()
+            and activity.state = 'active'
+            and activity.wait_event_type = 'Lock'
+            and pg_blocking_pids(activity.pid) && ${blockerPids}::integer[]
+            and not (activity.pid = any(${excludedPids}::integer[]))
+            and activity.query ilike '%patterns%'
+            and activity.query ilike '%for update%'
           order by activity.pid
         `;
         if (waiters[0]) return waiters[0].pid;
@@ -529,6 +557,36 @@ describe("trash read model and restore services", () => {
     },
   );
 
+  it.each(["trashed", "deleting", "deleted"] as const)(
+    "rejects an ordinary trash batch that points into a %s folder batch",
+    async (folderStatus) => {
+      const folderBatchId = randomUUID();
+      const patternBatchId = randomUUID();
+      const folderId = await seedFolder({
+        ownerId: ownerA,
+        name: `${folderStatus} folder`,
+        status: folderStatus,
+        trashBatchId: folderBatchId,
+        trashedAt: new Date(),
+      });
+      await seedPattern({
+        ownerId: ownerA,
+        name: "Wrong batch pattern",
+        folderId,
+        status: "trashed",
+        preTrashStatus: "ready",
+        trashBatchId: patternBatchId,
+        trashedAt: new Date(),
+      });
+
+      await expectAppError(
+        listTrash({ ownerId: ownerA }),
+        "INTERNAL_ERROR",
+        500,
+      );
+    },
+  );
+
   it("restores a selected ordinary subset with one sorted event and strict replay", async () => {
     const batchId = randomUUID();
     const trashedAt = new Date("2026-02-03T04:05:06.000Z");
@@ -798,6 +856,47 @@ describe("trash read model and restore services", () => {
     ]);
   });
 
+  it.each(["trashed", "deleting", "deleted"] as const)(
+    "rejects ordinary restore into a %s folder without any writes",
+    async (folderStatus) => {
+      const folderId = await seedFolder({
+        ownerId: ownerA,
+        name: `${folderStatus} restore target`,
+        status: folderStatus,
+        trashBatchId: randomUUID(),
+        trashedAt: new Date(),
+      });
+      const patternId = await seedPattern({
+        ownerId: ownerA,
+        name: "Invalid restore target",
+        folderId,
+        status: "trashed",
+        preTrashStatus: "ready",
+        version: 3,
+        trashBatchId: randomUUID(),
+        trashedAt: new Date(),
+      });
+      const folderBefore = await readFolders(ownerA, [folderId]);
+      const patternBefore = await readPatterns(ownerA, [patternId]);
+
+      await expectAppError(
+        restorePatterns({
+          ownerId: ownerA,
+          operationId: randomUUID(),
+          patternIds: [patternId],
+        }),
+        "PATTERN_STATE_CHANGED",
+        409,
+      );
+
+      expect(await readFolders(ownerA, [folderId])).toEqual(folderBefore);
+      expect(await readPatterns(ownerA, [patternId])).toEqual(patternBefore);
+      expect(await readOperations(ownerA)).toEqual([]);
+      expect(await readChanges(ownerA)).toEqual([]);
+      expect(await readSyncSeq(ownerA)).toBe(0n);
+    },
+  );
+
   it("binds ordinary-pattern operation IDs to the exact sorted selection", async () => {
     const firstId = await seedPattern({
       ownerId: ownerA,
@@ -855,6 +954,149 @@ describe("trash read model and restore services", () => {
     expect(await readOperations(ownerA)).toHaveLength(1);
     expect(await readSyncSeq(ownerA)).toBe(1n);
   });
+
+  it("linearizes ordinary restore against folder-tree trash without deadlock", async () => {
+    const databaseUrl = getServerEnv().DATABASE_URL;
+    const blocker = postgres(databaseUrl, { max: 1 });
+    const monitor = postgres(databaseUrl, { max: 1 });
+    const folderId = await seedFolder({
+      ownerId: ownerA,
+      name: "Concurrent ordinary restore folder",
+    });
+    const patternBatchId = randomUUID();
+    const patternId = await seedPattern({
+      ownerId: ownerA,
+      name: "Concurrent ordinary restore pattern",
+      folderId,
+      status: "trashed",
+      preTrashStatus: "ready",
+      trashBatchId: patternBatchId,
+      trashedAt: new Date(),
+    });
+    const restoreOperationId = randomUUID();
+    const trashOperationId = randomUUID();
+    const lockReady = deferred<void>();
+    const releaseLock = deferred<void>();
+    let blockerPid = 0;
+    let released = false;
+    const blockerTransaction = blocker.begin(async (tx) => {
+      const [backend] = await tx<{ pid: number }[]>`
+        select pg_backend_pid() as pid
+      `;
+      blockerPid = backend!.pid;
+      await tx`
+        select id
+        from patterns
+        where owner_id = ${ownerA}
+          and id = ${patternId}
+        for update
+      `;
+      lockReady.resolve();
+      await releaseLock.promise;
+    });
+    let restore: ReturnType<typeof restorePatterns> | undefined;
+    let trash: ReturnType<typeof trashFolderTree> | undefined;
+
+    try {
+      await withTimeout(lockReady.promise);
+      restore = restorePatterns({
+        ownerId: ownerA,
+        operationId: restoreOperationId,
+        patternIds: [patternId],
+      });
+      void restore.catch(() => undefined);
+      const restorePid = await waitForPatternLockWaiter(
+        monitor,
+        [blockerPid],
+      );
+
+      trash = trashFolderTree({
+        ownerId: ownerA,
+        folderId,
+        operationId: trashOperationId,
+        version: 0,
+      });
+      void trash.catch(() => undefined);
+      const trashPid = await waitForPatternLockWaiter(
+        monitor,
+        [blockerPid, restorePid],
+        [restorePid],
+      );
+      expect(trashPid).not.toBe(restorePid);
+
+      released = true;
+      releaseLock.resolve();
+      await withTimeout(blockerTransaction);
+      const [restoreResult, trashResult] = await withTimeout(
+        Promise.all([restore, trash]),
+      );
+
+      expect(restoreResult).toEqual({
+        state: "restored",
+        patterns: [
+          expect.objectContaining({
+            id: patternId,
+            status: "ready",
+            folderId,
+            version: 1,
+            changeSeq: "1",
+          }),
+        ],
+      });
+      expect(trashResult).toEqual({
+        state: "trashed",
+        trashBatchId: trashOperationId,
+        rootFolderId: folderId,
+        folderCount: 1,
+        patternCount: 1,
+      });
+      await expect(readFolders(ownerA, [folderId])).resolves.toEqual([
+        expect.objectContaining({
+          id: folderId,
+          status: "trashed",
+          trashBatchId: trashOperationId,
+          version: 1,
+          changeSeq: 2n,
+        }),
+      ]);
+      await expect(readPatterns(ownerA, [patternId])).resolves.toEqual([
+        expect.objectContaining({
+          id: patternId,
+          folderId,
+          status: "trashed",
+          preTrashStatus: "ready",
+          trashBatchId: trashOperationId,
+          version: 2,
+          changeSeq: 2n,
+        }),
+      ]);
+      expect(await readChanges(ownerA)).toEqual([
+        expect.objectContaining({
+          seq: 1n,
+          operationId: restoreOperationId,
+          operation: "patterns.restored",
+        }),
+        expect.objectContaining({
+          seq: 2n,
+          operationId: trashOperationId,
+          operation: "folder_tree.trashed",
+        }),
+      ]);
+      expect(await readOperations(ownerA)).toHaveLength(2);
+      expect(await readSyncSeq(ownerA)).toBe(2n);
+    } finally {
+      if (!released) releaseLock.resolve();
+      await Promise.allSettled([
+        blockerTransaction,
+        ...(restore ? [restore] : []),
+        ...(trash ? [trash] : []),
+      ]);
+      await Promise.all([
+        blocker.end({ timeout: 1 }),
+        monitor.end({ timeout: 1 }),
+      ]);
+    }
+  }, 10_000);
 
   it("rejects a malformed stored ordinary replay result", async () => {
     const patternId = await seedPattern({

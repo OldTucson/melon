@@ -20,6 +20,7 @@ import {
 } from "./contracts";
 import {
   findNonDeletedFolderBatchIds,
+  listFolderStatesById,
   listFolderBatchRows,
   listLiveSubtreeFolderIds,
   listTrashRows,
@@ -30,6 +31,7 @@ import {
   restoreFolderRows,
   restorePatternRows,
   type TrashFolderRow,
+  type TrashPatternFolderRow,
   type TrashPatternReadRow,
   type TrashPatternRow,
 } from "./trash-repository";
@@ -270,9 +272,42 @@ export async function listTrash(input: { ownerId: string }): Promise<TrashListDt
     batch.push(folder);
     foldersByBatch.set(folder.trashBatchId, batch);
   }
+  const expectedPatternFolderIds = [
+    ...new Set(
+      rows.patterns.flatMap((pattern) =>
+        pattern.folderId === null ? [] : [pattern.folderId],
+      ),
+    ),
+  ].sort(compareIds);
+  const patternFoldersById = new Map<string, TrashPatternFolderRow>(
+    rows.patternFolders.map((folder) => [folder.id, folder]),
+  );
+  if (
+    rows.patternFolders.length !== expectedPatternFolderIds.length ||
+    rows.patternFolders.some(
+      (folder, index) => folder.id !== expectedPatternFolderIds[index],
+    )
+  ) {
+    internalError("Trash pattern folder identity is invalid");
+  }
   for (const pattern of rows.patterns) {
     if (pattern.trashBatchId === null) {
       internalError("Trash pattern batch identity is invalid");
+    }
+    if (pattern.folderId !== null) {
+      const folder = patternFoldersById.get(pattern.folderId);
+      if (!folder) internalError("Trash pattern folder identity is invalid");
+      if (
+        folder.status !== "active" &&
+        (folder.status === "deleted" ||
+          folder.trashBatchId === null ||
+          folder.trashBatchId !== pattern.trashBatchId ||
+          !foldersByBatch
+            .get(folder.trashBatchId)
+            ?.some((batchFolder) => batchFolder.id === folder.id))
+      ) {
+        internalError("Trash pattern folder batch is invalid");
+      }
     }
     const batch = patternsByBatch.get(pattern.trashBatchId) ?? [];
     batch.push(pattern);
@@ -463,6 +498,23 @@ export async function restorePatterns(input: {
       0
     ) {
       folderBatchActionRequired();
+    }
+    const folderIds = [
+      ...new Set(
+        rows.flatMap((row) =>
+          row.folderId === null ? [] : [row.folderId],
+        ),
+      ),
+    ].sort(compareIds);
+    const folderRows = await listFolderStatesById(input.ownerId, tx, folderIds);
+    if (
+      folderRows.length !== folderIds.length ||
+      folderRows.some(
+        (folder, index) =>
+          folder.id !== folderIds[index] || folder.status !== "active",
+      )
+    ) {
+      patternStateChanged();
     }
 
     const seq = await nextChangeSeq(tx, input.ownerId);
