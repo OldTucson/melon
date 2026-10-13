@@ -9,7 +9,10 @@ import {
   patternObjectPrefix,
   sourceObjectKey,
 } from "@/features/storage/object-keys";
-import { UPLOAD_REQUEST_TIMEOUT_MS } from "@/features/storage/upload-timing";
+import {
+  REAL_OSS_TEST_TIMEOUT_MS,
+  UPLOAD_REQUEST_TIMEOUT_MS,
+} from "@/features/storage/upload-timing";
 
 import { createAlibabaBrowserCredentialIssuer } from "./cloud-credentials";
 import { createAlibabaOssAdapter } from "./oss-adapter";
@@ -173,6 +176,6 @@ describeRealOss("real OSS adapter", () => {
 
       await expect(adapter.listObjectKeys(prefix)).resolves.toEqual([]);
     },
-    120_000,
+    REAL_OSS_TEST_TIMEOUT_MS,
   );
 });
