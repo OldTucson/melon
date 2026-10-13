@@ -21,6 +21,7 @@ import { useQueryOwnerId } from "@/lib/query/provider";
 
 import { IconButton } from "./icon-button";
 import { Inspector, MultiSelectionInspector } from "./inspector";
+import { BulkActionBar } from "./bulk-action-bar";
 import type { PatternPage } from "./library-types";
 import {
   LibraryToolbar,
@@ -140,17 +141,23 @@ export function LibraryView({ initialQuery }: { initialQuery: PatternQuery }) {
             <h1 id="library-title">全部图案</h1>
           </div>
         </header>
-        <LibraryToolbar
-          key={querySignature}
-          inspectorHidden={inspectorCollapsed}
-          onQueryChange={updateQuery}
-          onShowInspector={() => setCollapsedSelectionKey(null)}
-          onViewModeChange={setViewMode}
-          query={initialQuery}
-          resultCount={items.length}
-          selectedCount={selectedIds.length}
-          viewMode={viewMode}
-        />
+        <div className="library-controls">
+          <LibraryToolbar
+            key={querySignature}
+            inspectorHidden={inspectorCollapsed}
+            onQueryChange={updateQuery}
+            onShowInspector={() => setCollapsedSelectionKey(null)}
+            onViewModeChange={setViewMode}
+            query={initialQuery}
+            resultCount={items.length}
+            selectedCount={selectedIds.length}
+            viewMode={viewMode}
+          />
+          <BulkActionBar
+            activeQuery={initialQuery}
+            loadedPatterns={items}
+          />
+        </div>
 
         {patternsQuery.isPending ? (
           <div className="library-state" aria-live="polite">

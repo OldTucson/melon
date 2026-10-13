@@ -94,19 +94,23 @@ function createClient(items: PatternItem[]) {
   return client;
 }
 
+function libraryTree(client: QueryClient, initialQuery = query) {
+  return (
+    <QueryClientProvider client={client}>
+      <QueryOwnerProvider ownerId={ownerId}>
+        <Tooltip.Provider>
+          <LibraryView initialQuery={initialQuery} />
+        </Tooltip.Provider>
+      </QueryOwnerProvider>
+    </QueryClientProvider>
+  );
+}
+
 function renderLibrary(items = Array.from({ length: 120 }, (_, i) => makePattern(i + 1))) {
   const client = createClient(items);
   return {
     client,
-    ...render(
-      <QueryClientProvider client={client}>
-        <QueryOwnerProvider ownerId={ownerId}>
-          <Tooltip.Provider>
-            <LibraryView initialQuery={query} />
-          </Tooltip.Provider>
-        </QueryOwnerProvider>
-      </QueryClientProvider>,
-    ),
+    ...render(libraryTree(client)),
   };
 }
 
@@ -330,6 +334,57 @@ describe("Mac-first workspace", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("exposes a checked accessible checkbox for selected cards", async () => {
+    const user = userEvent.setup();
+    renderLibrary([makePattern(1), makePattern(2)]);
+
+    const firstCheckbox = screen.getByRole("checkbox", {
+      name: "选择 Pattern 1",
+    });
+    expect(firstCheckbox).not.toBeChecked();
+
+    await user.click(firstCheckbox);
+    expect(firstCheckbox).toBeChecked();
+    expect(
+      screen.getByRole("listitem", { name: /Pattern 1/ }),
+    ).toHaveAttribute("data-selected", "true");
+    expect(screen.getByRole("checkbox", { name: "选择 Pattern 2" }))
+      .not.toBeChecked();
+  });
+
+  it("forwards Control clicks for additive card selection", () => {
+    renderLibrary([makePattern(1), makePattern(2)]);
+
+    fireEvent.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
+    fireEvent.click(screen.getByRole("listitem", { name: /Pattern 2/ }), {
+      ctrlKey: true,
+    });
+
+    expect(screen.getByRole("checkbox", { name: "选择 Pattern 1" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "选择 Pattern 2" })).toBeChecked();
+  });
+
+  it("selects every loaded result from the bulk selection checkbox", async () => {
+    const user = userEvent.setup();
+    renderLibrary([makePattern(1), makePattern(2), makePattern(3)]);
+
+    await user.click(screen.getByRole("checkbox", { name: "选择 Pattern 1" }));
+    await user.click(
+      screen.getByRole("checkbox", { name: "选择所有已加载图案" }),
+    );
+
+    expect(screen.getAllByRole("checkbox", { name: /选择 Pattern/ }))
+      .toHaveLength(3);
+    for (const checkbox of screen.getAllByRole("checkbox", {
+      name: /选择 Pattern/,
+    })) {
+      expect(checkbox).toBeChecked();
+    }
+    expect(
+      within(screen.getByLabelText("批量操作")).getByText("已选择 3 项"),
+    ).toBeVisible();
+  });
+
   it("does not run the preview shortcut while an interactive control has focus", async () => {
     const user = userEvent.setup();
     renderLibrary([makePattern(1)]);
@@ -393,7 +448,9 @@ describe("Mac-first workspace", () => {
     const { client } = renderLibrary([item]);
 
     fireEvent.click(await screen.findByRole("listitem", { name: /Pattern 1/ }));
-    expect(screen.getByText("已选择 1 项")).toBeVisible();
+    expect(
+      within(screen.getByLabelText("图库工具栏")).getByText("已选择 1 项"),
+    ).toBeVisible();
     act(() => {
       client.setQueryData<InfiniteData<PatternPage, string | null>>(
         queryKeys.patterns(ownerId, query),
@@ -402,10 +459,33 @@ describe("Mac-first workspace", () => {
     });
 
     await waitFor(() =>
-      expect(screen.queryByText("已选择 1 项")).not.toBeInTheDocument(),
+      expect(
+        within(screen.getByLabelText("图库工具栏")).queryByText("已选择 1 项"),
+      ).not.toBeInTheDocument(),
     );
     expect(screen.queryByRole("complementary", { name: "图案检查器" }))
       .not.toBeInTheDocument();
+  });
+
+  it("clears selection when the active query changes", async () => {
+    const item = makePattern(1);
+    const view = renderLibrary([item]);
+    fireEvent.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
+    expect(screen.getByRole("checkbox", { name: "选择 Pattern 1" })).toBeChecked();
+
+    const nextQuery = { ...query, favorite: true };
+    act(() => {
+      view.client.setQueryData(queryKeys.patterns(ownerId, nextQuery), {
+        pages: [{ items: [item], nextCursor: null }],
+        pageParams: [null],
+      });
+      view.rerender(libraryTree(view.client, nextQuery));
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: "选择 Pattern 1" }))
+        .not.toBeChecked(),
+    );
   });
 
   it("offers a checkbox menu that writes tag filters to the canonical URL", async () => {

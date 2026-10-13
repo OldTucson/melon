@@ -29,6 +29,15 @@ describe("library selection store", () => {
     expect(store.getState().anchorId).toBe("b");
   });
 
+  it("uses Control to toggle discrete patterns on Windows and Linux", () => {
+    store.getState().select("b", orderedIds, {});
+    store.getState().select("d", orderedIds, { ctrlKey: true });
+    store.getState().select("b", orderedIds, { ctrlKey: true });
+
+    expect(store.getState().selectedIds).toEqual(["d"]);
+    expect(store.getState().anchorId).toBe("b");
+  });
+
   it("uses Shift for a contiguous range without moving the anchor", () => {
     store.getState().select("b", orderedIds, {});
     store.getState().select("e", orderedIds, { shiftKey: true });
@@ -68,6 +77,28 @@ describe("library selection store", () => {
     expect(store.getState()).toMatchObject({
       selectedIds: ["d"],
       anchorId: "d",
+      previewId: null,
+    });
+  });
+
+  it("selects every loaded pattern and anchors the last loaded pattern", () => {
+    store.getState().selectAll(["a", "b", "c"]);
+
+    expect(store.getState()).toMatchObject({
+      selectedIds: ["a", "b", "c"],
+      anchorId: "c",
+    });
+  });
+
+  it("removes only explicit selections and repairs anchor and preview", () => {
+    store.getState().selectAll(["a", "b", "c", "d"]);
+    store.getState().openPreview("d");
+
+    store.getState().removeSelected(["b", "d"]);
+
+    expect(store.getState()).toMatchObject({
+      selectedIds: ["a", "c"],
+      anchorId: "a",
       previewId: null,
     });
   });

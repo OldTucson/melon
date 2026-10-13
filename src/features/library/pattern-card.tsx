@@ -2,7 +2,8 @@
 
 /* eslint-disable @next/next/no-img-element */
 
-import { Download, Eye, FileImage, Heart } from "lucide-react";
+import * as Checkbox from "@radix-ui/react-checkbox";
+import { Check, Download, Eye, FileImage, Heart } from "lucide-react";
 import { useState } from "react";
 
 import type { PatternItem } from "./library-types";
@@ -59,6 +60,7 @@ export function PatternCard({
       onClick={(event) =>
         onSelect(item.id, {
           metaKey: event.metaKey,
+          ctrlKey: event.ctrlKey,
           shiftKey: event.shiftKey,
         })
       }
@@ -79,6 +81,18 @@ export function PatternCard({
         }
       }}
     >
+      <Checkbox.Root
+        aria-label={`选择 ${item.name}`}
+        checked={selected}
+        className="pattern-select-checkbox"
+        onClick={(event) => event.stopPropagation()}
+        onDoubleClick={(event) => event.stopPropagation()}
+        onCheckedChange={() => onSelect(item.id, { metaKey: true })}
+      >
+        <Checkbox.Indicator>
+          <Check aria-hidden="true" />
+        </Checkbox.Indicator>
+      </Checkbox.Root>
       <div className="pattern-media">
         {imageAssetId && !imageFailed ? (
           <img

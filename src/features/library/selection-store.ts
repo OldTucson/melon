@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
 
 export type SelectionModifiers = {
+  ctrlKey?: boolean;
   metaKey?: boolean;
   shiftKey?: boolean;
 };
@@ -14,11 +15,13 @@ export type SelectionState = {
   closePreview: () => void;
   openPreview: (id: string) => void;
   reconcile: (orderedIds: readonly string[]) => void;
+  removeSelected: (ids: readonly string[]) => void;
   select: (
     id: string,
     orderedIds: readonly string[],
     modifiers: SelectionModifiers,
   ) => void;
+  selectAll: (orderedIds: readonly string[]) => void;
   togglePreview: () => void;
 };
 
@@ -54,6 +57,22 @@ const selectionState = (
       }
       return { selectedIds, anchorId, previewId };
     }),
+  removeSelected: (ids) =>
+    set((current) => {
+      const removed = new Set(ids);
+      const selectedIds = current.selectedIds.filter((id) => !removed.has(id));
+      return {
+        selectedIds,
+        anchorId:
+          current.anchorId && removed.has(current.anchorId)
+            ? (selectedIds[0] ?? null)
+            : current.anchorId,
+        previewId:
+          current.previewId && removed.has(current.previewId)
+            ? null
+            : current.previewId,
+      };
+    }),
   select: (id, orderedIds, modifiers) => {
     const current = get();
     if (modifiers.shiftKey && current.anchorId) {
@@ -67,7 +86,7 @@ const selectionState = (
       }
     }
 
-    if (modifiers.metaKey) {
+    if (modifiers.metaKey || modifiers.ctrlKey) {
       const selected = current.selectedIds.includes(id)
         ? current.selectedIds.filter((selectedId) => selectedId !== id)
         : [...current.selectedIds, id];
@@ -77,6 +96,11 @@ const selectionState = (
 
     set({ anchorId: id, selectedIds: [id] });
   },
+  selectAll: (orderedIds) =>
+    set({
+      anchorId: orderedIds.at(-1) ?? null,
+      selectedIds: [...orderedIds],
+    }),
   togglePreview: () => {
     const current = get();
     const selected = current.selectedIds[0];
