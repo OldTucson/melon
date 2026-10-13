@@ -23,6 +23,7 @@ const impact = {
   alreadyTrashedFolderCount: 1,
   alreadyTrashedPatternCount: 2,
   hasDeletingEntities: true,
+  scopeFingerprint: "a".repeat(64),
 };
 
 describe("folder delete-impact Route Handler", () => {

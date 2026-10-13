@@ -241,6 +241,7 @@ describe("folder service", () => {
       alreadyTrashedFolderCount: 1,
       alreadyTrashedPatternCount: 2,
       hasDeletingEntities: true,
+      scopeFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
 
     await expect(
@@ -275,6 +276,7 @@ describe("folder service", () => {
       alreadyTrashedFolderCount: 0,
       alreadyTrashedPatternCount: 0,
       hasDeletingEntities: false,
+      scopeFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
   });
 
@@ -317,6 +319,7 @@ describe("folder service", () => {
       alreadyTrashedFolderCount: 1,
       alreadyTrashedPatternCount: 1,
       hasDeletingEntities: false,
+      scopeFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
     await expect(
       getFolderDeleteImpact({ ownerId: ownerA, folderId: deletingRoot }),
@@ -326,6 +329,7 @@ describe("folder service", () => {
       alreadyTrashedFolderCount: 0,
       alreadyTrashedPatternCount: 0,
       hasDeletingEntities: true,
+      scopeFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
 
     for (const folderId of [deletedRoot, foreignRoot, randomUUID()]) {

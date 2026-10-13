@@ -15,6 +15,14 @@ const id = "20000000-0000-4000-8000-000000000001";
 const operationId = "30000000-0000-4000-8000-000000000001";
 const childId = "20000000-0000-4000-8000-000000000002";
 const batchId = operationId;
+const expectedImpact = {
+  folderCount: 2,
+  patternCount: 3,
+  alreadyTrashedFolderCount: 0,
+  alreadyTrashedPatternCount: 0,
+  hasDeletingEntities: false,
+  scopeFingerprint: "a".repeat(64),
+};
 const folder = {
   id,
   ownerId: owner,
@@ -266,13 +274,19 @@ describe("folder mutations", () => {
     const { result } = renderHook(() => useTrashFolderMutation(), { wrapper });
     let request!: Promise<unknown>;
     act(() => {
-      request = result.current.mutateAsync({ id, operationId, version: 0 });
+      request = result.current.mutateAsync({
+        id,
+        operationId,
+        version: 0,
+        expectedImpact,
+      });
     });
     await waitFor(() => expect(fetcher).toHaveBeenCalled());
     expect(client.getQueryData<(typeof folder)[]>(key)).toHaveLength(2);
     expect(JSON.parse(String(fetcher.mock.calls[0]![1]?.body))).toEqual({
       operationId,
       version: 0,
+      expectedImpact,
     });
     await act(async () => {
       finish(
@@ -309,7 +323,12 @@ describe("folder mutations", () => {
     const { result } = renderHook(() => useTrashFolderMutation(), { wrapper });
     await act(async () => {
       await expect(
-        result.current.mutateAsync({ id, operationId, version: 0 }),
+        result.current.mutateAsync({
+          id,
+          operationId,
+          version: 0,
+          expectedImpact,
+        }),
       ).rejects.toBeDefined();
     });
     expect(client.getQueryData(key)).toEqual([folder]);
@@ -332,7 +351,12 @@ describe("folder mutations", () => {
     const { result } = renderHook(() => useTrashFolderMutation(), { wrapper });
     await act(async () => {
       await expect(
-        result.current.mutateAsync({ id, operationId, version: 0 }),
+        result.current.mutateAsync({
+          id,
+          operationId,
+          version: 0,
+          expectedImpact,
+        }),
       ).rejects.toBeDefined();
     });
     expect(client.getQueryData(key)).toEqual([folder]);
@@ -343,17 +367,19 @@ describe("folder mutations", () => {
       "fetch",
       vi.fn(async () =>
         response({
-          folderCount: 1,
-          patternCount: 3,
+          folderCount: 2,
+          patternCount: 4,
           alreadyTrashedFolderCount: 2,
           alreadyTrashedPatternCount: 4,
           hasDeletingEntities: true,
+          scopeFingerprint: "b".repeat(64),
         }),
       ),
     );
     expect(await loadDeleteImpact(id)).toMatchObject({
       hasDeletingEntities: true,
-      patternCount: 3,
+      patternCount: 4,
+      scopeFingerprint: "b".repeat(64),
     });
     vi.stubGlobal(
       "fetch",

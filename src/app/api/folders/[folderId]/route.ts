@@ -39,6 +39,7 @@ export const DELETE = withRoute<FolderContext>(async (request, context) => {
       folderId,
       operationId: mutation.operationId,
       version: mutation.version,
+      expectedImpact: mutation.expectedImpact,
     }),
   );
 });

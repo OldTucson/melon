@@ -5,6 +5,8 @@ import { and, eq, sql } from "drizzle-orm";
 import { db, type DbTransaction } from "@/lib/db/client";
 import { folders, patternStatuses } from "@/lib/db/schema";
 
+import { folderDeleteScopeFingerprintFromParts } from "./folder-delete-scope";
+
 const libraryPatternStatuses = [
   "draft",
   "hashing",
@@ -31,6 +33,7 @@ export type FolderDeleteImpactRow = {
   alreadyTrashedFolderCount: number;
   alreadyTrashedPatternCount: number;
   hasDeletingEntities: boolean;
+  scopeFingerprint: string;
 };
 
 export type InsertFolderInput = {
@@ -80,6 +83,8 @@ type RawFolderDeleteImpactRow = {
   alreadyTrashedFolderCount: bigint | number | string;
   alreadyTrashedPatternCount: bigint | number | string;
   hasDeletingEntities: boolean;
+  folderScope: string;
+  patternScope: string;
 };
 
 type FolderQueryExecutor = Pick<DbTransaction, "execute">;
@@ -251,7 +256,14 @@ export async function getFolderDeleteImpactRow(
         coalesce(
           bool_or(subtree.status = 'deleting'::folder_status),
           false
-        ) as "hasDeletingFolders"
+        ) as "hasDeletingFolders",
+        coalesce(
+          string_agg(
+            subtree.id::text || ':' || subtree.status::text,
+            ',' order by subtree.id
+          ),
+          ''
+        ) as "folderScope"
       from subtree
       where subtree.owner_id = ${ownerId}
     ), pattern_impact as (
@@ -263,7 +275,14 @@ export async function getFolderDeleteImpactRow(
         coalesce(
           bool_or(pattern.status = 'deleting'::pattern_status),
           false
-        ) as "hasDeletingPatterns"
+        ) as "hasDeletingPatterns",
+        coalesce(
+          string_agg(
+            pattern.id::text || ':' || pattern.status::text,
+            ',' order by pattern.id
+          ),
+          ''
+        ) as "patternScope"
       from subtree
       join patterns pattern
         on pattern.owner_id = ${ownerId}
@@ -277,6 +296,8 @@ export async function getFolderDeleteImpactRow(
       pattern_impact."patternCount",
       folder_impact."alreadyTrashedFolderCount",
       pattern_impact."alreadyTrashedPatternCount",
+      folder_impact."folderScope",
+      pattern_impact."patternScope",
       (
         folder_impact."hasDeletingFolders"
         or pattern_impact."hasDeletingPatterns"
@@ -293,6 +314,10 @@ export async function getFolderDeleteImpactRow(
     alreadyTrashedFolderCount: Number(row.alreadyTrashedFolderCount),
     alreadyTrashedPatternCount: Number(row.alreadyTrashedPatternCount),
     hasDeletingEntities: row.hasDeletingEntities,
+    scopeFingerprint: folderDeleteScopeFingerprintFromParts(
+      row.folderScope,
+      row.patternScope,
+    ),
   };
 }
 

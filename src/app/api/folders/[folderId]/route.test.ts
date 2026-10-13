@@ -27,6 +27,14 @@ const ORIGIN = "http://localhost:3000";
 const ownerId = "10000000-0000-4000-8000-000000000001";
 const attackerId = "20000000-0000-4000-8000-000000000002";
 const folderId = "30000000-0000-4000-8000-000000000003";
+const expectedImpact = {
+  folderCount: 3,
+  patternCount: 4,
+  alreadyTrashedFolderCount: 0,
+  alreadyTrashedPatternCount: 0,
+  hasDeletingEntities: false,
+  scopeFingerprint: "a".repeat(64),
+};
 
 describe("folder item Route Handlers", () => {
   beforeEach(() => {
@@ -88,6 +96,7 @@ describe("folder item Route Handlers", () => {
         body: JSON.stringify({
           operationId: operationId.toUpperCase(),
           version: 7,
+          expectedImpact,
           ownerId: attackerId,
           folderId: randomUUID(),
           folderCount: 1,
@@ -109,6 +118,7 @@ describe("folder item Route Handlers", () => {
       folderId,
       operationId,
       version: 7,
+      expectedImpact,
     });
     expect(mocks.trashFolderTree).not.toHaveBeenCalledWith(
       expect.objectContaining({ ownerId: attackerId }),
@@ -151,6 +161,10 @@ describe("folder item Route Handlers", () => {
         folderId,
         body: JSON.stringify({ operationId: randomUUID(), version: -1 }),
       },
+      {
+        folderId,
+        body: JSON.stringify({ operationId: randomUUID(), version: 0 }),
+      },
     ];
 
     for (const input of cases) {
@@ -184,7 +198,11 @@ describe("folder item Route Handlers", () => {
       new Request(`${ORIGIN}/api/folders/${folderId}`, {
         method: "DELETE",
         headers: { "content-type": "application/json", origin: ORIGIN },
-        body: JSON.stringify({ operationId: randomUUID(), version: 0 }),
+        body: JSON.stringify({
+          operationId: randomUUID(),
+          version: 0,
+          expectedImpact,
+        }),
       }),
       { params: Promise.resolve({ folderId }) },
     );
@@ -194,6 +212,39 @@ describe("folder item Route Handlers", () => {
       error: {
         code: "TRASH_PURGE_IN_PROGRESS",
         message: "Trash purge is in progress",
+      },
+    });
+  });
+
+  it("returns the latest locked impact for an atomic delete conflict", async () => {
+    mocks.trashFolderTree.mockRejectedValueOnce(
+      new AppError(
+        "FOLDER_DELETE_SCOPE_CHANGED",
+        409,
+        "Folder delete scope changed",
+        expectedImpact,
+      ),
+    );
+    const route = await import("./route");
+    const response = await route.DELETE(
+      new Request(`${ORIGIN}/api/folders/${folderId}`, {
+        method: "DELETE",
+        headers: { "content-type": "application/json", origin: ORIGIN },
+        body: JSON.stringify({
+          operationId: randomUUID(),
+          version: 0,
+          expectedImpact,
+        }),
+      }),
+      { params: Promise.resolve({ folderId }) },
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "FOLDER_DELETE_SCOPE_CHANGED",
+        message: "Folder delete scope changed",
+        details: expectedImpact,
       },
     });
   });

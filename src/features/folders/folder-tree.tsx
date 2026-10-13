@@ -16,6 +16,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useId, useRef, useState } from "react";
 import { useSelectionStore } from "@/features/library/selection-store";
+import { ApiResponseError } from "@/lib/query/client";
 import { queryKeys } from "@/lib/query/keys";
 import { useQueryOwnerId } from "@/lib/query/provider";
 import {
@@ -24,6 +25,7 @@ import {
   useFoldersQuery,
 } from "./folder-client";
 import { FolderDeleteDialog } from "./folder-delete-dialog";
+import { folderDeleteImpactSchema } from "./contracts";
 import {
   type FolderDeleteImpact,
   folderErrorMessage,
@@ -50,7 +52,8 @@ const deleteImpactMatches = (
   left.patternCount === right.patternCount &&
   left.alreadyTrashedFolderCount === right.alreadyTrashedFolderCount &&
   left.alreadyTrashedPatternCount === right.alreadyTrashedPatternCount &&
-  left.hasDeletingEntities === right.hasDeletingEntities;
+  left.hasDeletingEntities === right.hasDeletingEntities &&
+  left.scopeFingerprint === right.scopeFingerprint;
 
 export function FolderTree() {
   const folders = useFoldersQuery(),
@@ -173,6 +176,7 @@ export function FolderTree() {
         id: deletion.folder.id,
         version: deletion.folder.version,
         operationId: crypto.randomUUID(),
+        expectedImpact: currentImpact,
       });
       if (search.get("folderId") && removed.has(search.get("folderId")!)) {
         const active =
@@ -207,7 +211,20 @@ export function FolderTree() {
       }
       setDeletion(null);
     } catch (cause) {
-      setError(folderErrorMessage(cause));
+      if (
+        cause instanceof ApiResponseError &&
+        cause.code === "FOLDER_DELETE_SCOPE_CHANGED"
+      ) {
+        const latestImpact = folderDeleteImpactSchema.safeParse(cause.details);
+        if (latestImpact.success) {
+          setDeletion({ folder: deletion.folder, impact: latestImpact.data });
+          setError("删除范围已变化，请核对后再次确认");
+        } else {
+          setError(folderErrorMessage(cause));
+        }
+      } else {
+        setError(folderErrorMessage(cause));
+      }
     } finally {
       setImpactPending(false);
       submitting.current = false;

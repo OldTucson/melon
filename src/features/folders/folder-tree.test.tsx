@@ -65,6 +65,7 @@ const impact = {
   alreadyTrashedFolderCount: 1,
   alreadyTrashedPatternCount: 3,
   hasDeletingEntities: true,
+  scopeFingerprint: "a".repeat(64),
 };
 const response = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status });
@@ -350,6 +351,7 @@ describe("folder tree interactions", () => {
       ...initialImpact,
       folderCount: 2,
       patternCount: 1,
+      scopeFingerprint: "b".repeat(64),
     };
     const fetcher = vi
       .fn()
@@ -392,6 +394,58 @@ describe("folder tree interactions", () => {
     await waitFor(() =>
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );
+  });
+  it("keeps the dialog and uses the locked server impact after an atomic scope conflict", async () => {
+    const initialImpact = {
+      ...impact,
+      folderCount: 1,
+      patternCount: 0,
+      alreadyTrashedFolderCount: 0,
+      alreadyTrashedPatternCount: 0,
+      hasDeletingEntities: false,
+    };
+    const latestImpact = {
+      ...initialImpact,
+      folderCount: 2,
+      patternCount: 1,
+      scopeFingerprint: "c".repeat(64),
+    };
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(response(initialImpact))
+      .mockResolvedValueOnce(response(initialImpact))
+      .mockResolvedValueOnce(
+        response(
+          {
+            error: {
+              code: "FOLDER_DELETE_SCOPE_CHANGED",
+              message: "Folder delete scope changed",
+              details: latestImpact,
+            },
+          },
+          409,
+        ),
+      );
+    vi.stubGlobal("fetch", fetcher);
+    const { user, client } = setup();
+
+    await menu(user, "花卉", "移入回收站");
+    await screen.findByRole("dialog");
+    await user.click(screen.getByRole("button", { name: "确认移入回收站" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "删除范围已变化，请核对后再次确认",
+    );
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      "2 个文件夹和 1 个图案",
+    );
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(
+      client.getQueryData<FolderDto[]>(queryKeys.folders(owner)),
+    ).toHaveLength(3);
+    expect(JSON.parse(String(fetcher.mock.calls[2]![1]?.body))).toMatchObject({
+      expectedImpact: initialImpact,
+    });
   });
   it("guards pending dialog and removes subtree/navigates to active ancestor only after success", async () => {
     let finishImpact!: (response: Response) => void;

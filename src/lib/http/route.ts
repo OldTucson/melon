@@ -16,9 +16,16 @@ const errorResponse = (
   message: string,
   status: number,
   requestId: string,
+  details?: unknown,
 ) =>
   Response.json(
-    { error: { code, message } },
+    {
+      error: {
+        code,
+        message,
+        ...(details === undefined ? {} : { details }),
+      },
+    },
     { status, headers: { "x-request-id": requestId } },
   );
 
@@ -35,7 +42,13 @@ export const withRoute = <Context = unknown>(
     } catch (error) {
       if (isRedirectError(error)) throw error;
       if (error instanceof AppError) {
-        return errorResponse(error.code, error.message, error.status, requestId);
+        return errorResponse(
+          error.code,
+          error.message,
+          error.status,
+          requestId,
+          error.details,
+        );
       }
       if (error instanceof ZodError) {
         return errorResponse(

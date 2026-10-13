@@ -4,8 +4,15 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
-import { createFolder } from "@/features/folders/folder-service";
-import { trashFolderTree } from "@/features/folders/folder-trash-service";
+import {
+  createFolder,
+  getFolderDeleteImpact,
+  type FolderDeleteImpact,
+} from "@/features/folders/folder-service";
+import {
+  trashFolderTree as trashFolderTreeService,
+  type TrashFolderTreeInput,
+} from "@/features/folders/folder-trash-service";
 import { closeDatabase, db } from "@/lib/db/client";
 import {
   assets,
@@ -22,6 +29,28 @@ import { resetDatabase } from "@/test/database";
 
 type FolderStatus = NonNullable<typeof folders.$inferInsert.status>;
 type PatternStatus = NonNullable<typeof patterns.$inferInsert.status>;
+
+const confirmedImpacts = new Map<string, FolderDeleteImpact>();
+
+async function trashFolderTree(
+  input: Omit<TrashFolderTreeInput, "expectedImpact"> & {
+    expectedImpact?: FolderDeleteImpact;
+  },
+) {
+  let expectedImpact = input.expectedImpact;
+  if (!expectedImpact) {
+    const operationId = input.operationId.toLowerCase();
+    expectedImpact = confirmedImpacts.get(operationId);
+    if (!expectedImpact) {
+      expectedImpact = await getFolderDeleteImpact({
+        ownerId: input.ownerId,
+        folderId: input.folderId,
+      });
+      confirmedImpacts.set(operationId, expectedImpact);
+    }
+  }
+  return trashFolderTreeService({ ...input, expectedImpact });
+}
 
 const seedUser = async (email: string) => {
   const id = randomUUID();
@@ -214,6 +243,7 @@ describe("folder tree trash service", () => {
 
   beforeEach(async () => {
     await resetDatabase();
+    confirmedImpacts.clear();
     ownerA = await seedUser("folder-trash-a@example.test");
     ownerB = await seedUser("folder-trash-b@example.test");
   });
@@ -573,6 +603,111 @@ describe("folder tree trash service", () => {
     expect(await readSyncSeq(ownerA)).toBe(0n);
   });
 
+  it("rejects a delete when the locked tree differs from the confirmed impact", async () => {
+    const rootId = await seedFolder({
+      ownerId: ownerA,
+      name: "Scope root",
+      version: 3,
+    });
+    const confirmedImpact = await getFolderDeleteImpact({
+      ownerId: ownerA,
+      folderId: rootId,
+    });
+    const childId = await seedFolder({
+      ownerId: ownerA,
+      name: "Late child",
+      parentId: rootId,
+    });
+    const patternId = await seedPattern({
+      ownerId: ownerA,
+      folderId: childId,
+      name: "Late pattern",
+    });
+    const foldersBefore = await readFolders(ownerA, [rootId, childId]);
+    const patternsBefore = await readPatterns(ownerA, [patternId]);
+
+    await expect(
+      trashFolderTreeService({
+        ownerId: ownerA,
+        folderId: rootId,
+        operationId: randomUUID(),
+        version: 3,
+        expectedImpact: confirmedImpact,
+      }),
+    ).rejects.toMatchObject({
+      code: "FOLDER_DELETE_SCOPE_CHANGED",
+      status: 409,
+      details: {
+        folderCount: 2,
+        patternCount: 1,
+        scopeFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      },
+    });
+    expect(await readFolders(ownerA, [rootId, childId])).toEqual(foldersBefore);
+    expect(await readPatterns(ownerA, [patternId])).toEqual(patternsBefore);
+    expect(await readOperations(ownerA)).toEqual([]);
+    expect(await readChanges(ownerA)).toEqual([]);
+    expect(await readSyncSeq(ownerA)).toBe(0n);
+  });
+
+  it("rejects a same-count subtree replacement using the scope fingerprint", async () => {
+    const rootId = await seedFolder({ ownerId: ownerA, name: "Scope root" });
+    const originalChildId = await seedFolder({
+      ownerId: ownerA,
+      name: "Original child",
+      parentId: rootId,
+    });
+    const confirmedImpact = await getFolderDeleteImpact({
+      ownerId: ownerA,
+      folderId: rootId,
+    });
+    await db
+      .update(folders)
+      .set({ status: "deleted", deletedAt: new Date() })
+      .where(eq(folders.id, originalChildId));
+    const replacementChildId = await seedFolder({
+      ownerId: ownerA,
+      name: "Replacement child",
+      parentId: rootId,
+    });
+    const latestImpact = await getFolderDeleteImpact({
+      ownerId: ownerA,
+      folderId: rootId,
+    });
+    expect(latestImpact).toMatchObject({
+      folderCount: confirmedImpact.folderCount,
+      patternCount: confirmedImpact.patternCount,
+    });
+    expect(latestImpact.scopeFingerprint).not.toBe(
+      confirmedImpact.scopeFingerprint,
+    );
+
+    await expect(
+      trashFolderTreeService({
+        ownerId: ownerA,
+        folderId: rootId,
+        operationId: randomUUID(),
+        version: 0,
+        expectedImpact: confirmedImpact,
+      }),
+    ).rejects.toMatchObject({
+      code: "FOLDER_DELETE_SCOPE_CHANGED",
+      status: 409,
+      details: latestImpact,
+    });
+    await expect(
+      readFolders(ownerA, [rootId, replacementChildId]),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: rootId, status: "active" }),
+        expect.objectContaining({ id: replacementChildId, status: "active" }),
+      ]),
+    );
+    expect(await readOperations(ownerA)).toEqual([]);
+    expect(await readChanges(ownerA)).toEqual([]);
+    expect(await readSyncSeq(ownerA)).toBe(0n);
+  });
+
   it("rolls back folder updates when a later pattern update fails", async () => {
     const rootId = await seedFolder({
       ownerId: ownerA,
@@ -918,7 +1053,7 @@ describe("folder tree trash service", () => {
     }
   }, 15_000);
 
-  it("serializes child creation and cascade trash without leaving an active descendant", async () => {
+  it("serializes child creation and cascade trash without deleting an unconfirmed descendant", async () => {
     const databaseUrl = getServerEnv().DATABASE_URL;
     const blocker = postgres(databaseUrl, { max: 1 });
     const monitor = postgres(databaseUrl, { max: 1 });
@@ -964,12 +1099,7 @@ describe("folder tree trash service", () => {
             Promise.allSettled([create, trash]),
           );
 
-          expect(trashOutcome.status).toBe("fulfilled");
           const [root] = await readFolders(ownerA, [rootId]);
-          expect(root).toMatchObject({
-            status: "trashed",
-            trashBatchId: trashOperationId,
-          });
           const children = await db
             .select()
             .from(folders)
@@ -979,22 +1109,47 @@ describe("folder tree trash service", () => {
                 eq(folders.parentId, rootId),
               ),
             );
+          expect([createOutcome.status, trashOutcome.status].sort()).toEqual([
+            "fulfilled",
+            "rejected",
+          ]);
+          if (trashOutcome.status === "fulfilled") {
+            expect(root).toMatchObject({
+              status: "trashed",
+              trashBatchId: trashOperationId,
+            });
+            expect(createOutcome.status).toBe("rejected");
+            if (createOutcome.status === "rejected")
+              expect(createOutcome.reason).toMatchObject({
+                code: "FOLDER_NOT_ACTIVE",
+                status: 409,
+              });
+            expect(children).toEqual([]);
+          } else {
+            expect(trashOutcome.reason).toMatchObject({
+              code: "FOLDER_DELETE_SCOPE_CHANGED",
+              status: 409,
+              details: { folderCount: 2 },
+            });
+            expect(root).toMatchObject({
+              status: "active",
+              trashBatchId: null,
+            });
+            expect(createOutcome.status).toBe("fulfilled");
+          }
           if (createOutcome.status === "fulfilled") {
             expect(children).toEqual([
               expect.objectContaining({
                 id: createOutcome.value.id,
-                status: "trashed",
-                trashBatchId: trashOperationId,
+                status: "active",
+                trashBatchId: null,
               }),
             ]);
-          } else {
-            expect(createOutcome.reason).toMatchObject({
-              code: "FOLDER_NOT_ACTIVE",
-              status: 409,
-            });
-            expect(children).toEqual([]);
           }
-          expect(children.some((child) => child.status === "active")).toBe(false);
+          expect(
+            root?.status === "trashed" &&
+              children.some((child) => child.status === "active"),
+          ).toBe(false);
         } finally {
           if (!released) releaseLock.resolve();
           await Promise.allSettled([blockerTransaction]);

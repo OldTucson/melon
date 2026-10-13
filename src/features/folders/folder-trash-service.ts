@@ -13,7 +13,11 @@ import {
 import { changeLog } from "@/lib/db/schema";
 import { AppError, validationError } from "@/lib/http/app-error";
 
-import { folderTrashMutationSchema } from "./contracts";
+import {
+  type FolderDeleteImpact,
+  folderTrashMutationSchema,
+} from "./contracts";
+import { buildFolderDeleteImpact } from "./folder-delete-scope";
 import { lockFolderHierarchy } from "./folder-repository";
 import {
   lockFolderTree,
@@ -26,6 +30,7 @@ export type TrashFolderTreeInput = {
   folderId: string;
   operationId: string;
   version: number;
+  expectedImpact: FolderDeleteImpact;
 };
 
 export type TrashFolderTreeResult = {
@@ -69,6 +74,31 @@ function folderStateChanged(): never {
     "FOLDER_STATE_CHANGED",
     409,
     "Folder state changed",
+  );
+}
+
+function folderDeleteScopeChanged(actualImpact: FolderDeleteImpact): never {
+  throw new AppError(
+    "FOLDER_DELETE_SCOPE_CHANGED",
+    409,
+    "Folder delete scope changed",
+    actualImpact,
+  );
+}
+
+function impactsMatch(
+  expected: FolderDeleteImpact,
+  actual: FolderDeleteImpact,
+) {
+  return (
+    expected.folderCount === actual.folderCount &&
+    expected.patternCount === actual.patternCount &&
+    expected.alreadyTrashedFolderCount ===
+      actual.alreadyTrashedFolderCount &&
+    expected.alreadyTrashedPatternCount ===
+      actual.alreadyTrashedPatternCount &&
+    expected.hasDeletingEntities === actual.hasDeletingEntities &&
+    expected.scopeFingerprint === actual.scopeFingerprint
   );
 }
 
@@ -122,11 +152,13 @@ export async function trashFolderTree(
     folderTrashMutationSchema.parse({
       operationId: input.operationId,
       version: input.version,
+      expectedImpact: input.expectedImpact,
     }),
   );
   const operationPayload = {
     folderId: identity.folderId,
     version: mutation.version,
+    expectedImpact: mutation.expectedImpact,
   };
   const operationKey = createOperationKey("folder.trash", operationPayload);
 
@@ -150,12 +182,10 @@ export async function trashFolderTree(
     const root = tree.folders.find((folder) => folder.id === identity.folderId);
     if (!root) folderNotFound();
     if (operation.state === "mismatch") operationIdReused();
-    if (
-      tree.folders.some((folder) => folder.status === "deleting") ||
-      tree.patterns.some((pattern) => pattern.status === "deleting")
-    ) {
-      trashPurgeInProgress();
-    }
+    const actualImpact = buildFolderDeleteImpact(tree.folders, tree.patterns);
+    if (!impactsMatch(mutation.expectedImpact, actualImpact))
+      folderDeleteScopeChanged(actualImpact);
+    if (actualImpact.hasDeletingEntities) trashPurgeInProgress();
     if (root.status !== "active") folderNotActive();
     if (root.version !== mutation.version) folderStateChanged();
 

@@ -60,6 +60,14 @@ describe("folder contracts", () => {
 
   it("requires nonnegative integer versions for rename and trash mutations", () => {
     const operationId = randomUUID();
+    const expectedImpact = {
+      folderCount: 1,
+      patternCount: 0,
+      alreadyTrashedFolderCount: 0,
+      alreadyTrashedPatternCount: 0,
+      hasDeletingEntities: false,
+      scopeFingerprint: "a".repeat(64),
+    };
 
     expect(
       folderRenameMutationSchema.parse({
@@ -71,8 +79,12 @@ describe("folder contracts", () => {
       patch: { name: "Renomm\u00e9", version: 0 },
     });
     expect(
-      folderTrashMutationSchema.parse({ operationId, version: 4 }),
-    ).toEqual({ operationId, version: 4 });
+      folderTrashMutationSchema.parse({
+        operationId,
+        version: 4,
+        expectedImpact,
+      }),
+    ).toEqual({ operationId, version: 4, expectedImpact });
 
     expect(() =>
       folderRenameMutationSchema.parse({
@@ -81,7 +93,14 @@ describe("folder contracts", () => {
       }),
     ).toThrow();
     expect(() =>
-      folderTrashMutationSchema.parse({ operationId, version: 1.5 }),
+      folderTrashMutationSchema.parse({
+        operationId,
+        version: 1.5,
+        expectedImpact,
+      }),
+    ).toThrow();
+    expect(() =>
+      folderTrashMutationSchema.parse({ operationId, version: 4 }),
     ).toThrow();
   });
 });

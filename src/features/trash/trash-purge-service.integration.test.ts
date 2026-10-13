@@ -4,6 +4,7 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { trashFolderTree } from "@/features/folders/folder-trash-service";
+import { getFolderDeleteImpact } from "@/features/folders/folder-service";
 import type {
   BrowserCredentialIssuer,
   BrowserOssCredentials,
@@ -549,11 +550,13 @@ describe("trash permanent purge", () => {
       .set({ folderId })
       .where(eq(patterns.id, uploadInput.patternId));
     const trashBatchId = randomUUID();
+    const expectedImpact = await getFolderDeleteImpact({ ownerId, folderId });
     await trashFolderTree({
       ownerId,
       folderId,
       operationId: trashBatchId,
       version: 0,
+      expectedImpact,
     });
     const purgeOperationId = randomUUID();
     const purge = createTrashPurgeService({

@@ -2,6 +2,7 @@ export type AppErrorCode =
   | "BATCH_LIMIT_EXCEEDED"
   | "FORBIDDEN_ORIGIN"
   | "FOLDER_BATCH_ACTION_REQUIRED"
+  | "FOLDER_DELETE_SCOPE_CHANGED"
   | "FOLDER_NAME_CONFLICT"
   | "FOLDER_NOT_ACTIVE"
   | "FOLDER_NOT_FOUND"
@@ -32,12 +33,19 @@ export type AppErrorCode =
 export class AppError extends Error {
   readonly code: AppErrorCode;
   readonly status: number;
+  readonly details?: unknown;
 
-  constructor(code: AppErrorCode, status: number, message: string) {
+  constructor(
+    code: AppErrorCode,
+    status: number,
+    message: string,
+    details?: unknown,
+  ) {
     super(message);
     this.name = "AppError";
     this.code = code;
     this.status = status;
+    this.details = details;
   }
 }
 

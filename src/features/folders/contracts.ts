@@ -31,9 +31,37 @@ export const folderRenameMutationSchema = z.object({
   }),
 });
 
+export const folderDeleteImpactSchema = z
+  .object({
+    folderCount: z.number().int().positive(),
+    patternCount: z.number().int().nonnegative(),
+    alreadyTrashedFolderCount: z.number().int().nonnegative(),
+    alreadyTrashedPatternCount: z.number().int().nonnegative(),
+    hasDeletingEntities: z.boolean(),
+    scopeFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  })
+  .strict()
+  .superRefine((impact, context) => {
+    if (impact.alreadyTrashedFolderCount > impact.folderCount) {
+      context.addIssue({
+        code: "custom",
+        path: ["alreadyTrashedFolderCount"],
+        message: "Trashed folder count exceeds folder count",
+      });
+    }
+    if (impact.alreadyTrashedPatternCount > impact.patternCount) {
+      context.addIssue({
+        code: "custom",
+        path: ["alreadyTrashedPatternCount"],
+        message: "Trashed pattern count exceeds pattern count",
+      });
+    }
+  });
+
 export const folderTrashMutationSchema = z.object({
   operationId: publicOperationIdSchema,
   version: z.number().int().nonnegative(),
+  expectedImpact: folderDeleteImpactSchema,
 });
 
 export type FolderCreateMutationInput = z.input<
@@ -44,6 +72,7 @@ export type FolderRenameMutationInput = z.input<
   typeof folderRenameMutationSchema
 >;
 export type FolderRenameMutation = z.output<typeof folderRenameMutationSchema>;
+export type FolderDeleteImpact = z.output<typeof folderDeleteImpactSchema>;
 export type FolderTrashMutationInput = z.input<
   typeof folderTrashMutationSchema
 >;

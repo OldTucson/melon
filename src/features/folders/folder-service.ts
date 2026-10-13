@@ -17,6 +17,7 @@ import { AppError, validationError } from "@/lib/http/app-error";
 
 import {
   folderCreateMutationSchema,
+  type FolderDeleteImpact,
   folderRenameMutationSchema,
   parseFolderName,
 } from "./contracts";
@@ -45,13 +46,7 @@ export type RenameFolderInput = {
   version: number;
 };
 
-export type FolderDeleteImpact = {
-  folderCount: number;
-  patternCount: number;
-  alreadyTrashedFolderCount: number;
-  alreadyTrashedPatternCount: number;
-  hasDeletingEntities: boolean;
-};
+export type { FolderDeleteImpact } from "./contracts";
 
 const renameIdentitySchema = z.object({
   folderId: normalizedUuidSchema,

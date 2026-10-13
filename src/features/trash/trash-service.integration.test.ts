@@ -4,7 +4,10 @@ import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import postgres from "postgres";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
-import { createFolder } from "@/features/folders/folder-service";
+import {
+  createFolder,
+  getFolderDeleteImpact,
+} from "@/features/folders/folder-service";
 import { trashFolderTree } from "@/features/folders/folder-trash-service";
 import { closeDatabase, db } from "@/lib/db/client";
 import { createOperationKey } from "@/lib/db/operation";
@@ -1061,6 +1064,10 @@ describe("trash read model and restore services", () => {
     });
     const restoreOperationId = randomUUID();
     const trashOperationId = randomUUID();
+    const expectedImpact = await getFolderDeleteImpact({
+      ownerId: ownerA,
+      folderId,
+    });
     const lockReady = deferred<void>();
     const releaseLock = deferred<void>();
     let blockerPid = 0;
@@ -1101,6 +1108,7 @@ describe("trash read model and restore services", () => {
         folderId,
         operationId: trashOperationId,
         version: 0,
+        expectedImpact,
       });
       void trash.catch(() => undefined);
       const trashPid = await waitForPatternLockWaiter(
@@ -1113,9 +1121,16 @@ describe("trash read model and restore services", () => {
       released = true;
       releaseLock.resolve();
       await withTimeout(blockerTransaction);
-      const [restoreResult, trashResult] = await withTimeout(
-        Promise.all([restore, trash]),
-      );
+      const restoreResult = await withTimeout(restore);
+      await expect(withTimeout(trash)).rejects.toMatchObject({
+        code: "FOLDER_DELETE_SCOPE_CHANGED",
+        status: 409,
+        details: {
+          folderCount: 1,
+          patternCount: 1,
+          alreadyTrashedPatternCount: 0,
+        },
+      });
 
       expect(restoreResult).toEqual({
         state: "restored",
@@ -1129,31 +1144,24 @@ describe("trash read model and restore services", () => {
           }),
         ],
       });
-      expect(trashResult).toEqual({
-        state: "trashed",
-        trashBatchId: trashOperationId,
-        rootFolderId: folderId,
-        folderCount: 1,
-        patternCount: 1,
-      });
       await expect(readFolders(ownerA, [folderId])).resolves.toEqual([
         expect.objectContaining({
           id: folderId,
-          status: "trashed",
-          trashBatchId: trashOperationId,
-          version: 1,
-          changeSeq: 2n,
+          status: "active",
+          trashBatchId: null,
+          version: 0,
+          changeSeq: 0n,
         }),
       ]);
       await expect(readPatterns(ownerA, [patternId])).resolves.toEqual([
         expect.objectContaining({
           id: patternId,
           folderId,
-          status: "trashed",
-          preTrashStatus: "ready",
-          trashBatchId: trashOperationId,
-          version: 2,
-          changeSeq: 2n,
+          status: "ready",
+          preTrashStatus: null,
+          trashBatchId: null,
+          version: 1,
+          changeSeq: 1n,
         }),
       ]);
       expect(await readChanges(ownerA)).toEqual([
@@ -1162,14 +1170,9 @@ describe("trash read model and restore services", () => {
           operationId: restoreOperationId,
           operation: "patterns.restored",
         }),
-        expect.objectContaining({
-          seq: 2n,
-          operationId: trashOperationId,
-          operation: "folder_tree.trashed",
-        }),
       ]);
-      expect(await readOperations(ownerA)).toHaveLength(2);
-      expect(await readSyncSeq(ownerA)).toBe(2n);
+      expect(await readOperations(ownerA)).toHaveLength(1);
+      expect(await readSyncSeq(ownerA)).toBe(1n);
     } finally {
       if (!released) releaseLock.resolve();
       await Promise.allSettled([

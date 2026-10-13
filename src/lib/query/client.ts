@@ -3,24 +3,32 @@ import { QueryClient } from "@tanstack/react-query";
 export class ApiResponseError extends Error {
   readonly status: number;
   readonly code: string;
+  readonly details?: unknown;
 
-  constructor(status: number, code: string, message = "Request failed") {
+  constructor(
+    status: number,
+    code: string,
+    message = "Request failed",
+    details?: unknown,
+  ) {
     super(message);
     this.name = "ApiResponseError";
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
 export async function readApiResponse<T>(response: Response): Promise<T> {
   const body = (await response.json().catch(() => null)) as
-    | (T & { error?: { code?: string; message?: string } })
+    | (T & { error?: { code?: string; message?: string; details?: unknown } })
     | null;
   if (!response.ok) {
     throw new ApiResponseError(
       response.status,
       body?.error?.code ?? "REQUEST_FAILED",
       body?.error?.message ?? "Request failed",
+      body?.error?.details,
     );
   }
   return body as T;

@@ -5,7 +5,11 @@ import { z } from "zod";
 import { ApiResponseError, readApiResponse } from "@/lib/query/client";
 import { queryKeys } from "@/lib/query/keys";
 import { useQueryOwnerId } from "@/lib/query/provider";
-import { parseFolderName } from "./contracts";
+import {
+  type FolderDeleteImpact,
+  folderDeleteImpactSchema,
+  parseFolderName,
+} from "./contracts";
 import { folderDtoSchema, type FolderCacheItem } from "./folder-client";
 import { folderSubtree } from "./folder-tree-model";
 
@@ -13,15 +17,6 @@ const retry = (count: number, error: Error) =>
   count < 1 &&
   (error instanceof TypeError ||
     (error instanceof ApiResponseError && error.status >= 500));
-const impactSchema = z
-  .object({
-    folderCount: z.number().int().positive(),
-    patternCount: z.number().int().nonnegative(),
-    alreadyTrashedFolderCount: z.number().int().nonnegative(),
-    alreadyTrashedPatternCount: z.number().int().nonnegative(),
-    hasDeletingEntities: z.boolean(),
-  })
-  .strict();
 const trashSchema = z
   .object({
     state: z.literal("trashed"),
@@ -31,9 +26,9 @@ const trashSchema = z
     patternCount: z.number().int().nonnegative(),
   })
   .strict();
-export type FolderDeleteImpact = z.infer<typeof impactSchema>;
+export type { FolderDeleteImpact } from "./contracts";
 export async function loadDeleteImpact(id: string) {
-  return impactSchema.parse(
+  return folderDeleteImpactSchema.parse(
     await readApiResponse(
       await fetch(`/api/folders/${encodeURIComponent(id)}/delete-impact`),
     ),
@@ -243,15 +238,18 @@ export function useTrashFolderMutation() {
       id,
       operationId,
       version,
+      expectedImpact,
     }: {
       id: string;
       operationId: string;
       version: number;
+      expectedImpact: FolderDeleteImpact;
     }) => {
       const result = trashSchema.parse(
         await request(`/api/folders/${encodeURIComponent(id)}`, "DELETE", {
           operationId,
           version,
+          expectedImpact,
         }),
       );
       if (result.rootFolderId !== id || result.trashBatchId !== operationId)
