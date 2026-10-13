@@ -10,12 +10,20 @@ import {
   sourceObjectKey,
 } from "@/features/storage/object-keys";
 import {
+  REAL_OSS_TEST_BODY_TIMEOUT_MS,
+  REAL_OSS_TEST_CLEANUP_TIMEOUT_MS,
   REAL_OSS_TEST_TIMEOUT_MS,
   UPLOAD_REQUEST_TIMEOUT_MS,
 } from "@/features/storage/upload-timing";
 
 import { createAlibabaBrowserCredentialIssuer } from "./cloud-credentials";
 import { createAlibabaOssAdapter } from "./oss-adapter";
+import {
+  fetchBytesWithTimeout,
+  runRealOssTestLifecycle,
+} from "./real-oss-test-lifecycle";
+
+type OssOptionsWithRetryMax = OSS.Options & { retryMax: number };
 
 const runRealOssTests = process.env.RUN_REAL_OSS_TESTS === "1";
 const localEnv = runRealOssTests
@@ -55,6 +63,50 @@ function deterministicPayload(size: number) {
   return bytes;
 }
 
+async function cleanupRealOssResources(input: {
+  adapter: ReturnType<typeof createAlibabaOssAdapter>;
+  completed: boolean;
+  key: string;
+  prefix: string;
+  uploadClient?: OSS;
+  uploadId?: string;
+}) {
+  const errors: unknown[] = [];
+  if (!input.completed && input.uploadClient && input.uploadId) {
+    try {
+      await input.uploadClient.abortMultipartUpload(input.key, input.uploadId);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+
+  try {
+    const keys = await input.adapter.listObjectKeys(input.prefix);
+    await input.adapter.deleteObjectsUnderPrefix(input.prefix, keys);
+  } catch (error) {
+    errors.push(error);
+    try {
+      await input.adapter.deleteObjects([input.key]);
+    } catch (fallbackError) {
+      errors.push(fallbackError);
+    }
+  }
+
+  try {
+    const remaining = await input.adapter.listObjectKeys(input.prefix);
+    if (remaining.length > 0) {
+      throw new Error("REAL_OSS_CLEANUP_INCOMPLETE");
+    }
+  } catch (error) {
+    errors.push(error);
+  }
+
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "REAL_OSS_CLEANUP_FAILED");
+  }
+}
+
 const describeRealOss = runRealOssTests ? describe : describe.skip;
 
 describeRealOss("real OSS adapter", () => {
@@ -76,105 +128,113 @@ describeRealOss("real OSS adapter", () => {
       const partSize = 1024 * 1024;
       const adapter = createAlibabaOssAdapter(config);
       const issuer = createAlibabaBrowserCredentialIssuer(config);
-      const credentials = await issuer.issue({ ownerId, patternId });
-      const uploadClient = new OSS({
-        accessKeyId: credentials.accessKeyId,
-        accessKeySecret: credentials.accessKeySecret,
-        stsToken: credentials.securityToken,
-        refreshSTSTokenInterval: 86_400_000,
-        region: config.region,
-        bucket: config.bucket,
-        endpoint: config.endpoint,
-        cname: config.cname,
-        secure: config.secure,
-        authorizationV4: true,
-        timeout: UPLOAD_REQUEST_TIMEOUT_MS,
-      });
+      let uploadClient: OSS | undefined;
       let uploadId: string | undefined;
       let completed = false;
 
-      try {
-        const initiated = await uploadClient.initMultipartUpload(key, {
-          mime: "image/png",
-          headers: { "x-oss-forbid-overwrite": "true" },
-        });
-        uploadId = initiated.uploadId;
-        const firstPart = await uploadClient.uploadPart(
-          key,
-          uploadId,
-          1,
-          payload,
-          0,
-          partSize,
-        );
-        const firstPartEtag = Object.entries(firstPart.res.headers).find(
-          ([name]) => name.toLowerCase() === "etag",
-        )?.[1];
-        if (typeof firstPartEtag !== "string") {
-          throw new Error("REAL_OSS_PART_ETAG_MISSING");
-        }
-        const checkpoint: OSS.Checkpoint = {
-          file: payload,
-          name: key,
-          fileSize: payload.byteLength,
-          partSize,
-          uploadId,
-          doneParts: [{ number: 1, etag: firstPartEtag }],
-        };
-        const resumedFractions: number[] = [];
-        const resumedUploadIds: string[] = [];
+      await runRealOssTestLifecycle({
+        body: async (signal) => {
+          const credentials = await issuer.issue({ ownerId, patternId });
+          const clientOptions: OssOptionsWithRetryMax = {
+            accessKeyId: credentials.accessKeyId,
+            accessKeySecret: credentials.accessKeySecret,
+            stsToken: credentials.securityToken,
+            refreshSTSTokenInterval: 86_400_000,
+            region: config.region,
+            bucket: config.bucket,
+            endpoint: config.endpoint,
+            cname: config.cname,
+            secure: config.secure,
+            authorizationV4: true,
+            retryMax: 0,
+            timeout: UPLOAD_REQUEST_TIMEOUT_MS,
+          };
+          const client = new OSS(clientOptions);
+          uploadClient = client;
+          const initiated = await client.initMultipartUpload(key, {
+            mime: "image/png",
+            headers: { "x-oss-forbid-overwrite": "true" },
+          });
+          uploadId = initiated.uploadId;
+          const firstPart = await client.uploadPart(
+            key,
+            uploadId,
+            1,
+            payload,
+            0,
+            partSize,
+          );
+          const firstPartEtag = Object.entries(firstPart.res.headers).find(
+            ([name]) => name.toLowerCase() === "etag",
+          )?.[1];
+          if (typeof firstPartEtag !== "string") {
+            throw new Error("REAL_OSS_PART_ETAG_MISSING");
+          }
+          const checkpoint: OSS.Checkpoint = {
+            file: payload,
+            name: key,
+            fileSize: payload.byteLength,
+            partSize,
+            uploadId,
+            doneParts: [{ number: 1, etag: firstPartEtag }],
+          };
+          const resumedFractions: number[] = [];
+          const resumedUploadIds: string[] = [];
 
-        await uploadClient.multipartUpload(key, payload, {
-          checkpoint,
-          parallel: 1,
-          partSize,
-          mime: "image/png",
-          headers: { "x-oss-forbid-overwrite": "true" },
-          progress: (fraction: number, nextCheckpoint?: OSS.Checkpoint) => {
-            resumedFractions.push(fraction);
-            if (nextCheckpoint) resumedUploadIds.push(nextCheckpoint.uploadId);
-          },
-        });
-        completed = true;
+          await client.multipartUpload(key, payload, {
+            checkpoint,
+            parallel: 1,
+            partSize,
+            mime: "image/png",
+            headers: { "x-oss-forbid-overwrite": "true" },
+            progress: (fraction: number, nextCheckpoint?: OSS.Checkpoint) => {
+              resumedFractions.push(fraction);
+              if (nextCheckpoint) {
+                resumedUploadIds.push(nextCheckpoint.uploadId);
+              }
+            },
+          });
+          completed = true;
 
-        expect(resumedFractions[0]).toBeGreaterThanOrEqual(0.5);
-        expect(resumedUploadIds).toContain(uploadId);
-        await expect(adapter.headObject(key)).resolves.toMatchObject({
-          contentType: "image/png",
-          sizeBytes: payload.byteLength,
-        });
-        await expect(adapter.readRange(key, 0, 63)).resolves.toEqual(
-          Uint8Array.from(payload.subarray(0, 64)),
-        );
+          expect(resumedFractions[0]).toBeGreaterThanOrEqual(0.5);
+          expect(resumedUploadIds).toContain(uploadId);
+          await expect(adapter.headObject(key)).resolves.toMatchObject({
+            contentType: "image/png",
+            sizeBytes: payload.byteLength,
+          });
+          await expect(adapter.readRange(key, 0, 63)).resolves.toEqual(
+            Uint8Array.from(payload.subarray(0, 64)),
+          );
 
-        const signedUrl = await adapter.createSignedGet({
-          key,
-          filename: "real-oss-check.png",
-          expiresSeconds: 300,
-        });
-        const response = await fetch(signedUrl);
-        expect(response.status).toBe(200);
-        const downloaded = Buffer.from(await response.arrayBuffer());
-        expect(createHash("sha256").update(downloaded).digest("hex")).toBe(
-          createHash("sha256").update(payload).digest("hex"),
-        );
-        await expect(adapter.listObjectKeys(prefix)).resolves.toEqual([key]);
-      } finally {
-        if (!completed && uploadId) {
-          await uploadClient
-            .abortMultipartUpload(key, uploadId)
-            .catch(() => undefined);
-        }
-        try {
-          const keys = await adapter.listObjectKeys(prefix);
-          await adapter.deleteObjectsUnderPrefix(prefix, keys);
-        } catch (error) {
-          await adapter.deleteObjects([key]).catch(() => undefined);
-          throw error;
-        }
-      }
-
-      await expect(adapter.listObjectKeys(prefix)).resolves.toEqual([]);
+          const signedUrl = await adapter.createSignedGet({
+            key,
+            filename: "real-oss-check.png",
+            expiresSeconds: 300,
+          });
+          const { bytes, response } = await fetchBytesWithTimeout(signedUrl, {
+            signal,
+            timeoutMs: UPLOAD_REQUEST_TIMEOUT_MS,
+          });
+          expect(response.status).toBe(200);
+          const downloaded = Buffer.from(bytes);
+          expect(createHash("sha256").update(downloaded).digest("hex")).toBe(
+            createHash("sha256").update(payload).digest("hex"),
+          );
+          await expect(adapter.listObjectKeys(prefix)).resolves.toEqual([key]);
+        },
+        bodyTimeoutMs: REAL_OSS_TEST_BODY_TIMEOUT_MS,
+        cancelBody: () => uploadClient?.cancel(),
+        cleanup: () =>
+          cleanupRealOssResources({
+            adapter,
+            completed,
+            key,
+            prefix,
+            uploadClient,
+            uploadId,
+          }),
+        cleanupTimeoutMs: REAL_OSS_TEST_CLEANUP_TIMEOUT_MS,
+      });
     },
     REAL_OSS_TEST_TIMEOUT_MS,
   );
