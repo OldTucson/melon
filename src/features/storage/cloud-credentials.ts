@@ -14,9 +14,10 @@ import type {
 } from "./contracts";
 import { normalizedUuidSchema } from "./identifiers";
 import { createUploadPolicy } from "./sts-policy";
+import { UPLOAD_CREDENTIAL_LIFETIME_MS } from "./upload-timing";
 import { ossConnectionConfigSchema } from "./validation";
 
-const STS_DURATION_SECONDS = 900;
+const STS_DURATION_SECONDS = UPLOAD_CREDENTIAL_LIFETIME_MS / 1_000;
 const STS_EXPIRATION_CLOCK_SKEW_MS = 30_000;
 
 const issuerConfigSchema = ossConnectionConfigSchema.extend({

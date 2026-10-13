@@ -13,6 +13,11 @@ import type {
 import { normalizedUuidSchema } from "@/features/storage/identifiers";
 import { storageObjectKey } from "@/features/storage/object-keys";
 import { createAlibabaOssAdapter } from "@/features/storage/oss-adapter";
+import {
+  UPLOAD_CREDENTIAL_ISSUE_TIMEOUT_MS,
+  UPLOAD_CREDENTIAL_LIFETIME_MS,
+  UPLOAD_WRITE_DRAIN_GRACE_MS,
+} from "@/features/storage/upload-timing";
 import { db, type DbTransaction } from "@/lib/db/client";
 import { nextChangeSeq } from "@/lib/db/change-seq";
 import {
@@ -49,8 +54,6 @@ import {
 import { derivePatternName, sanitizeDownloadName } from "./filenames";
 
 const UPLOAD_SESSION_DURATION_MS = 24 * 60 * 60 * 1000;
-const CREDENTIAL_MAX_LIFETIME_MS = 15 * 60 * 1000;
-const DEFAULT_CREDENTIAL_ISSUE_TIMEOUT_MS = 30_000;
 const DEFAULT_VERIFICATION_TIMEOUT_MS = 10_000;
 const CLEANUP_WARNING = "UPLOAD_MULTIPART_CLEANUP_PENDING" as const;
 
@@ -336,7 +339,10 @@ async function lockOwnedUploadState(
 
 function credentialIssueFence(now: Date, credentialIssueTimeoutMs: number) {
   return new Date(
-    now.getTime() + CREDENTIAL_MAX_LIFETIME_MS + credentialIssueTimeoutMs,
+    now.getTime() +
+      UPLOAD_CREDENTIAL_LIFETIME_MS +
+      credentialIssueTimeoutMs +
+      UPLOAD_WRITE_DRAIN_GRACE_MS,
   );
 }
 
@@ -579,7 +585,7 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
     dependencies.verificationTimeoutMs ?? DEFAULT_VERIFICATION_TIMEOUT_MS;
   const credentialIssueTimeoutMs =
     dependencies.credentialIssueTimeoutMs ??
-    DEFAULT_CREDENTIAL_ISSUE_TIMEOUT_MS;
+    UPLOAD_CREDENTIAL_ISSUE_TIMEOUT_MS;
   if (!Number.isSafeInteger(verificationTimeoutMs) || verificationTimeoutMs <= 0) {
     throw new Error("UPLOAD_VERIFICATION_TIMEOUT_INVALID");
   }

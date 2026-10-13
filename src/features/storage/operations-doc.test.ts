@@ -30,4 +30,26 @@ describe("OSS operations contract", () => {
     );
     expect(operations).toMatch(/WebP[\s\S]*派生/);
   });
+
+  it("documents bucket-scoped server listing without granting it to browsers", async () => {
+    const operations = await readFile(
+      path.resolve(process.cwd(), "docs/operations/aliyun-oss.md"),
+      "utf8",
+    );
+    const serverSection = operations
+      .split("## 服务端运行身份")[1]
+      ?.split("### 本地开发")[0];
+    const browserSection = operations
+      .split("## 浏览器上传角色")[1]
+      ?.split("## 服务端运行身份")[0];
+
+    expect(serverSection).toMatch(
+      /"Action": "oss:ListObjects"[\s\S]*"Resource": "acs:oss:\*:\*:BUCKET"[\s\S]*"oss:Prefix": "users\/\*"/,
+    );
+    expect(serverSection).toMatch(
+      /"Action": \[[\s\S]*"oss:GetObject"[\s\S]*"oss:DeleteObject"[\s\S]*"Resource": "acs:oss:\*:\*:BUCKET\/users\/\*"/,
+    );
+    expect(browserSection).toMatch(/不授予[^\n]*列举/);
+    expect(browserSection).toMatch(/不要添加[^\n]*`ListObjects`/);
+  });
 });

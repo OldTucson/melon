@@ -5,7 +5,11 @@ import OSS from "ali-oss";
 import { config as loadDotEnv } from "dotenv";
 import { describe, expect, it } from "vitest";
 
-import { sourceObjectKey } from "@/features/storage/object-keys";
+import {
+  patternObjectPrefix,
+  sourceObjectKey,
+} from "@/features/storage/object-keys";
+import { UPLOAD_REQUEST_TIMEOUT_MS } from "@/features/storage/upload-timing";
 
 import { createAlibabaBrowserCredentialIssuer } from "./cloud-credentials";
 import { createAlibabaOssAdapter } from "./oss-adapter";
@@ -64,6 +68,7 @@ describeRealOss("real OSS adapter", () => {
         assetId,
         extension: "png",
       });
+      const prefix = patternObjectPrefix({ ownerId, patternId });
       const payload = deterministicPayload(2 * 1024 * 1024 + 257);
       const partSize = 1024 * 1024;
       const adapter = createAlibabaOssAdapter(config);
@@ -80,7 +85,7 @@ describeRealOss("real OSS adapter", () => {
         cname: config.cname,
         secure: config.secure,
         authorizationV4: true,
-        timeout: 120_000,
+        timeout: UPLOAD_REQUEST_TIMEOUT_MS,
       });
       let uploadId: string | undefined;
       let completed = false;
@@ -150,16 +155,23 @@ describeRealOss("real OSS adapter", () => {
         expect(createHash("sha256").update(downloaded).digest("hex")).toBe(
           createHash("sha256").update(payload).digest("hex"),
         );
+        await expect(adapter.listObjectKeys(prefix)).resolves.toEqual([key]);
       } finally {
         if (!completed && uploadId) {
           await uploadClient
             .abortMultipartUpload(key, uploadId)
             .catch(() => undefined);
         }
-        await adapter.deleteObjects([key]);
+        try {
+          const keys = await adapter.listObjectKeys(prefix);
+          await adapter.deleteObjectsUnderPrefix(prefix, keys);
+        } catch (error) {
+          await adapter.deleteObjects([key]).catch(() => undefined);
+          throw error;
+        }
       }
 
-      await expect(adapter.headObject(key)).rejects.toBeDefined();
+      await expect(adapter.listObjectKeys(prefix)).resolves.toEqual([]);
     },
     120_000,
   );

@@ -13,6 +13,7 @@ import {
   patternObjectPrefix,
   sourceObjectKey,
 } from "@/features/storage/object-keys";
+import { UPLOAD_WRITE_DRAIN_GRACE_MS } from "@/features/storage/upload-timing";
 import { closeDatabase, db } from "@/lib/db/client";
 import {
   assets,
@@ -414,16 +415,24 @@ describe("trash permanent purge", () => {
     expect(oss.objects.has(unrelated)).toBe(true);
   });
 
-  it("aborts upload sessions and defers without failure until every write credential expires", async () => {
+  it("drains in-flight writes after credential expiry before listing and purging", async () => {
     const ownerId = await seedUser("purge-credential-fence@example.test");
     const patternId = await seedTrashedPattern({
       ownerId,
       trashBatchId: randomUUID(),
       name: "Credential fence",
     });
-    const oss = new FakeOssAdapter();
+    class TrackingOss extends FakeOssAdapter {
+      readonly listCalls: string[] = [];
+
+      override async listObjectKeys(prefix: string) {
+        this.listCalls.push(prefix);
+        return super.listObjectKeys(prefix);
+      }
+    }
+    const oss = new TrackingOss();
     const source = await seedSourceAsset(ownerId, patternId, oss);
-    const safeAfter = new Date(now.getTime() + 5 * 60 * 1_000);
+    const credentialsExpireAt = new Date(now.getTime() + 5 * 60 * 1_000);
     const sessionId = randomUUID();
     await db.insert(uploadSessions).values({
       id: sessionId,
@@ -436,7 +445,7 @@ describe("trash permanent purge", () => {
       status: "uploading",
       expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1_000),
       credentialIssueFenceAt: new Date(now.getTime() + 60_000),
-      credentialsExpireAt: safeAfter,
+      credentialsExpireAt,
     });
     let currentNow = now;
     const operationId = randomUUID();
@@ -470,7 +479,20 @@ describe("trash permanent purge", () => {
     expect(oss.deleteCalls).toHaveLength(0);
     expect(oss.objects.has(source.objectKey)).toBe(true);
 
-    currentNow = new Date(safeAfter.getTime() + 1);
+    currentNow = new Date(credentialsExpireAt.getTime() + 1);
+    await expectAppError(
+      service.purgePatterns({ ownerId, operationId, patternIds: [patternId] }),
+      "TRASH_PURGE_DEFERRED",
+      409,
+    );
+    expect(oss.listCalls).toHaveLength(0);
+
+    const prefix = patternObjectPrefix({ ownerId, patternId });
+    const lateWrite = `${prefix}derived/in-flight-preview.tmp`;
+    oss.objects.set(lateWrite, Uint8Array.from([9, 8, 7]));
+    currentNow = new Date(
+      credentialsExpireAt.getTime() + UPLOAD_WRITE_DRAIN_GRACE_MS + 1,
+    );
     await expect(
       service.purgePatterns({ ownerId, operationId, patternIds: [patternId] }),
     ).resolves.toEqual({
@@ -478,7 +500,9 @@ describe("trash permanent purge", () => {
       deletedPatternCount: 1,
       deletedFolderCount: 0,
     });
+    expect(oss.listCalls).toEqual([prefix]);
     expect(oss.objects.has(source.objectKey)).toBe(false);
+    expect(oss.objects.has(lateWrite)).toBe(false);
     expect(await db.select().from(changeLog)).toHaveLength(1);
   });
 
@@ -570,7 +594,11 @@ describe("trash permanent purge", () => {
       credentialsExpireAt: new Date("2026-10-09T10:15:00.000Z"),
     });
 
-    currentNow = new Date("2026-10-09T10:15:00.001Z");
+    currentNow = new Date(
+      Date.parse("2026-10-09T10:15:00.000Z") +
+        UPLOAD_WRITE_DRAIN_GRACE_MS +
+        1,
+    );
     await expect(
       purge.purgeFolderBatch({
         ownerId,

@@ -3,6 +3,7 @@
 import OSS from "ali-oss";
 
 import type { BrowserOssCredentials } from "@/features/storage/contracts";
+import { UPLOAD_REQUEST_TIMEOUT_MS } from "@/features/storage/upload-timing";
 
 import type { SafeSdkCheckpoint } from "./upload-db";
 
@@ -17,7 +18,7 @@ function createClient(credentials: BrowserOssCredentials) {
     cname: credentials.cname,
     secure: new URL(credentials.endpoint).protocol === "https:",
     authorizationV4: true,
-    timeout: 120_000,
+    timeout: UPLOAD_REQUEST_TIMEOUT_MS,
   });
 }
 

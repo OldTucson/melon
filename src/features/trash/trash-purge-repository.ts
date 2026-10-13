@@ -13,6 +13,7 @@ import {
 } from "drizzle-orm";
 
 import { normalizedUuidSchema } from "@/features/storage/identifiers";
+import { UPLOAD_WRITE_DRAIN_GRACE_MS } from "@/features/storage/upload-timing";
 import { db, type DbTransaction } from "@/lib/db/client";
 import {
   assets,
@@ -222,7 +223,12 @@ export async function abortPurgeUploadSessions(
   for (const session of sessions) {
     for (const candidate of [
       session.credentialIssueFenceAt,
-      session.credentialsExpireAt,
+      session.credentialsExpireAt
+        ? new Date(
+            session.credentialsExpireAt.getTime() +
+              UPLOAD_WRITE_DRAIN_GRACE_MS,
+          )
+        : null,
     ]) {
       if (candidate && (!safeAfter || candidate > safeAfter)) {
         safeAfter = candidate;

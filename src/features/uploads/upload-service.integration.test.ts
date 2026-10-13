@@ -7,6 +7,7 @@ import {
   previewObjectKey,
   sourceObjectKey,
 } from "@/features/storage/object-keys";
+import { UPLOAD_WRITE_DRAIN_GRACE_MS } from "@/features/storage/upload-timing";
 import type {
   BrowserCredentialIssuer,
   BrowserOssCredentials,
@@ -269,11 +270,11 @@ describe("upload service lifecycle", () => {
           eq(uploadSessions.operationId, input.operationId),
         ),
       );
-    expect(duringIssue?.credentialIssueFenceAt?.getTime()).toBeGreaterThan(
-      now.getTime() + 15 * 60 * 1_000,
-    );
-    expect(duringIssue?.credentialIssueFenceAt?.getTime()).toBeLessThan(
-      now.getTime() + 16 * 60 * 1_000,
+    expect(duringIssue?.credentialIssueFenceAt?.getTime()).toBe(
+      now.getTime() +
+        15 * 60 * 1_000 +
+        30_000 +
+        UPLOAD_WRITE_DRAIN_GRACE_MS,
     );
     expect(duringIssue?.credentialsExpireAt).toBeNull();
 
@@ -321,7 +322,10 @@ describe("upload service lifecycle", () => {
       .from(uploadSessions)
       .where(eq(uploadSessions.operationId, input.operationId));
     expect(session?.credentialIssueFenceAt?.getTime()).toBe(
-      now.getTime() + 15 * 60 * 1_000 + 5,
+      now.getTime() +
+        15 * 60 * 1_000 +
+        5 +
+        UPLOAD_WRITE_DRAIN_GRACE_MS,
     );
     expect(session?.credentialsExpireAt).toBeNull();
   });

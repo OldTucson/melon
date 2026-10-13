@@ -1,6 +1,6 @@
 # 阿里云 OSS 运行配置
 
-本文只描述 `melon` 的 OSS 安全边界和上线检查。最后核对日期：2026-10-10。阿里云控制台名称可能调整；权限含义以本文链接的官方文档为准。
+本文只描述 `melon` 的 OSS 安全边界和上线检查。最后核对日期：2026-10-13。阿里云控制台名称可能调整；权限含义以本文链接的官方文档为准。
 
 ## 访问模型
 
@@ -99,8 +99,39 @@ users/{OWNER_UUID}/patterns/{PATTERN_UUID}/derived/{ASSET_UUID}.{jpg|jpeg|png|we
 - 对目标上传角色的精确 `sts:AssumeRole` 权限。
 - 对 `melon` 对象树的 `oss:GetObject`，用于 `HEAD`、Range 验证和签名 GET。
 - 对同一对象树的 `oss:DeleteObject`，用于批量回收确认删除的资产。
+- 对 Bucket 的 `oss:ListObjects`，并通过 `oss:Prefix` 条件只允许列举 `users/*`。永久删除会先列举图案前缀，以覆盖尚未写入数据库的在途或派生对象。
 
-`HeadObject` 对应 `oss:GetObject`，`DeleteMultipleObjects` 对应 `oss:DeleteObject`；参见[HeadObject 权限](https://www.alibabacloud.com/help/en/oss/developer-reference/headobject)、[DeleteMultipleObjects 权限和单请求 1000 对象上限](https://www.alibabacloud.com/help/en/oss/developer-reference/deletemultipleobjects)和[签名下载权限](https://www.alibabacloud.com/help/en/oss/user-guide/how-to-obtain-the-url-of-a-single-object-or-the-urls-of-multiple-objects)。适配器会先验证完整 key 列表，再按最多 1000 个对象分块删除，避免后段非法 key 导致先前批次被部分删除。多个分块请求不是事务：如果后续批次失败，早先批次可能已经完成。在上述版本控制保持关闭的基线下，调用方可对完整 key 列表重试，已经删除的 key 可以安全重复提交；版本控制开启或暂停的 Bucket 不满足这项契约。服务端身份不需要 Bucket 列举或 OSS 管理权限。
+对象权限和列举权限必须分成不同 statement。`ListObjects` 是 Bucket 级操作，其 `Resource` 必须是 Bucket ARN；对象级 `GetObject` 和 `DeleteObject` 仍只覆盖 `BUCKET/users/*`：
+
+```json
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Sid": "ListMelonObjects",
+      "Effect": "Allow",
+      "Action": "oss:ListObjects",
+      "Resource": "acs:oss:*:*:BUCKET",
+      "Condition": {
+        "StringLike": {
+          "oss:Prefix": "users/*"
+        }
+      }
+    },
+    {
+      "Sid": "ReadAndDeleteMelonObjects",
+      "Effect": "Allow",
+      "Action": [
+        "oss:GetObject",
+        "oss:DeleteObject"
+      ],
+      "Resource": "acs:oss:*:*:BUCKET/users/*"
+    }
+  ]
+}
+```
+
+`HeadObject` 对应 `oss:GetObject`，`ListObjectsV2` 对应 `oss:ListObjects`，`DeleteMultipleObjects` 对应 `oss:DeleteObject`；参见[HeadObject 权限](https://www.alibabacloud.com/help/en/oss/developer-reference/headobject)、[按前缀限制 ListObjects 权限](https://www.alibabacloud.com/help/en/oss/user-guide/access-control-base-on-ram-policy)、[DeleteMultipleObjects 权限和单请求 1000 对象上限](https://www.alibabacloud.com/help/en/oss/developer-reference/deletemultipleobjects)和[签名下载权限](https://www.alibabacloud.com/help/en/oss/user-guide/how-to-obtain-the-url-of-a-single-object-or-the-urls-of-multiple-objects)。适配器会验证返回 key 和完整删除列表均属于请求的规范图案前缀，再按最多 1000 个对象分块删除。多个分块请求不是事务：如果后续批次失败，早先批次可能已经完成。在上述版本控制保持关闭的基线下，调用方可重新列举并重试，已经删除的 key 可以安全重复提交；版本控制开启或暂停的 Bucket 不满足这项契约。服务端身份不需要 `oss:ListBuckets`、Bucket 根前缀列举或其他 OSS 管理权限。
 
 ### 本地开发
 
@@ -147,5 +178,6 @@ OSS_ADAPTER=real
 - 浏览器 STS 有效期为 900 秒，策略只有当前 owner/pattern 前缀和三项 action。
 - 浏览器凭证不能读取对象、列举 Bucket、访问其他图案或其他用户前缀。
 - 本地 RAM 调用者和 ECS 实例角色只能假设指定上传角色。
+- 本地 RAM 调用者和 ECS 实例角色能以 `users/` 下的图案前缀调用 `ListObjectsV2`，但不能列举 Bucket 根前缀或 `users/` 以外的对象；对象读取和删除仍只能访问 `BUCKET/users/*`。
 - 7 天未完成 multipart 生命周期规则已启用。
 - 应用日志和数据库中没有长期密钥、security token 或签名 URL。
