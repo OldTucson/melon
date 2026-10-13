@@ -444,3 +444,129 @@ it("reconstructs all deleting targets when one failed purge spans ordinary batch
     JSON.parse(vi.mocked(fetch).mock.calls[0]![1]!.body as string),
   ).toEqual({ operationId, patternIds: [id(1), id(2)] });
 });
+
+it.each(["folder", "patterns"] as const)(
+  "continues a deferred %s purge after reload with the exact original operation and targets",
+  async (kind) => {
+    const deferred = data();
+    if (kind === "folder") {
+      deferred.folderBatches[0] = {
+        ...deferred.folderBatches[0]!,
+        state: "deleting",
+        purgeOperationId: operationId,
+      };
+      deferred.patternBatches = [];
+    } else {
+      deferred.folderBatches = [];
+      deferred.patternBatches = [1, 2].map((n) => ({
+        ...data().patternBatches[0]!,
+        trashBatchId: id(20 + n),
+        state: "deleting",
+        purgeOperationId: operationId,
+        patterns: [{ ...pattern(n), status: "deleting" }, pattern(n + 10)],
+      }));
+    }
+    const path =
+      kind === "folder"
+        ? `/api/trash/folder-batches/${id(10)}/purge`
+        : "/api/trash/patterns/purge";
+    const expectedBody =
+      kind === "folder"
+        ? { operationId }
+        : { operationId, patternIds: [id(1), id(2)] };
+    vi.mocked(fetch).mockImplementation((url) =>
+      url === "/api/trash"
+        ? response(deferred)
+        : Promise.resolve(
+            Response.json(
+              { error: { code: "TRASH_PURGE_DEFERRED" } },
+              { status: 409 },
+            ),
+          ),
+    );
+    const first = setup();
+    const view = render(<TrashView />, { wrapper: first.wrapper });
+    fireEvent.click(
+      (await screen.findAllByRole("button", { name: "继续删除" }))[0]!,
+    );
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      kind === "folder" ? "2 个文件夹 · 3 个图案" : "2 个图案",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "确认永久删除" }));
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("dialog")).getByRole("alert"),
+      ).toHaveTextContent("稍后"),
+    );
+    expect(
+      vi.mocked(fetch).mock.calls.filter(([url]) => url === path),
+    ).toHaveLength(1);
+    view.unmount();
+    first.client.clear();
+    const second = setup();
+    const reloaded = render(<TrashView />, { wrapper: second.wrapper });
+    fireEvent.click(
+      (await screen.findAllByRole("button", { name: "继续删除" }))[0]!,
+    );
+    vi.mocked(fetch).mockImplementation((url) =>
+      response(
+        url === "/api/trash"
+          ? { folderBatches: [], patternBatches: [] }
+          : {
+              state: "complete",
+              deletedPatternCount: kind === "folder" ? 3 : 2,
+              deletedFolderCount: kind === "folder" ? 2 : 0,
+            },
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "确认永久删除" }));
+    expect(await screen.findByText("回收站是空的")).toBeInTheDocument();
+    const calls = vi.mocked(fetch).mock.calls.filter(([url]) => url === path);
+    expect(calls).toHaveLength(2);
+    for (const call of calls)
+      expect(JSON.parse(call[1]!.body as string)).toEqual(expectedBody);
+    reloaded.unmount();
+  },
+);
+
+it.each([
+  "folder-operation",
+  "folder-scope",
+  "patterns-operation",
+  "patterns-scope",
+])("rejects changed deferred confirmation %s", async (change) => {
+  const initial = data();
+  initial.folderBatches[0] = {
+    ...initial.folderBatches[0]!,
+    state: "deleting",
+    purgeOperationId: operationId,
+  };
+  initial.patternBatches[0] = {
+    ...initial.patternBatches[0]!,
+    state: "deleting",
+    purgeOperationId: id(81),
+    patterns: [{ ...pattern(1), status: "deleting" }, pattern(2)],
+  };
+  const { client, wrapper } = setup(initial);
+  render(<TrashView />, { wrapper });
+  const region = change.startsWith("folder")
+    ? screen.getByRole("region", { name: "夏日果园" })
+    : screen.getByRole("region", { name: "已删除图案批次" });
+  fireEvent.click(within(region).getByRole("button", { name: "继续删除" }));
+  const changed = structuredClone(initial);
+  if (change === "folder-operation")
+    changed.folderBatches[0]!.purgeOperationId = id(88);
+  if (change === "folder-scope") changed.folderBatches[0]!.patternCount = 4;
+  if (change === "patterns-operation")
+    changed.patternBatches[0]!.purgeOperationId = id(88);
+  if (change === "patterns-scope")
+    changed.patternBatches[0]!.patterns[1]!.status = "deleting";
+  await act(async () => {
+    client.setQueryData(queryKeys.trash(ownerId), changed);
+  });
+  fireEvent.click(screen.getByRole("button", { name: "确认永久删除" }));
+  expect(
+    await within(screen.getByRole("dialog")).findByRole("alert"),
+  ).toHaveTextContent("状态已变化");
+  expect(fetch).not.toHaveBeenCalled();
+});

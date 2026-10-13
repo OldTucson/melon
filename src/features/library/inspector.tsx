@@ -261,7 +261,14 @@ export function MultiSelectionInspector({
         </IconButton>
       </header>
       <div className="inspector-scroll">
-        <SelectionActions activeQuery={activeQuery} patterns={patterns} />
+        <SelectionActions
+          key={patterns
+            .map((pattern) => pattern.id)
+            .sort()
+            .join("|")}
+          activeQuery={activeQuery}
+          patterns={patterns}
+        />
       </div>
     </aside>
   );

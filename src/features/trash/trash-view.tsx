@@ -16,6 +16,7 @@ import type {
 } from "./trash-types";
 import { queryKeys } from "@/lib/query/keys";
 import { useQueryOwnerId } from "@/lib/query/provider";
+import { ApiResponseError } from "@/lib/query/client";
 
 type Confirmation = { intent: TrashIntent; description: string };
 export function TrashView() {
@@ -38,11 +39,14 @@ export function TrashView() {
       await mutation.mutateAsync(intent);
       setConfirmation(null);
       setSelected([]);
-    } catch {
+    } catch (error) {
       setMessage(
-        intent.action === "purge"
-          ? "删除未完成，请刷新状态后重试"
-          : "恢复失败，请刷新后重试",
+        error instanceof ApiResponseError &&
+          error.code === "TRASH_PURGE_DEFERRED"
+          ? "正在等待上传凭据失效和写入结束，请稍后继续删除。"
+          : intent.action === "purge"
+            ? "删除未完成，请刷新状态后重试"
+            : "恢复失败，请刷新后重试",
       );
     }
   };
@@ -184,14 +188,14 @@ export function TrashView() {
                     <Trash2 aria-hidden="true" />
                     永久删除
                   </button>
-                  {failed && batch.purgeOperationId ? (
+                  {deleting && batch.purgeOperationId ? (
                     <button
                       className="bulk-action-button"
                       disabled={pending}
                       onClick={() => openFolderPurge(batch)}
                     >
                       <RotateCcw aria-hidden="true" />
-                      重试删除
+                      {failed ? "重试删除" : "继续删除"}
                     </button>
                   ) : null}
                 </div>
@@ -241,14 +245,14 @@ export function TrashView() {
                       <Trash2 aria-hidden="true" />
                       永久删除所选
                     </button>
-                    {failed && batch.purgeOperationId ? (
+                    {deleting && batch.purgeOperationId ? (
                       <button
                         className="bulk-action-button"
                         disabled={pending}
                         onClick={() => openPatternPurge(batch, true)}
                       >
                         <RotateCcw aria-hidden="true" />
-                        重试删除
+                        {failed ? "重试删除" : "继续删除"}
                       </button>
                     ) : null}
                   </div>
@@ -365,18 +369,13 @@ function intentStillAvailable(data: TrashList, intent: TrashIntent) {
       batch.patternCount === intent.patternCount &&
       (batch.state === "trashed" ||
         (intent.action === "purge" &&
-          batch.purgeOperationId === intent.operationId &&
-          batch.lastErrorCode === "OSS_DELETE_FAILED")),
+          batch.purgeOperationId === intent.operationId)),
     );
   }
   const retryBatches = data.patternBatches.filter(
     (batch) => batch.purgeOperationId === intent.operationId,
   );
   if (intent.action === "purge" && retryBatches.length > 0) {
-    if (
-      !retryBatches.some((batch) => batch.lastErrorCode === "OSS_DELETE_FAILED")
-    )
-      return false;
     const deleting = retryBatches.flatMap((batch) =>
       batch.patterns.filter((pattern) => pattern.status === "deleting"),
     );
@@ -390,19 +389,5 @@ function intentStillAvailable(data: TrashList, intent: TrashIntent) {
       batch.patterns.some((pattern) => pattern.id === id),
     ),
   );
-  if (!batch) return false;
-  if (batch.state === "trashed") return true;
-  if (
-    intent.action !== "purge" ||
-    batch.purgeOperationId !== intent.operationId ||
-    batch.lastErrorCode !== "OSS_DELETE_FAILED"
-  )
-    return false;
-  const deleting = batch.patterns.filter(
-    (pattern) => pattern.status === "deleting",
-  );
-  return (
-    deleting.length === intent.patternIds.length &&
-    deleting.every((pattern) => intent.patternIds.includes(pattern.id))
-  );
+  return batch?.state === "trashed";
 }

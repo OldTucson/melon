@@ -137,6 +137,57 @@ function renderLibrary(
 }
 
 describe("Mac-first workspace", () => {
+  it("resets destination, old errors and confirmation when the multi-selection changes", async () => {
+    const items = [1, 2, 3, 4].map(makePattern);
+    const client = createClient(items);
+    client.setQueryData(queryKeys.folders(ownerId), [folder]);
+    client.setQueryData(queryKeys.pattern(ownerId, items[0]!.id), {
+      ...items[0],
+      status: "deleting",
+      version: 2,
+    });
+    render(libraryTree(client));
+    act(() =>
+      useSelectionStore
+        .getState()
+        .selectAll(items.slice(0, 2).map((item) => item.id)),
+    );
+    let inspector = within(
+      screen.getByRole("complementary", { name: "图案检查器" }),
+    );
+    fireEvent.click(inspector.getByRole("radio", { name: folder.name }));
+    fireEvent.click(inspector.getByRole("button", { name: "添加收藏" }));
+    expect(await inspector.findByRole("alert")).toHaveTextContent("选择已变化");
+    fireEvent.click(inspector.getByRole("button", { name: "移入回收站" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("2 个图案");
+    act(() =>
+      useSelectionStore
+        .getState()
+        .selectAll(items.slice(2).map((item) => item.id)),
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    inspector = within(
+      screen.getByRole("complementary", { name: "图案检查器" }),
+    );
+    expect(inspector.queryByRole("alert")).not.toBeInTheDocument();
+    expect(inspector.getByRole("radio", { name: "未分类" })).toBeChecked();
+    vi.mocked(fetch).mockImplementation(() => new Promise(() => {}));
+    fireEvent.click(inspector.getByRole("button", { name: "移动到此处" }));
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/patterns/batch",
+        expect.anything(),
+      ),
+    );
+    expect(
+      JSON.parse(vi.mocked(fetch).mock.calls[0]![1]!.body as string),
+    ).toEqual({
+      action: "move",
+      folderId: null,
+      operationId: expect.any(String),
+      patterns: items.slice(2).map(({ id, version }) => ({ id, version })),
+    });
+  });
   it("moves a single inspected pattern with a versioned batch request and locks controls while pending", async () => {
     const item = { ...makePattern(1), folderId: folder.id };
     const client = createClient([item]);
