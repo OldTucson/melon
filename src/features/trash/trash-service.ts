@@ -262,6 +262,7 @@ export async function listTrash(input: { ownerId: string }): Promise<TrashListDt
     { isolationLevel: "repeatable read", accessMode: "read only" },
   );
   const foldersByBatch = new Map<string, TrashFolderRow[]>();
+  const folderIdsByBatch = new Map<string, Set<string>>();
   const patternsByBatch = new Map<string, TrashPatternReadRow[]>();
 
   for (const folder of rows.folders) {
@@ -271,6 +272,10 @@ export async function listTrash(input: { ownerId: string }): Promise<TrashListDt
     const batch = foldersByBatch.get(folder.trashBatchId) ?? [];
     batch.push(folder);
     foldersByBatch.set(folder.trashBatchId, batch);
+    const batchFolderIds =
+      folderIdsByBatch.get(folder.trashBatchId) ?? new Set();
+    batchFolderIds.add(folder.id);
+    folderIdsByBatch.set(folder.trashBatchId, batchFolderIds);
   }
   const expectedPatternFolderIds = [
     ...new Set(
@@ -297,14 +302,16 @@ export async function listTrash(input: { ownerId: string }): Promise<TrashListDt
     if (pattern.folderId !== null) {
       const folder = patternFoldersById.get(pattern.folderId);
       if (!folder) internalError("Trash pattern folder identity is invalid");
-      if (
-        folder.status !== "active" &&
-        (folder.status === "deleted" ||
-          folder.trashBatchId === null ||
-          folder.trashBatchId !== pattern.trashBatchId ||
-          !foldersByBatch
-            .get(folder.trashBatchId)
-            ?.some((batchFolder) => batchFolder.id === folder.id))
+      const batchFolderIds = folderIdsByBatch.get(pattern.trashBatchId);
+      if (folder.status === "active") {
+        if (batchFolderIds) {
+          internalError("Trash pattern folder batch is invalid");
+        }
+      } else if (
+        folder.status === "deleted" ||
+        folder.trashBatchId === null ||
+        folder.trashBatchId !== pattern.trashBatchId ||
+        !batchFolderIds?.has(folder.id)
       ) {
         internalError("Trash pattern folder batch is invalid");
       }

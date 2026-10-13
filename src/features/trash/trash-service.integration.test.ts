@@ -587,6 +587,65 @@ describe("trash read model and restore services", () => {
     },
   );
 
+  it("rejects a folder batch collision from a pattern in an active outside folder", async () => {
+    const folderBatchId = randomUUID();
+    await seedFolder({
+      ownerId: ownerA,
+      name: "Folder batch root",
+      status: "trashed",
+      trashBatchId: folderBatchId,
+      trashedAt: new Date(),
+    });
+    const outsideFolderId = await seedFolder({
+      ownerId: ownerA,
+      name: "Active outside folder",
+    });
+    await seedPattern({
+      ownerId: ownerA,
+      name: "Colliding outside pattern",
+      folderId: outsideFolderId,
+      status: "trashed",
+      preTrashStatus: "ready",
+      trashBatchId: folderBatchId,
+      trashedAt: new Date(),
+    });
+
+    await expectAppError(
+      listTrash({ ownerId: ownerA }),
+      "INTERNAL_ERROR",
+      500,
+    );
+  });
+
+  it("lists an ordinary trash batch stored in an active folder", async () => {
+    const folderId = await seedFolder({
+      ownerId: ownerA,
+      name: "Active ordinary folder",
+    });
+    const patternBatchId = randomUUID();
+    const patternId = await seedPattern({
+      ownerId: ownerA,
+      name: "Active folder ordinary pattern",
+      folderId,
+      status: "trashed",
+      preTrashStatus: "ready",
+      trashBatchId: patternBatchId,
+      trashedAt: new Date(),
+    });
+
+    const result = await listTrash({ ownerId: ownerA });
+
+    expect(result.folderBatches).toEqual([]);
+    expect(result.patternBatches).toEqual([
+      expect.objectContaining({
+        trashBatchId: patternBatchId,
+        patterns: [
+          expect.objectContaining({ id: patternId, folderId }),
+        ],
+      }),
+    ]);
+  });
+
   it("restores a selected ordinary subset with one sorted event and strict replay", async () => {
     const batchId = randomUUID();
     const trashedAt = new Date("2026-02-03T04:05:06.000Z");
