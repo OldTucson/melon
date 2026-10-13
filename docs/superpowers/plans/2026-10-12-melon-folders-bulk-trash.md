@@ -1073,7 +1073,7 @@ git commit -m "feat: add library bulk selection actions"
 - Modify: `src/features/library/library-view.test.tsx`
 - Modify: `src/features/library/workspace-shell.tsx`
 
-- [ ] **Step 1: Write failing pure tree tests**
+- [x] **Step 1: Write failing pure tree tests**
 
 Create a pure builder that accepts the flat API response and returns deterministic roots/children without mutating input:
 
@@ -1088,7 +1088,7 @@ expect(buildFolderTree([
 
 Sort siblings by `name.localeCompare(name, 'zh-CN')`, then ID. Detect an impossible cycle or orphan and surface it as an ungrouped diagnostic node in development rather than recursing forever.
 
-- [ ] **Step 2: Write failing folder-tree interaction tests**
+- [x] **Step 2: Write failing folder-tree interaction tests**
 
 Render the sidebar with nested fixtures and verify:
 
@@ -1100,7 +1100,7 @@ Render the sidebar with nested fixtures and verify:
 - name conflicts preserve the inline draft and show the server error;
 - successful delete navigates to the nearest active outside ancestor or `/library`.
 
-- [ ] **Step 3: Implement query and mutation boundaries**
+- [x] **Step 3: Implement query and mutation boundaries**
 
 Load `FolderDto[]` once in the shared `WorkspaceShell` through `queryKeys.folders(ownerId)` so the sidebar and inspectors use one cache. Provide focused hooks:
 
@@ -1112,17 +1112,17 @@ useTrashFolderMutation();
 
 Each mutation receives its `operationId` from the initiating UI event. Create and rename optimistically update the flat folder list, roll back on failure, and retain the local draft. Delete first fetches `/api/folders/:id/delete-impact`, displays current counts, then waits for the DELETE response before removing the subtree from caches.
 
-- [ ] **Step 4: Build the compact folder tree**
+- [x] **Step 4: Build the compact folder tree**
 
 Use `ChevronRight`, `Folder`, `FolderOpen`, `Plus`, and `MoreHorizontal`. Rows are 30–32 px high, names truncate with a title tooltip, counts are tabular numerals, and icon buttons remain square. Keep all menu commands accessible by keyboard. Do not render folder rows as cards.
 
 Folder navigation resets `cursor`, `unfiled`, selection, and preview while preserving filters that remain meaningful (`q`, `formats`, tags, favorite, sort). The active folder row uses `aria-current='page'`.
 
-- [ ] **Step 5: Show current folder context in the library heading**
+- [x] **Step 5: Show current folder context in the library heading**
 
 Replace the static “全部图案” title with the active folder name or “未分类”. For a real folder, add a checkbox/toggle labeled “包含子文件夹内容”, default on, which updates `includeDescendants` without changing other filters. Query changes already clear selection through `querySignature`.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 ```bash
 npx --yes --package=node@24 -c 'npm test -- src/features/folders/folder-tree-model.test.ts src/features/folders/folder-tree.test.tsx src/features/folders/folder-mutations.test.tsx src/features/library/sidebar.test.tsx src/features/library/library-view.test.tsx'
