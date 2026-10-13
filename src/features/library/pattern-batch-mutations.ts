@@ -19,6 +19,9 @@ import type { PatternItem, PatternPage } from "./library-types";
 import { useSelectionStore } from "./selection-store";
 
 type PatternRef = Pick<PatternItem, "id" | "version">;
+type PatternIntentRef = PatternRef & {
+  sourceFolderId: PatternItem["folderId"];
+};
 
 const patternStatuses = [
   "draft",
@@ -101,6 +104,25 @@ export type PatternBatchInput =
   | { action: "trash"; patterns: PatternItem[] };
 
 export type PatternBatchIntent =
+  | {
+      action: "move";
+      folderId: string | null;
+      operationId: string;
+      patterns: PatternIntentRef[];
+    }
+  | {
+      action: "favorite";
+      isFavorite: boolean;
+      operationId: string;
+      patterns: PatternIntentRef[];
+    }
+  | {
+      action: "trash";
+      operationId: string;
+      patterns: PatternIntentRef[];
+    };
+
+type PatternBatchRequest =
   | {
       action: "move";
       folderId: string | null;
@@ -189,11 +211,14 @@ function parsePatternBatchResult(
       pattern.trashedAt === null &&
       pattern.deletedAt === null;
     if (intent.action === "move") {
+      const expectedVersion =
+        ref.sourceFolderId === intent.folderId
+          ? ref.version
+          : ref.version + 1;
       return (
         !isLiveResult ||
         pattern.folderId !== intent.folderId ||
-        (pattern.version !== ref.version &&
-          pattern.version !== ref.version + 1)
+        pattern.version !== expectedVersion
       );
     }
     if (intent.action === "favorite") {
@@ -239,7 +264,11 @@ function parseRestorePatternsResult(
 export function createPatternBatchIntent(
   input: PatternBatchInput,
 ): PatternBatchIntent {
-  const patterns = input.patterns.map(({ id, version }) => ({ id, version }));
+  const patterns = input.patterns.map(({ id, version, folderId }) => ({
+    id,
+    version,
+    sourceFolderId: folderId,
+  }));
   const operationId = crypto.randomUUID();
   if (input.action === "move") {
     return { action: input.action, folderId: input.folderId, operationId, patterns };
@@ -255,6 +284,33 @@ export function createPatternBatchIntent(
   return { action: input.action, operationId, patterns };
 }
 
+function toPatternBatchRequest(
+  intent: PatternBatchIntent,
+): PatternBatchRequest {
+  const patterns = intent.patterns.map(({ id, version }) => ({ id, version }));
+  if (intent.action === "move") {
+    return {
+      action: intent.action,
+      folderId: intent.folderId,
+      operationId: intent.operationId,
+      patterns,
+    };
+  }
+  if (intent.action === "favorite") {
+    return {
+      action: intent.action,
+      isFavorite: intent.isFavorite,
+      operationId: intent.operationId,
+      patterns,
+    };
+  }
+  return {
+    action: intent.action,
+    operationId: intent.operationId,
+    patterns,
+  };
+}
+
 export async function sendPatternBatch(
   intent: PatternBatchIntent,
   ownerId: string,
@@ -263,7 +319,7 @@ export async function sendPatternBatch(
     await fetch("/api/patterns/batch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(intent),
+      body: JSON.stringify(toPatternBatchRequest(intent)),
     }),
   );
   return parsePatternBatchResult(response, intent, ownerId);
@@ -454,6 +510,17 @@ const shouldRetryMutation = (failureCount: number, error: Error) => {
   return failureCount < 1;
 };
 
+function selectCurrentPattern(
+  input: PatternItem,
+  active: PatternItem | undefined,
+  detail: PatternItem | undefined,
+) {
+  let current = input;
+  if (active && active.version >= current.version) current = active;
+  if (detail && detail.version >= current.version) current = detail;
+  return current;
+}
+
 export function usePatternBatchMutation(activeQuery: PatternQuery) {
   const ownerId = useQueryOwnerId();
   const queryClient = useQueryClient();
@@ -533,24 +600,20 @@ export function usePatternBatchMutation(activeQuery: PatternQuery) {
     const activeList = queryClient.getQueryData<
       InfiniteData<PatternPage, string | null>
     >(activeListKey);
-    const activeVersions = new Map(
+    const activePatterns = new Map(
       activeList?.pages.flatMap((page) =>
-        page.items.map((item) => [item.id, item.version] as const),
+        page.items.map((item) => [item.id, item] as const),
       ) ?? [],
     );
-    const patterns = input.patterns.map((pattern) => {
-      const detailVersion = queryClient.getQueryData<PatternItem>(
-        queryKeys.pattern(ownerId, pattern.id),
-      )?.version;
-      return {
-        ...pattern,
-        version: Math.max(
-          pattern.version,
-          activeVersions.get(pattern.id) ?? pattern.version,
-          detailVersion ?? pattern.version,
+    const patterns = input.patterns.map((pattern) =>
+      selectCurrentPattern(
+        pattern,
+        activePatterns.get(pattern.id),
+        queryClient.getQueryData<PatternItem>(
+          queryKeys.pattern(ownerId, pattern.id),
         ),
-      };
-    });
+      ),
+    );
     const currentInput: PatternBatchInput = { ...input, patterns };
     return batchMutation.mutateAsync(createPatternBatchIntent(currentInput));
   };

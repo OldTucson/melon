@@ -14,17 +14,34 @@ import { queryKeys } from "@/lib/query/keys";
 import { QueryOwnerProvider } from "@/lib/query/provider";
 
 import type { PatternItem, PatternPage } from "./library-types";
-import {
-  type PatternBatchIntent,
-  usePatternBatchMutation,
-} from "./pattern-batch-mutations";
+import { usePatternBatchMutation } from "./pattern-batch-mutations";
 import { useSelectionStore } from "./selection-store";
 
 const ownerId = "10000000-0000-4000-8000-000000000000";
 const folderId = "20000000-0000-4000-8000-000000000000";
+const alternateFolderId = "30000000-0000-4000-8000-000000000000";
 const query = toPatternQuery(parseLibrarySearchParams(new URLSearchParams()));
 const favoriteQuery = { ...query, favorite: true };
 const responseTimestamp = "2026-10-08T01:00:00.000Z";
+
+type PatternBatchRequest =
+  | {
+      action: "move";
+      folderId: string | null;
+      operationId: string;
+      patterns: Array<{ id: string; version: number }>;
+    }
+  | {
+      action: "favorite";
+      isFavorite: boolean;
+      operationId: string;
+      patterns: Array<{ id: string; version: number }>;
+    }
+  | {
+      action: "trash";
+      operationId: string;
+      patterns: Array<{ id: string; version: number }>;
+    };
 
 const pattern = (index: number): PatternItem => ({
   id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
@@ -56,7 +73,7 @@ const pattern = (index: number): PatternItem => ({
 
 function validBatchPatterns(
   items: PatternItem[],
-  intent: PatternBatchIntent,
+  intent: PatternBatchRequest,
   options: { moveNoOp?: boolean } = {},
 ): PatternItem[] {
   const versions = new Map(
@@ -100,7 +117,7 @@ type InvalidStateCase = {
   name: string;
   mutate: (
     patterns: PatternItem[],
-    intent: PatternBatchIntent,
+    intent: PatternBatchRequest,
   ) => PatternItem[];
 };
 
@@ -295,7 +312,7 @@ describe("pattern batch mutation", () => {
     vi.stubGlobal("fetch", vi.fn(async (_input, init) => {
       attempts += 1;
       if (attempts === 1) throw new TypeError("network down");
-      const intent = JSON.parse(String(init?.body)) as PatternBatchIntent;
+      const intent = JSON.parse(String(init?.body)) as PatternBatchRequest;
       return Response.json({
         patterns: validBatchPatterns(items, intent),
       });
@@ -344,7 +361,7 @@ describe("pattern batch mutation", () => {
     await act(async () => {
       const intent = JSON.parse(
         String(vi.mocked(fetch).mock.calls[0]?.[1]?.body),
-      ) as PatternBatchIntent;
+      ) as PatternBatchRequest;
       resolve(Response.json({
         patterns: validBatchPatterns(items.slice(0, 2), intent),
       }));
@@ -438,7 +455,7 @@ describe("pattern batch mutation", () => {
       const client = clientWith(items);
       const invalidate = vi.spyOn(client, "invalidateQueries");
       vi.stubGlobal("fetch", vi.fn(async (_input, init) => {
-        const intent = JSON.parse(String(init?.body)) as PatternBatchIntent;
+        const intent = JSON.parse(String(init?.body)) as PatternBatchRequest;
         return Response.json({
           patterns: mutate(validBatchPatterns(items, intent), intent),
         });
@@ -473,6 +490,203 @@ describe("pattern batch mutation", () => {
 
   it.each([
     {
+      name: "unfiled pattern that reports a no-op version",
+      responseVersionDelta: 0,
+      sourceFolderId: null,
+    },
+    {
+      name: "pattern from another folder that reports a no-op version",
+      responseVersionDelta: 0,
+      sourceFolderId: alternateFolderId,
+    },
+    {
+      name: "same-folder no-op that reports an advanced version",
+      responseVersionDelta: 1,
+      sourceFolderId: folderId,
+    },
+  ])("rejects a move response for $name", async ({
+    responseVersionDelta,
+    sourceFolderId,
+  }) => {
+    const item = { ...pattern(1), folderId: sourceFolderId };
+    const client = clientWith([item]);
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    vi.stubGlobal("fetch", vi.fn(async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as {
+        operationId: string;
+        patterns: Array<{ id: string; version: number }>;
+      };
+      return Response.json({
+        patterns: [{
+          ...item,
+          folderId,
+          version: request.patterns[0]!.version + responseVersionDelta,
+        }],
+      });
+    }));
+    useSelectionStore.getState().selectAll([item.id]);
+    renderHarness(client, [item]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Mutation failed",
+    );
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(useSelectionStore.getState().selectedIds).toEqual([item.id]);
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["owner", ownerId, "patterns"],
+    });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: queryKeys.pattern(ownerId, item.id),
+      exact: true,
+    });
+  });
+
+  it("accepts mixed move results with a per-pattern no-op and change version", async () => {
+    const items = [
+      { ...pattern(1), folderId },
+      { ...pattern(2), folderId: null },
+    ];
+    const client = clientWith(items);
+    vi.stubGlobal("fetch", vi.fn(async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as {
+        patterns: Array<{ id: string; version: number }>;
+      };
+      const versions = new Map(
+        request.patterns.map((item) => [item.id, item.version] as const),
+      );
+      return Response.json({
+        patterns: items.map((item) => ({
+          ...item,
+          folderId,
+          version:
+            versions.get(item.id)! + (item.folderId === folderId ? 0 : 1),
+        })),
+      });
+    }));
+    useSelectionStore.getState().selectAll(items.map((item) => item.id));
+    renderHarness(client, items);
+
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+
+    await waitFor(() =>
+      expect(useSelectionStore.getState().selectedIds).toEqual([]),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { wrongIndex: 0, name: "no-op row advances" },
+    { wrongIndex: 1, name: "changed row does not advance" },
+  ])("rejects a mixed move result when its $name", async ({ wrongIndex }) => {
+    const items = [
+      { ...pattern(1), folderId },
+      { ...pattern(2), folderId: null },
+    ];
+    const client = clientWith(items);
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    vi.stubGlobal("fetch", vi.fn(async (_input, init) => {
+      const request = JSON.parse(String(init?.body)) as {
+        patterns: Array<{ id: string; version: number }>;
+      };
+      const versions = new Map(
+        request.patterns.map((item) => [item.id, item.version] as const),
+      );
+      return Response.json({
+        patterns: items.map((item, index) => ({
+          ...item,
+          folderId,
+          version:
+            versions.get(item.id)! +
+            (index === wrongIndex
+              ? item.folderId === folderId
+                ? 1
+                : 0
+              : item.folderId === folderId
+                ? 0
+                : 1),
+        })),
+      });
+    }));
+    useSelectionStore.getState().selectAll(items.map((item) => item.id));
+    renderHarness(client, items);
+
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Mutation failed",
+    );
+    expect(useSelectionStore.getState().selectedIds).toEqual(
+      items.map((item) => item.id),
+    );
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["owner", ownerId, "patterns"],
+    });
+  });
+
+  it.each([
+    {
+      activeFolderId: alternateFolderId,
+      activeVersion: 7,
+      detailFolderId: folderId,
+      detailVersion: 7,
+      name: "detail cache when versions tie",
+    },
+    {
+      activeFolderId: folderId,
+      activeVersion: 8,
+      detailFolderId: alternateFolderId,
+      detailVersion: 7,
+      name: "active list when its version is newer",
+    },
+  ])("uses the $name for move source metadata", async ({
+    activeFolderId,
+    activeVersion,
+    detailFolderId,
+    detailVersion,
+  }) => {
+    const input = pattern(1);
+    const active = {
+      ...input,
+      folderId: activeFolderId,
+      version: activeVersion,
+    };
+    const detail = {
+      ...input,
+      folderId: detailFolderId,
+      version: detailVersion,
+    };
+    const expected = activeVersion > detailVersion ? active : detail;
+    const client = clientWith([input]);
+    client.setQueryData(queryKeys.patterns(ownerId, query), page([active]));
+    client.setQueryData(queryKeys.pattern(ownerId, input.id), detail);
+    let requestBody: {
+      patterns: Array<Record<string, unknown>>;
+    } | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body)) as typeof requestBody;
+      return Response.json({
+        patterns: [{ ...expected, folderId, version: expected.version }],
+      });
+    }));
+    useSelectionStore.getState().selectAll([input.id]);
+    renderHarness(client, [input]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Move" }));
+
+    await waitFor(() =>
+      expect(useSelectionStore.getState().selectedIds).toEqual([]),
+    );
+    expect(requestBody?.patterns).toEqual([
+      { id: input.id, version: expected.version },
+    ]);
+    expect(requestBody?.patterns[0]).not.toHaveProperty("sourceFolderId");
+    expect(requestBody?.patterns[0]).not.toHaveProperty("currentFolderId");
+  });
+
+  it.each([
+    {
       button: "Move" as const,
       items: [
         { ...pattern(1), folderId },
@@ -503,7 +717,7 @@ describe("pattern batch mutation", () => {
     const client = clientWith(items);
     let responsePatterns: PatternItem[] = [];
     vi.stubGlobal("fetch", vi.fn(async (_input, init) => {
-      const intent = JSON.parse(String(init?.body)) as PatternBatchIntent;
+      const intent = JSON.parse(String(init?.body)) as PatternBatchRequest;
       responsePatterns = validBatchPatterns(items, intent, { moveNoOp });
       return Response.json({ patterns: responsePatterns });
     }));
