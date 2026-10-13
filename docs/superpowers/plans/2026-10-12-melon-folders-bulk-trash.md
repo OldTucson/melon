@@ -780,7 +780,7 @@ git commit -m "feat: trash complete folder trees"
 - Create: `src/app/api/trash/folder-batches/[trashBatchId]/restore/route.ts`
 - Create: `src/app/api/trash/folder-batches/[trashBatchId]/restore/route.test.ts`
 
-- [ ] **Step 1: Write failing grouped-read and restore tests**
+- [x] **Step 1: Write failing grouped-read and restore tests**
 
 Cover these observable cases:
 
@@ -809,7 +809,7 @@ Also prove:
 - a `deleting` entity returns `TRASH_PURGE_IN_PROGRESS`;
 - every restore is tenant-isolated, version-independent from the stale library UI, and idempotent by operation ID.
 
-- [ ] **Step 2: Implement the grouped trash read model**
+- [x] **Step 2: Implement the grouped trash read model**
 
 Classify a batch as a folder batch when at least one non-deleted folder has its `trashBatchId`. Find the root as the batch folder whose parent is outside the batch. Compute expiration from the minimum batch `trashedAt`:
 
@@ -819,7 +819,7 @@ expiresAt: new Date(earliestTrashedAt.getTime() + 30 * 24 * 60 * 60 * 1000).toIS
 
 Return only `trashed` and `deleting` rows. Return explicit `state: 'trashed' | 'deleting'`, aggregated nullable `lastErrorCode`, and nullable `purgeOperationId` so the UI never infers progress from missing data and can resume a failed purge after reload. Task 9 populates `purgeOperationId` by associating pending operation results with their target. Sort batches by most recent `trashedAt`, then `trashBatchId` for stable rendering.
 
-- [ ] **Step 3: Implement ordinary pattern restore**
+- [x] **Step 3: Implement ordinary pattern restore**
 
 Parse 1–100 unique pattern IDs, lock them in stable order, require all rows to be `trashed`, and reject any batch present in the folder-batch lookup. Reject a null `preTrashStatus`, then restore each pattern to its required prior state:
 
@@ -842,13 +842,13 @@ const restorePatch = {
 
 Clear selection-specific batch membership only for restored patterns, leaving the rest of an ordinary batch intact.
 
-- [ ] **Step 4: Implement atomic folder-batch restore**
+- [x] **Step 4: Implement atomic folder-batch restore**
 
 Lock every folder and pattern in the batch. Reject missing, partial, `deleting`, or `deleted` data. Resolve the batch root and verify its outside parent is either null or currently `active` for the same owner. Restore all folders to `active`; restore all patterns from `preTrashStatus`; clear batch/timestamps/errors; increment versions; write one `folder_tree.restored` event and one stored result.
 
 Because live-name uniqueness reserves names while folders are trashed, a valid restore cannot collide with a newly created sibling. Still translate a database unique violation into `FOLDER_NAME_CONFLICT` as a defensive boundary.
 
-- [ ] **Step 5: Add routes and verify**
+- [x] **Step 5: Add routes and verify**
 
 `GET /api/trash` reads only the session owner. Pattern restore accepts `{ operationId, patternIds }`. Folder restore accepts `{ operationId }` and derives `trashBatchId` from the path.
 
