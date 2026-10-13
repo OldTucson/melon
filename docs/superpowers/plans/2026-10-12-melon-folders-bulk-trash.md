@@ -1147,7 +1147,7 @@ git commit -m "feat: add nested folder navigation"
 - Modify: `src/features/library/sidebar.tsx`
 - Modify: `src/features/library/sidebar.test.tsx`
 
-- [ ] **Step 1: Write failing folder-picker tests**
+- [x] **Step 1: Write failing folder-picker tests**
 
 The picker is a single-target control, not a checklist. Assert it presents one “未分类” option plus the active folder tree, indents nested names, prevents selecting a trashed/deleting folder, and returns `string | null`:
 
@@ -1158,7 +1158,7 @@ await user.click(screen.getByRole("radio", { name: "夏日果园 / 柑橘" }));
 expect(onChange).toHaveBeenLastCalledWith(childId);
 ```
 
-- [ ] **Step 2: Integrate single and multi-pattern location controls**
+- [x] **Step 2: Integrate single and multi-pattern location controls**
 
 The single-pattern inspector shows current location and a compact “移动” command using the batch API with one pattern/version. The multi-selection inspector replaces its placeholder with:
 
@@ -1169,7 +1169,7 @@ The single-pattern inspector shows current location and a compact “移动” c
 
 Disable commands while pending. If selected rows contain non-editable statuses, explain that the selection changed and require refresh rather than submitting a partial subset.
 
-- [ ] **Step 3: Write failing trash workspace tests**
+- [x] **Step 3: Write failing trash workspace tests**
 
 Mock the grouped API and assert:
 
@@ -1180,7 +1180,7 @@ Mock the grouped API and assert:
 - `OSS_DELETE_FAILED` displays “删除失败，可重试”;
 - destructive purge requires a second confirmation naming the irreversible effect.
 
-- [ ] **Step 4: Implement the trash query and mutations**
+- [x] **Step 4: Implement the trash query and mutations**
 
 Fetch `/api/trash` through `queryKeys.trash(ownerId)`. Use separate mutation functions for:
 
@@ -1193,11 +1193,11 @@ purgeFolderBatch(operationId, trashBatchId);
 
 Invalidate trash, folders, and all pattern queries only after server confirmation or a purge failure that may have changed server state. While purge is in flight, keep the row visible with progress state. After failure or reload, reuse the API-provided `purgeOperationId`; do not generate a second operation for rows already in `deleting`.
 
-- [ ] **Step 5: Add `/trash` and enable navigation**
+- [x] **Step 5: Add `/trash` and enable navigation**
 
 The server page renders `TrashView` inside the existing protected workspace layout. Replace the disabled sidebar entry with a real link, update active-route detection, and retain the existing dark/light theme and upload tray behavior. The empty state says “回收站是空的” and does not use a decorative card.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 ```bash
 npx --yes --package=node@24 -c 'npm test -- src/features/folders/folder-picker.test.tsx src/features/library/library-view.test.tsx src/features/trash/trash-view.test.tsx src/features/library/sidebar.test.tsx'
