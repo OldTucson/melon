@@ -2,8 +2,9 @@ import {
   QueryClient,
   QueryClientProvider,
   type InfiniteData,
+  useQuery,
 } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -15,6 +16,7 @@ import { QueryOwnerProvider } from "@/lib/query/provider";
 
 import type { PatternItem, PatternPage } from "./library-types";
 import { usePatternBatchMutation } from "./pattern-batch-mutations";
+import { usePatternPatchMutation } from "./pattern-mutations";
 import { useSelectionStore } from "./selection-store";
 
 const ownerId = "10000000-0000-4000-8000-000000000000";
@@ -293,6 +295,167 @@ function renderHarness(client: QueryClient, items: PatternItem[]) {
 }
 
 describe("pattern batch mutation", () => {
+  it.each([
+    ["patch", false],
+    ["batch", false],
+    ["patch", true],
+    ["batch", true],
+  ] as const)(
+    "queues overlapping writes after %s and awaits authoritative refresh (failure=%s)",
+    async (firstKind, fails) => {
+      const item = pattern(1);
+      const client = clientWith([item]);
+      let finishFirst!: (response: Response) => void;
+      let releaseRefresh!: () => void;
+      const refreshGate = new Promise<void>((resolve) => {
+        releaseRefresh = resolve;
+      });
+      const authority = { ...item, name: "服务器名称", version: 9 };
+      const refresh = vi.fn(async () => {
+        await refreshGate;
+        return page([authority]);
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url, init) => {
+          if (vi.mocked(fetch).mock.calls.length === 1)
+            return new Promise<Response>((resolve) => {
+              finishFirst = resolve;
+            });
+          const body = JSON.parse(String(init?.body));
+          return Promise.resolve(
+            Response.json(
+              url === "/api/patterns/batch"
+                ? { patterns: validBatchPatterns([authority], body) }
+                : {
+                    ...authority,
+                    ...body.patch,
+                    version: body.patch.version + 1,
+                  },
+            ),
+          );
+        }),
+      );
+      const wrapper = ({ children }: { children: React.ReactNode }) => (
+        <QueryClientProvider client={client}>
+          <QueryOwnerProvider ownerId={ownerId}>{children}</QueryOwnerProvider>
+        </QueryClientProvider>
+      );
+      const { result } = renderHook(
+        () => {
+          useQuery({
+            queryKey: queryKeys.patterns(ownerId, query),
+            queryFn: refresh,
+          });
+          return {
+            patch: usePatternPatchMutation(query),
+            batch: usePatternBatchMutation(query),
+          };
+        },
+        { wrapper },
+      );
+      const patch = () =>
+        result.current.patch.mutatePatternAsync({
+          patternId: item.id,
+          patch: { version: item.version, name: "用户改名" },
+        });
+      const batch = () =>
+        result.current.batch.mutateBatchAsync({
+          action: "move",
+          folderId,
+          patterns: [item],
+        });
+      let first!: Promise<unknown>, second!: Promise<unknown>;
+      act(() => {
+        first = (firstKind === "patch" ? patch() : batch()).catch(
+          () => undefined,
+        );
+      });
+      await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+      act(() => {
+        second = firstKind === "patch" ? batch() : patch();
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(
+        firstKind === "patch"
+          ? result.current.batch.isPending
+          : result.current.patch.isPending,
+      ).toBe(true);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      const queuedCache = client.getQueryData<PatternItem>(
+        queryKeys.pattern(ownerId, item.id),
+      )!;
+      if (firstKind === "patch") expect(queuedCache.folderId).toBeNull();
+      else expect(queuedCache.name).toBe(item.name);
+      await act(async () => {
+        const body = JSON.parse(
+          String(vi.mocked(fetch).mock.calls[0]![1]?.body),
+        );
+        finishFirst(
+          fails
+            ? Response.json(
+                { error: { code: "PATTERN_STATE_CHANGED" } },
+                { status: 409 },
+              )
+            : Response.json(
+                firstKind === "patch"
+                  ? { ...item, name: "用户改名", version: 2 }
+                  : { patterns: validBatchPatterns([item], body) },
+              ),
+        );
+      });
+      await waitFor(() => expect(refresh).toHaveBeenCalled());
+      expect(fetch).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        releaseRefresh();
+        await first;
+        await second;
+      });
+      expect(fetch).toHaveBeenCalledTimes(2);
+      const body = JSON.parse(String(vi.mocked(fetch).mock.calls[1]![1]?.body));
+      if (firstKind === "patch")
+        expect(body.patterns).toEqual([{ id: item.id, version: 9 }]);
+      else expect(body.patch.version).toBe(9);
+    },
+  );
+
+  it("allows writes for disjoint patterns to run concurrently", async () => {
+    const items = [pattern(1), pattern(2)];
+    const client = clientWith(items);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => {})),
+    );
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={client}>
+        <QueryOwnerProvider ownerId={ownerId}>{children}</QueryOwnerProvider>
+      </QueryClientProvider>
+    );
+    const { result } = renderHook(
+      () => ({
+        patch: usePatternPatchMutation(query),
+        batch: usePatternBatchMutation(query),
+      }),
+      { wrapper },
+    );
+    act(() => {
+      void result.current.batch.mutateBatchAsync({
+        action: "move",
+        folderId,
+        patterns: [items[0]!],
+      });
+    });
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    act(() => {
+      void result.current.patch.mutatePatternAsync({
+        patternId: items[1]!.id,
+        patch: { version: items[1]!.version, name: "独立改名" },
+      });
+    });
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+  });
   beforeEach(() => useSelectionStore.getState().clear());
 
   afterEach(() => {

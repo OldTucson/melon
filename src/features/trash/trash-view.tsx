@@ -18,7 +18,7 @@ import { queryKeys } from "@/lib/query/keys";
 import { useQueryOwnerId } from "@/lib/query/provider";
 import { ApiResponseError } from "@/lib/query/client";
 
-type Confirmation = { intent: TrashIntent; description: string };
+type Confirmation = { intent: TrashIntent; summary: string; names: string[] };
 export function TrashView() {
   const client = useQueryClient();
   const ownerId = useQueryOwnerId();
@@ -69,7 +69,8 @@ export function TrashView() {
     setMessage(null);
     setConfirmation({
       intent: folderIntent(batch, "purge"),
-      description: `“${batch.rootFolderName}”：${batch.folderCount} 个文件夹 · ${batch.patternCount} 个图案`,
+      summary: `${batch.folderCount} 个文件夹 · ${batch.patternCount} 个图案`,
+      names: [batch.rootFolderName],
     });
   };
   const openPatternPurge = (batch: TrashPatternBatch, retry = false) => {
@@ -100,7 +101,8 @@ export function TrashView() {
         operationId: batch.purgeOperationId ?? crypto.randomUUID(),
         patternIds: patterns.map((p) => p.id),
       },
-      description: `${patterns.length} 个图案：${patterns.map((p) => p.name).join("、")}`,
+      summary: `${patterns.length} 个图案`,
+      names: patterns.map((pattern) => pattern.name),
     });
   };
   const pending = mutation.isPending;
@@ -310,7 +312,7 @@ export function TrashView() {
         <Dialog.Portal>
           <Dialog.Overlay className="dialog-overlay" />
           <Dialog.Content
-            className="confirm-dialog"
+            className="confirm-dialog trash-confirm-dialog"
             onEscapeKeyDown={(event) => {
               if (pending) event.preventDefault();
             }}
@@ -318,11 +320,24 @@ export function TrashView() {
               if (pending) event.preventDefault();
             }}
           >
-            <Dialog.Title>永久删除</Dialog.Title>
-            <Dialog.Description>
-              {confirmation?.description}。永久删除后不可恢复。
-            </Dialog.Description>
-            {message ? <p role="alert">{message}</p> : null}
+            <header className="confirm-dialog-header">
+              <div>
+                <Dialog.Title>永久删除</Dialog.Title>
+                <Dialog.Description>
+                  {confirmation?.summary}。永久删除后不可恢复。
+                </Dialog.Description>
+                {message ? <p role="alert">{message}</p> : null}
+              </div>
+            </header>
+            <ul
+              className="trash-confirm-targets"
+              aria-label="永久删除对象"
+              tabIndex={0}
+            >
+              {confirmation?.names.map((name, index) => (
+                <li key={index}>{name}</li>
+              ))}
+            </ul>
             <footer className="confirm-dialog-actions">
               <Dialog.Close asChild>
                 <button className="secondary-button" disabled={pending}>

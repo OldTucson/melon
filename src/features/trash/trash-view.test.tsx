@@ -21,6 +21,8 @@ import {
   useTrashMutation,
 } from "./trash-mutations";
 import type { TrashList } from "./trash-types";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const id = (n: number) =>
   `10000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -175,6 +177,42 @@ it("requires a second confirmation with precise objects/counts, supports cancel,
   expect(screen.getByLabelText("选择图案1")).toBeDisabled();
   expect(screen.getByText("正在永久删除...")).toBeInTheDocument();
 });
+
+it("keeps a 100-name permanent-delete confirmation in a bounded scroll region with its footer outside", () => {
+  const initial = data();
+  initial.folderBatches = [];
+  initial.patternBatches[0]!.patterns = Array.from({ length: 100 }, (_, i) => ({
+    ...pattern(i + 1),
+    name: `${i + 1} ${"长名称".repeat(50)}`,
+  }));
+  const { wrapper } = setup(initial);
+  render(<TrashView />, { wrapper });
+  for (const checkbox of screen.getAllByRole("checkbox"))
+    fireEvent.click(checkbox);
+  fireEvent.click(screen.getByRole("button", { name: "永久删除所选" }));
+  const dialog = screen.getByRole("dialog");
+  expect(dialog).toHaveClass("trash-confirm-dialog");
+  expect(dialog).toHaveAccessibleDescription(
+    "100 个图案。永久删除后不可恢复。",
+  );
+  const names = within(dialog).getByRole("list", { name: "永久删除对象" });
+  expect(names).toHaveClass("trash-confirm-targets");
+  expect(within(names).getAllByRole("listitem")).toHaveLength(100);
+  for (const pattern of initial.patternBatches[0]!.patterns)
+    expect(within(names).getByText(pattern.name)).toBeInTheDocument();
+  const footer = within(dialog).getByRole("contentinfo");
+  expect(names).not.toContainElement(footer);
+  expect(
+    within(footer).getByRole("button", { name: "确认永久删除" }),
+  ).toBeEnabled();
+  const css = readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8");
+  expect(css).toMatch(
+    /\.trash-confirm-dialog\s*\{[^}]*display:\s*grid[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto[^}]*max-height:\s*min\(640px,\s*calc\(100dvh - 32px\)\)/s,
+  );
+  expect(css).toMatch(
+    /\.trash-confirm-targets\s*\{[^}]*min-height:\s*0[^}]*overflow-y:\s*auto[^}]*overflow-wrap:\s*anywhere/s,
+  );
+});
 it("restores and confirms a folder batch without exposing its patterns", async () => {
   const { wrapper } = setup(data());
   render(<TrashView />, { wrapper });
@@ -284,41 +322,95 @@ it.each([
     await expect(run()).rejects.toThrow();
   },
 );
-it("does not invalidate malformed 2xx responses but does invalidate purge failure", async () => {
-  const { client, wrapper } = setup(data());
-  const invalidate = vi.spyOn(client, "invalidateQueries");
-  const { result } = renderHook(() => useTrashMutation(), { wrapper });
-  vi.mocked(fetch).mockImplementation(() => response({}));
-  await act(async () => {
-    await result.current
-      .mutateAsync({
-        kind: "patterns",
-        action: "purge",
-        operationId,
-        patternIds: [id(1)],
-      })
-      .catch(() => {});
-  });
-  expect(invalidate).not.toHaveBeenCalled();
-  vi.mocked(fetch).mockImplementation(() =>
-    Promise.resolve(
-      Response.json({ error: { code: "OSS_DELETE_FAILED" } }, { status: 502 }),
-    ),
-  );
-  await act(async () => {
-    await result.current
-      .mutateAsync({
-        kind: "patterns",
-        action: "purge",
-        operationId,
-        patternIds: [id(1)],
-      })
-      .catch(() => {});
-  });
-  expect(invalidate).toHaveBeenCalledWith({
-    queryKey: queryKeys.trash(ownerId),
-  });
-});
+it.each(["restore", "purge"] as const)(
+  "invalidates owner caches and propagates %s failures after requests were sent",
+  async (action) => {
+    for (const failure of [
+      "malformed",
+      "mismatch",
+      "network",
+      "api",
+    ] as const) {
+      const { client, wrapper } = setup(data());
+      const invalidate = vi.spyOn(client, "invalidateQueries");
+      const { result, unmount } = renderHook(() => useTrashMutation(), {
+        wrapper,
+      });
+      vi.mocked(fetch).mockImplementation(() => {
+        if (failure === "network")
+          return Promise.reject(new TypeError("offline"));
+        if (failure === "api")
+          return Promise.resolve(
+            Response.json(
+              { error: { code: "INTERNAL_ERROR" } },
+              { status: 500 },
+            ),
+          );
+        if (failure === "mismatch")
+          return response(
+            action === "restore"
+              ? {
+                  ...restored,
+                  patterns: [{ ...restored.patterns[0], id: id(9) }],
+                }
+              : {
+                  state: "complete",
+                  deletedPatternCount: 0,
+                  deletedFolderCount: 0,
+                },
+          );
+        return response({});
+      });
+      await act(async () => {
+        await expect(
+          result.current.mutateAsync({
+            kind: "patterns",
+            action,
+            operationId,
+            patternIds: [id(1)],
+          }),
+        ).rejects.toThrow();
+      });
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: queryKeys.trash(ownerId),
+      });
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: queryKeys.folders(ownerId),
+      });
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: ["owner", ownerId, "patterns"],
+      });
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: queryKeys.pattern(ownerId, id(1)),
+      });
+      await waitFor(() => expect(result.current.isError).toBe(true));
+      expect(result.current.isSuccess).toBe(false);
+      unmount();
+      client.clear();
+    }
+  },
+);
+
+it.each(["restore", "purge"] as const)(
+  "does not invalidate %s rejected before a request by local input validation",
+  async (action) => {
+    const { client, wrapper } = setup(data());
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const { result } = renderHook(() => useTrashMutation(), { wrapper });
+    await act(async () => {
+      await expect(
+        result.current.mutateAsync({
+          kind: "patterns",
+          action,
+          operationId: "invalid",
+          patternIds: [id(1)],
+        }),
+      ).rejects.toThrow();
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
+  },
+);
 
 it("retries a transport failure using the same operation and selection", async () => {
   const { wrapper } = setup();

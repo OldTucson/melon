@@ -17,6 +17,14 @@ import {
 } from "./trash-types";
 
 class InvalidTrashResponse extends Error {}
+class InvalidTrashInput extends Error {}
+function validateInput<T>(parse: () => T): T {
+  try {
+    return parse();
+  } catch (cause) {
+    throw new InvalidTrashInput("请求参数无效", { cause });
+  }
+}
 const post = async (path: string, body: unknown) =>
   readApiResponse<unknown>(
     await fetch(path, {
@@ -33,7 +41,9 @@ export async function restorePatterns(
   operationId: string,
   patternIds: string[],
 ) {
-  const body = patternRestoreMutationSchema.parse({ operationId, patternIds });
+  const body = validateInput(() =>
+    patternRestoreMutationSchema.parse({ operationId, patternIds }),
+  );
   const result = restoredPatternsSchema.parse(
     await post("/api/trash/patterns/restore", body),
   );
@@ -47,7 +57,9 @@ export async function restorePatterns(
   return result;
 }
 export async function purgePatterns(operationId: string, patternIds: string[]) {
-  const body = patternRestoreMutationSchema.parse({ operationId, patternIds });
+  const body = validateInput(() =>
+    patternRestoreMutationSchema.parse({ operationId, patternIds }),
+  );
   const result = purgeResultSchema.parse(
     await post("/api/trash/patterns/purge", body),
   );
@@ -62,11 +74,14 @@ export async function restoreFolderBatch(
   operationId: string,
   trashBatchId: string,
 ) {
-  const batchId =
+  const batchId = validateInput(() =>
     trashListSchema.shape.folderBatches.element.shape.trashBatchId.parse(
       trashBatchId,
-    );
-  const body = folderBatchRestoreMutationSchema.parse({ operationId });
+    ),
+  );
+  const body = validateInput(() =>
+    folderBatchRestoreMutationSchema.parse({ operationId }),
+  );
   const result = restoredFolderSchema.parse(
     await post(`/api/trash/folder-batches/${batchId}/restore`, body),
   );
@@ -78,11 +93,14 @@ export async function purgeFolderBatch(
   operationId: string,
   trashBatchId: string,
 ) {
-  const batchId =
+  const batchId = validateInput(() =>
     trashListSchema.shape.folderBatches.element.shape.trashBatchId.parse(
       trashBatchId,
-    );
-  const body = folderBatchRestoreMutationSchema.parse({ operationId });
+    ),
+  );
+  const body = validateInput(() =>
+    folderBatchRestoreMutationSchema.parse({ operationId }),
+  );
   const result = purgeResultSchema.parse(
     await post(`/api/trash/folder-batches/${batchId}/purge`, body),
   );
@@ -177,15 +195,11 @@ export function useTrashMutation() {
       await invalidate(intent);
     },
     onError: async (error, intent) => {
-      if (
-        intent.action === "purge" &&
-        !(error instanceof ZodError) &&
-        !(error instanceof InvalidTrashResponse)
-      )
-        await invalidate(intent);
+      if (!(error instanceof InvalidTrashInput)) await invalidate(intent);
     },
     retry: (count, error) =>
       count < 1 &&
+      !(error instanceof InvalidTrashInput) &&
       !(error instanceof ZodError) &&
       !(error instanceof InvalidTrashResponse) &&
       !(error instanceof ApiResponseError),

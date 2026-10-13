@@ -18,6 +18,7 @@ import { useQueryOwnerId } from "@/lib/query/provider";
 
 import type { PatternItem, PatternPage } from "./library-types";
 import { useSelectionStore } from "./selection-store";
+import { usePatternWriteQueue } from "./pattern-write-coordinator";
 
 type PatternRef = Pick<PatternItem, "id" | "version">;
 type PatternIntentRef = PatternRef & {
@@ -537,6 +538,7 @@ function selectCurrentPattern(
 export function usePatternBatchMutation(activeQuery: PatternQuery) {
   const ownerId = useQueryOwnerId();
   const queryClient = useQueryClient();
+  const writeQueue = usePatternWriteQueue(queryClient, ownerId);
   const activeListKey = queryKeys.patterns(ownerId, activeQuery);
   const mutationKey = ["owner", ownerId, "pattern-batch"] as const;
   const sharedPending = useIsMutating({ mutationKey }) > 0;
@@ -619,46 +621,60 @@ export function usePatternBatchMutation(activeQuery: PatternQuery) {
   });
 
   const mutateBatchAsync = (input: PatternBatchInput) => {
-    if (queryClient.isMutating({ mutationKey }) > 0)
-      return Promise.reject(new Error("操作正在进行"));
-    const activeList =
-      queryClient.getQueryData<InfiniteData<PatternPage, string | null>>(
-        activeListKey,
-      );
-    const activePatterns = new Map(
-      activeList?.pages.flatMap((page) =>
-        page.items.map((item) => [item.id, item] as const),
-      ) ?? [],
+    const intent = createPatternBatchIntent(input);
+    return writeQueue.enqueue(
+      input.patterns.map((pattern) => pattern.id),
+      () => {
+        const activeList =
+          queryClient.getQueryData<InfiniteData<PatternPage, string | null>>(
+            activeListKey,
+          );
+        const activePatterns = new Map(
+          activeList?.pages.flatMap((page) =>
+            page.items.map((item) => [item.id, item] as const),
+          ) ?? [],
+        );
+        const patterns = input.patterns.map((pattern) =>
+          selectCurrentPattern(
+            pattern,
+            activePatterns.get(pattern.id),
+            queryClient.getQueryData<PatternItem>(
+              queryKeys.pattern(ownerId, pattern.id),
+            ),
+          ),
+        );
+        if (
+          patterns.length === 0 ||
+          patterns.length > 100 ||
+          new Set(patterns.map((pattern) => pattern.id)).size !==
+            patterns.length ||
+          patterns.some(
+            (pattern) =>
+              pattern.ownerId !== ownerId ||
+              (pattern.status !== "ready" && pattern.status !== "failed"),
+          )
+        ) {
+          return Promise.reject(new Error("选择已变化，请刷新后重新选择"));
+        }
+        return batchMutation.mutateAsync({
+          ...intent,
+          patterns: patterns.map(({ id, version, folderId }) => ({
+            id,
+            version,
+            sourceFolderId: folderId,
+          })),
+        });
+      },
     );
-    const patterns = input.patterns.map((pattern) =>
-      selectCurrentPattern(
-        pattern,
-        activePatterns.get(pattern.id),
-        queryClient.getQueryData<PatternItem>(
-          queryKeys.pattern(ownerId, pattern.id),
-        ),
-      ),
-    );
-    const currentInput: PatternBatchInput = { ...input, patterns };
-    if (
-      patterns.length === 0 ||
-      patterns.length > 100 ||
-      new Set(patterns.map((pattern) => pattern.id)).size !== patterns.length ||
-      patterns.some(
-        (pattern) =>
-          pattern.ownerId !== ownerId ||
-          (pattern.status !== "ready" && pattern.status !== "failed"),
-      )
-    ) {
-      return Promise.reject(new Error("选择已变化，请刷新后重新选择"));
-    }
-    return batchMutation.mutateAsync(createPatternBatchIntent(currentInput));
   };
 
   return {
     error: batchMutation.error ?? restoreMutation.error,
     isPending:
-      sharedPending || batchMutation.isPending || restoreMutation.isPending,
+      writeQueue.isPending ||
+      sharedPending ||
+      batchMutation.isPending ||
+      restoreMutation.isPending,
     mutateBatch: (input: PatternBatchInput) => {
       void mutateBatchAsync(input).catch(() => undefined);
     },

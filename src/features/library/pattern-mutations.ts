@@ -2,7 +2,6 @@
 
 import {
   type InfiniteData,
-  type QueryClient,
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
@@ -13,6 +12,7 @@ import { queryKeys } from "@/lib/query/keys";
 import { useQueryOwnerId } from "@/lib/query/provider";
 
 import type { PatternItem, PatternPage } from "./library-types";
+import { usePatternWriteQueue } from "./pattern-write-coordinator";
 
 export type PatternPatchIntent = {
   operationId: string;
@@ -39,37 +39,10 @@ export async function sendPatternPatch(intent: PatternPatchIntent) {
   return readApiResponse<PatternItem>(response);
 }
 
-const mutationQueues = new WeakMap<
-  QueryClient,
-  Map<string, Promise<void>>
->();
-
-function enqueuePatternMutation<T>(
-  queryClient: QueryClient,
-  patternId: string,
-  task: () => Promise<T>,
-) {
-  const queues = mutationQueues.get(queryClient) ?? new Map<string, Promise<void>>();
-  mutationQueues.set(queryClient, queues);
-  const previous = queues.get(patternId) ?? Promise.resolve();
-  const result = previous.catch(() => undefined).then(task);
-  const tail = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  queues.set(patternId, tail);
-  void tail.finally(() => {
-    if (queues.get(patternId) === tail) queues.delete(patternId);
-  });
-  return result;
-}
-
 const applyPatch = (pattern: PatternItem, patch: PatternPatch) => ({
   ...pattern,
   ...(patch.name === undefined ? {} : { name: patch.name }),
-  ...(patch.isFavorite === undefined
-    ? {}
-    : { isFavorite: patch.isFavorite }),
+  ...(patch.isFavorite === undefined ? {} : { isFavorite: patch.isFavorite }),
 });
 
 const updatePatternInPages = (
@@ -92,6 +65,7 @@ const updatePatternInPages = (
 export function usePatternPatchMutation(activeQuery: PatternQuery) {
   const queryClient = useQueryClient();
   const ownerId = useQueryOwnerId();
+  const writeQueue = usePatternWriteQueue(queryClient, ownerId);
   const listKey = queryKeys.patterns(ownerId, activeQuery);
   const mutation = useMutation({
     mutationFn: sendPatternPatch,
@@ -102,9 +76,10 @@ export function usePatternPatchMutation(activeQuery: PatternQuery) {
         queryClient.cancelQueries({ queryKey: listKey, exact: true }),
       ]);
       const previousDetail = queryClient.getQueryData<PatternItem>(detailKey);
-      const previousList = queryClient.getQueryData<
-        InfiniteData<PatternPage, string | null>
-      >(listKey);
+      const previousList =
+        queryClient.getQueryData<InfiniteData<PatternPage, string | null>>(
+          listKey,
+        );
       const previousListItem = previousList?.pages
         .flatMap((page) => page.items)
         .find((item) => item.id === intent.patternId);
@@ -147,29 +122,31 @@ export function usePatternPatchMutation(activeQuery: PatternQuery) {
       );
       queryClient.setQueryData<InfiniteData<PatternPage, string | null>>(
         listKey,
-        (value) =>
-          updatePatternInPages(value, intent.patternId, () => updated),
+        (value) => updatePatternInPages(value, intent.patternId, () => updated),
       );
     },
     onSettled: (_data, _error, intent) => {
-      void queryClient.invalidateQueries({
-        queryKey: queryKeys.pattern(ownerId, intent.patternId),
-        exact: true,
-      });
-      void queryClient.invalidateQueries({ queryKey: listKey, exact: true });
+      return Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.pattern(ownerId, intent.patternId),
+          exact: true,
+        }),
+        queryClient.invalidateQueries({ queryKey: listKey, exact: true }),
+      ]);
     },
     retry: 0,
   });
 
   const enqueue = (input: { patternId: string; patch: PatternPatch }) => {
     const intent = createPatternPatchIntent(input);
-    return enqueuePatternMutation(queryClient, input.patternId, () => {
+    return writeQueue.enqueue([input.patternId], () => {
       const currentDetail = queryClient.getQueryData<PatternItem>(
         queryKeys.pattern(ownerId, input.patternId),
       );
-      const currentList = queryClient.getQueryData<
-        InfiniteData<PatternPage, string | null>
-      >(listKey);
+      const currentList =
+        queryClient.getQueryData<InfiniteData<PatternPage, string | null>>(
+          listKey,
+        );
       const currentListItem = currentList?.pages
         .flatMap((page) => page.items)
         .find((item) => item.id === input.patternId);
@@ -177,10 +154,11 @@ export function usePatternPatchMutation(activeQuery: PatternQuery) {
         ...intent,
         patch: {
           ...intent.patch,
-          version:
-            currentDetail?.version ??
-            currentListItem?.version ??
+          version: Math.max(
+            currentDetail?.version ?? -1,
+            currentListItem?.version ?? -1,
             intent.patch.version,
+          ),
         },
       });
     });
@@ -188,6 +166,7 @@ export function usePatternPatchMutation(activeQuery: PatternQuery) {
 
   return {
     ...mutation,
+    isPending: writeQueue.isPending || mutation.isPending,
     mutatePattern: (input: { patternId: string; patch: PatternPatch }) => {
       void enqueue(input).catch(() => undefined);
     },

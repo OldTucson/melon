@@ -1589,6 +1589,26 @@ textarea:focus-visible,
   padding: 18px;
 }
 
+.trash-confirm-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  max-height: min(640px, calc(100dvh - 32px));
+}
+
+.trash-confirm-targets {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  margin: 0;
+  padding: 8px 18px 18px 36px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.trash-confirm-targets li + li {
+  margin-top: 8px;
+}
+
 .confirm-dialog-header h2,
 .confirm-dialog-header p {
   margin: 0;
