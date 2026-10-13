@@ -7,6 +7,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createFolder } from "@/features/folders/folder-service";
 import { trashFolderTree } from "@/features/folders/folder-trash-service";
 import { closeDatabase, db } from "@/lib/db/client";
+import { createOperationKey } from "@/lib/db/operation";
 import {
   assets,
   changeLog,
@@ -283,6 +284,8 @@ describe("trash read model and restore services", () => {
     const zeroPatternBatchId = "20000000-0000-4000-8000-000000000002";
     const patternBatchId = "30000000-0000-4000-8000-000000000003";
     const hiddenBatchId = "40000000-0000-4000-8000-000000000004";
+    const folderPurgeOperationId = "50000000-0000-4000-8000-000000000005";
+    const patternPurgeOperationId = "60000000-0000-4000-8000-000000000006";
     const earliest = new Date("2026-01-02T03:04:05.000Z");
     const middle = new Date("2026-01-03T03:04:05.000Z");
     const newest = new Date("2026-01-04T03:04:05.000Z");
@@ -290,7 +293,7 @@ describe("trash read model and restore services", () => {
     const rootId = await seedFolder({
       ownerId: ownerA,
       name: "夏日果园",
-      status: "trashed",
+      status: "deleting",
       trashBatchId: folderBatchId,
       trashedAt: earliest,
     });
@@ -298,7 +301,7 @@ describe("trash read model and restore services", () => {
       ownerId: ownerA,
       name: "柑橘",
       parentId: rootId,
-      status: "trashed",
+      status: "deleting",
       trashBatchId: folderBatchId,
       trashedAt: newest,
     });
@@ -314,7 +317,7 @@ describe("trash read model and restore services", () => {
       ownerId: ownerA,
       name: "Folder pattern",
       folderId: childId,
-      status: "trashed",
+      status: "deleting",
       preTrashStatus: "ready",
       trashBatchId: folderBatchId,
       trashedAt: middle,
@@ -400,6 +403,30 @@ describe("trash read model and restore services", () => {
       trashBatchId: patternBatchId,
       trashedAt: newest,
     });
+    await db.insert(operations).values([
+      {
+        ownerId: ownerA,
+        operationId: folderPurgeOperationId,
+        kind: createOperationKey("trash.folder-batch.purge", {
+          trashBatchId: folderBatchId,
+        }),
+        result: {
+          state: "pending",
+          target: { kind: "folder_batch", trashBatchId: folderBatchId },
+        },
+      },
+      {
+        ownerId: ownerA,
+        operationId: patternPurgeOperationId,
+        kind: createOperationKey("trash.patterns.purge", {
+          patternIds: [ordinaryHighId],
+        }),
+        result: {
+          state: "pending",
+          target: { kind: "patterns", patternIds: [ordinaryHighId] },
+        },
+      },
+    ]);
 
     const result = await listTrash({ ownerId: ownerA });
 
@@ -412,7 +439,7 @@ describe("trash read model and restore services", () => {
         patternCount: 2,
         state: "deleting",
         lastErrorCode: "AAA_FAILURE",
-        purgeOperationId: null,
+        purgeOperationId: folderPurgeOperationId,
         trashedAt: newest.toISOString(),
         expiresAt: new Date(earliest.getTime() + 30 * DAY_MS).toISOString(),
       },
@@ -434,7 +461,7 @@ describe("trash read model and restore services", () => {
         trashBatchId: patternBatchId,
         state: "deleting",
         lastErrorCode: "A_ERROR",
-        purgeOperationId: null,
+        purgeOperationId: patternPurgeOperationId,
         trashedAt: newest.toISOString(),
         expiresAt: new Date(middle.getTime() + 30 * DAY_MS).toISOString(),
         patterns: [

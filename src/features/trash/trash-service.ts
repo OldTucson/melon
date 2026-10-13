@@ -18,6 +18,7 @@ import {
   parseFolderBatchRestoreMutation,
   parsePatternRestoreMutation,
 } from "./contracts";
+import { parsePendingPurgeOperation } from "./trash-purge-service";
 import {
   findNonDeletedFolderBatchIds,
   listFolderStatesById,
@@ -74,7 +75,7 @@ export type TrashFolderBatchDto = {
   patternCount: number;
   state: TrashState;
   lastErrorCode: string | null;
-  purgeOperationId: null;
+  purgeOperationId: string | null;
   trashedAt: string;
   expiresAt: string;
 };
@@ -83,7 +84,7 @@ export type TrashPatternBatchDto = {
   trashBatchId: string;
   state: TrashState;
   lastErrorCode: string | null;
-  purgeOperationId: null;
+  purgeOperationId: string | null;
   trashedAt: string;
   expiresAt: string;
   patterns: TrashPatternDto[];
@@ -321,6 +322,56 @@ export async function listTrash(input: { ownerId: string }): Promise<TrashListDt
     patternsByBatch.set(pattern.trashBatchId, batch);
   }
 
+  const purgeOperationByPattern = new Map<string, string>();
+  const purgeOperationByFolderBatch = new Map<string, string>();
+  for (const operation of rows.pendingPurgeOperations) {
+    const target = parsePendingPurgeOperation(operation);
+    if (target.kind === "folder_batch") {
+      if (purgeOperationByFolderBatch.has(target.trashBatchId)) {
+        internalError("Trash folder batch has multiple purge operations");
+      }
+      purgeOperationByFolderBatch.set(
+        target.trashBatchId,
+        operation.operationId,
+      );
+      continue;
+    }
+    for (const patternId of target.patternIds) {
+      if (purgeOperationByPattern.has(patternId)) {
+        internalError("Trash pattern has multiple purge operations");
+      }
+      purgeOperationByPattern.set(patternId, operation.operationId);
+    }
+  }
+
+  const trashPatternsById = new Map(
+    rows.patterns.map((pattern) => [pattern.id, pattern]),
+  );
+  for (const patternId of purgeOperationByPattern.keys()) {
+    const pattern = trashPatternsById.get(patternId);
+    if (
+      !pattern ||
+      pattern.status !== "deleting" ||
+      pattern.trashBatchId === null ||
+      foldersByBatch.has(pattern.trashBatchId)
+    ) {
+      internalError("Pending trash pattern purge target is invalid");
+    }
+  }
+  for (const [trashBatchId] of purgeOperationByFolderBatch) {
+    const folderRows = foldersByBatch.get(trashBatchId);
+    const patternRows = patternsByBatch.get(trashBatchId) ?? [];
+    if (
+      !folderRows ||
+      folderRows.length === 0 ||
+      folderRows.some((folder) => folder.status !== "deleting") ||
+      patternRows.some((pattern) => pattern.status !== "deleting") ||
+      patternRows.some((pattern) => purgeOperationByPattern.has(pattern.id))
+    ) {
+      internalError("Pending folder batch purge target is invalid");
+    }
+  }
+
   const folderBatches: TrashFolderBatchDto[] = [];
   for (const [trashBatchId, folderRows] of foldersByBatch) {
     if (
@@ -340,17 +391,20 @@ export async function listTrash(input: { ownerId: string }): Promise<TrashListDt
     }
     const patternRows = patternsByBatch.get(trashBatchId) ?? [];
     const allRows = [...folderRows, ...patternRows];
+    const purgeOperationId = purgeOperationByFolderBatch.get(trashBatchId);
+    const isDeleting = allRows.some((row) => row.status === "deleting");
+    if (isDeleting !== Boolean(purgeOperationId)) {
+      internalError("Trash folder batch purge operation is invalid");
+    }
     folderBatches.push({
       trashBatchId,
       rootFolderId: roots[0]!.id,
       rootFolderName: roots[0]!.name,
       folderCount: folderRows.length,
       patternCount: patternRows.length,
-      state: allRows.some((row) => row.status === "deleting")
-        ? "deleting"
-        : "trashed",
+      state: isDeleting ? "deleting" : "trashed",
       lastErrorCode: stableErrorCode(patternRows),
-      purgeOperationId: null,
+      purgeOperationId: purgeOperationId ?? null,
       ...batchDates(allRows),
     });
   }
@@ -365,13 +419,27 @@ export async function listTrash(input: { ownerId: string }): Promise<TrashListDt
         ? compareIds(left.id, right.id)
         : rightTime - leftTime;
     });
+    const deletingOperationIds = new Set(
+      patternRows.flatMap((pattern) => {
+        if (pattern.status !== "deleting") return [];
+        const operationId = purgeOperationByPattern.get(pattern.id);
+        if (!operationId) {
+          internalError("Trash pattern purge operation is missing");
+        }
+        return [operationId];
+      }),
+    );
+    if (deletingOperationIds.size > 1) {
+      internalError("Trash pattern batch has multiple purge operations");
+    }
+    const purgeOperationId = [...deletingOperationIds][0] ?? null;
     patternBatches.push({
       trashBatchId,
       state: patternRows.some((row) => row.status === "deleting")
         ? "deleting"
         : "trashed",
       lastErrorCode: stableErrorCode(patternRows),
-      purgeOperationId: null,
+      purgeOperationId,
       ...batchDates(patternRows),
       patterns: orderedPatterns.map(toTrashPatternDto),
     });

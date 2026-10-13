@@ -87,6 +87,48 @@ describe("FakeOssAdapter", () => {
     fake.reset();
     expect(fake.objects.size).toBe(0);
     expect(fake.signedGets).toHaveLength(0);
+    expect(fake.deleteCalls).toHaveLength(0);
+  });
+
+  it("records delete batches of at most 1,000 keys and accepts missing objects", async () => {
+    const fake = new FakeOssAdapter();
+    const keys = Array.from({ length: 1_001 }, (_, index) =>
+      sourceObjectKey({
+        ownerId,
+        patternId,
+        assetId: `${String(index).padStart(8, "0")}-0000-4000-8000-000000000001`,
+        extension: "psd",
+      }),
+    );
+    for (const objectKey of keys.slice(0, -1)) {
+      fake.putObject(objectKey, Uint8Array.from([1]));
+    }
+
+    await expect(fake.deleteObjects(keys)).resolves.toBeUndefined();
+
+    expect(fake.deleteCalls).toEqual([keys.slice(0, 1_000), keys.slice(1_000)]);
+    expect(fake.objects.size).toBe(0);
+  });
+
+  it("can fail one deterministic delete batch and succeed when replayed", async () => {
+    const fake = new FakeOssAdapter();
+    fake.putObject(key, Uint8Array.from([1]));
+    fake.putObject(anotherKey, Uint8Array.from([2]));
+    fake.failDeleteCall = 1;
+
+    await expect(fake.deleteObjects([key, anotherKey])).rejects.toThrow(
+      "OSS_DELETE_FAILED",
+    );
+    expect(fake.objects.has(key)).toBe(true);
+    expect(fake.objects.has(anotherKey)).toBe(true);
+    expect(fake.deleteCalls).toEqual([[key, anotherKey]]);
+
+    await expect(fake.deleteObjects([key, anotherKey])).resolves.toBeUndefined();
+    expect(fake.deleteCalls).toEqual([
+      [key, anotherKey],
+      [key, anotherKey],
+    ]);
+    expect(fake.objects.size).toBe(0);
   });
 
   it("validates every delete key before mutating fake storage", async () => {

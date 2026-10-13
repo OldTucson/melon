@@ -9,6 +9,7 @@ import { normalizedUuidSchema } from "@/features/storage/identifiers";
 import {
   assertCanonicalObjectKey,
   assertValidObjectRange,
+  OSS_DELETE_BATCH_SIZE,
   parseDeleteObjectKeys,
   parseSignedGetInput,
 } from "@/features/storage/validation";
@@ -29,11 +30,13 @@ type FakeCredentialIssuerOptions = Partial<
 
 export class FakeOssAdapter implements OssAdapter {
   readonly objects = new Map<string, Uint8Array>();
+  readonly deleteCalls: string[][] = [];
   readonly signedGets: Array<{
     key: string;
     filename: string;
     expiresSeconds: number;
   }> = [];
+  failDeleteCall: number | null = null;
   private readonly contentTypes = new Map<string, string>();
 
   putObject(
@@ -69,9 +72,20 @@ export class FakeOssAdapter implements OssAdapter {
   async deleteObjects(keys: string[]) {
     const parsedKeys = parseDeleteObjectKeys(keys);
 
-    for (const key of parsedKeys) {
-      this.objects.delete(key);
-      this.contentTypes.delete(key);
+    for (
+      let start = 0;
+      start < parsedKeys.length;
+      start += OSS_DELETE_BATCH_SIZE
+    ) {
+      const batch = parsedKeys.slice(start, start + OSS_DELETE_BATCH_SIZE);
+      this.deleteCalls.push(batch);
+      if (this.failDeleteCall === this.deleteCalls.length) {
+        throw new Error("OSS_DELETE_FAILED");
+      }
+      for (const key of batch) {
+        this.objects.delete(key);
+        this.contentTypes.delete(key);
+      }
     }
   }
 
@@ -93,7 +107,9 @@ export class FakeOssAdapter implements OssAdapter {
   reset() {
     this.objects.clear();
     this.contentTypes.clear();
+    this.deleteCalls.splice(0);
     this.signedGets.splice(0);
+    this.failDeleteCall = null;
   }
 
   private require(key: string) {

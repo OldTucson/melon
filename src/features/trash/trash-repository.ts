@@ -7,6 +7,7 @@ import {
   getTableColumns,
   inArray,
   isNotNull,
+  like,
   ne,
   or,
   sql,
@@ -15,7 +16,7 @@ import { alias } from "drizzle-orm/pg-core";
 
 import { normalizedUuidSchema } from "@/features/storage/identifiers";
 import { db, type DbTransaction } from "@/lib/db/client";
-import { assets, folders, patterns } from "@/lib/db/schema";
+import { assets, folders, operations, patterns } from "@/lib/db/schema";
 
 export type TrashFolderRow = typeof folders.$inferSelect;
 export type TrashPatternRow = typeof patterns.$inferSelect;
@@ -124,11 +125,26 @@ export async function listTrashRows(
             ),
           )
           .orderBy(asc(folders.id));
+  const pendingPurgeOperations = await executor
+    .select()
+    .from(operations)
+    .where(
+      and(
+        eq(operations.ownerId, ownerId),
+        or(
+          like(operations.kind, "trash.patterns.purge:%"),
+          like(operations.kind, "trash.folder-batch.purge:%"),
+        ),
+        sql`${operations.result} ->> 'state' = 'pending'`,
+      ),
+    )
+    .orderBy(asc(operations.createdAt), asc(operations.operationId));
 
   return {
     folders: folderRows,
     patterns: patternRows,
     patternFolders: patternFolderRows,
+    pendingPurgeOperations,
   };
 }
 

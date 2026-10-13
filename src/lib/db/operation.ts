@@ -1,12 +1,13 @@
 import "server-only";
 
 import { createHash } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq, like, sql } from "drizzle-orm";
 
-import type { DbTransaction } from "./client";
+import { db, type DbTransaction } from "./client";
 import { operations } from "./schema";
 
 type ReplayResult = Record<string, unknown>;
+export type OperationRow = typeof operations.$inferSelect;
 
 export type OperationClaim =
   | { state: "claimed" }
@@ -82,5 +83,45 @@ export async function storeOperationResult(
         eq(operations.ownerId, ownerId),
         eq(operations.operationId, operationId),
       ),
+    );
+}
+
+export async function readOperation(
+  ownerId: string,
+  operationId: string,
+): Promise<OperationRow | undefined> {
+  const [row] = await db
+    .select()
+    .from(operations)
+    .where(
+      and(
+        eq(operations.ownerId, ownerId),
+        eq(operations.operationId, operationId),
+      ),
+    )
+    .limit(1);
+  return row;
+}
+
+export async function listPendingOperations(
+  kindPrefix: string,
+): Promise<OperationRow[]> {
+  if (!/^[a-z0-9.-]+:$/.test(kindPrefix)) {
+    throw new Error("OPERATION_KIND_PREFIX_INVALID");
+  }
+
+  return db
+    .select()
+    .from(operations)
+    .where(
+      and(
+        like(operations.kind, `${kindPrefix}%`),
+        sql`${operations.result} ->> 'state' = 'pending'`,
+      ),
+    )
+    .orderBy(
+      asc(operations.createdAt),
+      asc(operations.ownerId),
+      asc(operations.operationId),
     );
 }
