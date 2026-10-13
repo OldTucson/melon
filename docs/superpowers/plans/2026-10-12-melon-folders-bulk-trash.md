@@ -979,7 +979,7 @@ git commit -m "feat: permanently purge trashed patterns"
 - Modify: `src/features/library/library-view.test.tsx`
 - Modify: `src/lib/query/keys.ts`
 
-- [ ] **Step 1: Write failing selection tests**
+- [x] **Step 1: Write failing selection tests**
 
 Extend the Zustand store contract with `selectAll` and `removeSelected`. Test plain click, Command/Ctrl toggle, Shift range, all loaded items, query reset, and explicit selection marks:
 
@@ -992,7 +992,7 @@ expect(store.getState().selectedIds).toEqual(["a"]);
 
 Render the grid and assert selected cards expose a checked checkbox with an accessible label such as `选择 图案名称`; do not rely only on `data-selected` or border color.
 
-- [ ] **Step 2: Implement stable selection actions**
+- [x] **Step 2: Implement stable selection actions**
 
 Add:
 
@@ -1016,7 +1016,7 @@ Keep “全选” scoped to `orderedIds`, which contains only pages already load
 
 Add `ctrlKey?: boolean` to `SelectionModifiers`, treat `metaKey || ctrlKey` as additive selection, and forward both event flags from `PatternCard`. This keeps Command behavior on macOS and Ctrl behavior on Windows/Linux aligned.
 
-- [ ] **Step 3: Write failing mutation/cache tests**
+- [x] **Step 3: Write failing mutation/cache tests**
 
 Mock `fetch` and Query Client. Assert the hook:
 
@@ -1027,7 +1027,7 @@ Mock `fetch` and Query Client. Assert the hook:
 - restores snapshots on failed move/favorite optimistic updates;
 - clears only successfully affected selection IDs.
 
-- [ ] **Step 4: Implement the batch mutation hook**
+- [x] **Step 4: Implement the batch mutation hook**
 
 Add cache keys:
 
@@ -1038,7 +1038,7 @@ trash: (ownerId: string) => ["owner", ownerId, "trash"] as const,
 
 `usePatternBatchMutation(activeQuery)` posts to `/api/patterns/batch`. Move and favorite may optimistically update with a complete query snapshot. Trash has no optimistic removal. Generate `operationId` in the click handler and keep it in mutation variables so React Query retries the identical request.
 
-- [ ] **Step 5: Build the bulk action bar and delete confirmation**
+- [x] **Step 5: Build the bulk action bar and delete confirmation**
 
 The bar appears between heading and grid whenever `selectedIds.length > 0`. It contains stable-size controls for:
 
@@ -1048,7 +1048,7 @@ The bar appears between heading and grid whenever `selectedIds.length > 0`. It c
 
 Use Lucide icons and tooltips. The destructive action opens a Radix dialog showing the exact count. Confirm calls the server; cancel changes nothing. On success show an in-workspace status notice with “撤销”; the undo action calls `/api/trash/patterns/restore` with a new operation ID and the returned pattern IDs.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 ```bash
 npx --yes --package=node@24 -c 'npm test -- src/features/library/selection-store.test.ts src/features/library/pattern-batch-mutations.test.tsx src/features/library/bulk-action-bar.test.tsx src/features/library/library-view.test.tsx'
