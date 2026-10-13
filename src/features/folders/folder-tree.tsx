@@ -42,6 +42,16 @@ import {
 type Draft =
   | { kind: "create"; parentId: string | null; name: string }
   | { kind: "rename"; folder: FolderDto; name: string };
+const deleteImpactMatches = (
+  left: FolderDeleteImpact,
+  right: FolderDeleteImpact,
+) =>
+  left.folderCount === right.folderCount &&
+  left.patternCount === right.patternCount &&
+  left.alreadyTrashedFolderCount === right.alreadyTrashedFolderCount &&
+  left.alreadyTrashedPatternCount === right.alreadyTrashedPatternCount &&
+  left.hasDeletingEntities === right.hasDeletingEntities;
+
 export function FolderTree() {
   const folders = useFoldersQuery(),
     create = useCreateFolderMutation(),
@@ -139,14 +149,26 @@ export function FolderTree() {
     }
   };
   const confirmDelete = async () => {
-    if (!deletion || deletion.impact.hasDeletingEntities || submitting.current)
+    if (
+      !deletion ||
+      deletion.impact.hasDeletingEntities ||
+      impactPending ||
+      submitting.current
+    )
       return;
     submitting.current = true;
     setError(null);
+    setImpactPending(true);
     const snapshot =
       client.getQueryData<FolderCacheItem[]>(queryKeys.folders(ownerId)) ?? [];
     const removed = folderSubtree(snapshot, deletion.folder.id);
     try {
+      const currentImpact = await loadDeleteImpact(deletion.folder.id);
+      if (!deleteImpactMatches(deletion.impact, currentImpact)) {
+        setDeletion({ folder: deletion.folder, impact: currentImpact });
+        setError("删除范围已变化，请核对后再次确认");
+        return;
+      }
       await trash.mutateAsync({
         id: deletion.folder.id,
         version: deletion.folder.version,
@@ -187,6 +209,7 @@ export function FolderTree() {
     } catch (cause) {
       setError(folderErrorMessage(cause));
     } finally {
+      setImpactPending(false);
       submitting.current = false;
     }
   };
@@ -448,7 +471,7 @@ export function FolderTree() {
           <FolderDeleteDialog
             name={deletion.folder.name}
             impact={deletion.impact}
-            pending={trash.isPending}
+            pending={impactPending || trash.isPending}
             error={error}
             onCancel={() => {
               setDeletion(null);

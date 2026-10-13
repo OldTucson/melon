@@ -337,8 +337,65 @@ describe("folder tree interactions", () => {
     await user.click(screen.getByRole("button", { name: "取消" }));
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
+  it("rechecks impact and requires confirmation again when the delete scope changes", async () => {
+    const initialImpact = {
+      ...impact,
+      folderCount: 1,
+      patternCount: 0,
+      alreadyTrashedFolderCount: 0,
+      alreadyTrashedPatternCount: 0,
+      hasDeletingEntities: false,
+    };
+    const changedImpact = {
+      ...initialImpact,
+      folderCount: 2,
+      patternCount: 1,
+    };
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(response(initialImpact))
+      .mockResolvedValueOnce(response(changedImpact))
+      .mockResolvedValueOnce(response(changedImpact))
+      .mockImplementationOnce(async (_url, init) => {
+        const operationId = JSON.parse(String(init?.body)).operationId;
+        return response({
+          state: "trashed",
+          rootFolderId: id,
+          trashBatchId: operationId,
+          folderCount: 2,
+          patternCount: 1,
+        });
+      });
+    vi.stubGlobal("fetch", fetcher);
+    const { user } = setup();
+
+    await menu(user, "花卉", "移入回收站");
+    expect(await screen.findByRole("dialog")).toHaveTextContent(
+      "1 个文件夹和 0 个图案",
+    );
+    await user.click(screen.getByRole("button", { name: "确认移入回收站" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "删除范围已变化，请核对后再次确认",
+    );
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      "2 个文件夹和 1 个图案",
+    );
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(
+      fetcher.mock.calls.some(([, init]) => init?.method === "DELETE"),
+    ).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: "确认移入回收站" }));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(4));
+    expect(fetcher.mock.calls[3]![1]?.method).toBe("DELETE");
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+  });
   it("guards pending dialog and removes subtree/navigates to active ancestor only after success", async () => {
-    let finish!: (response: Response) => void;
+    let finishImpact!: (response: Response) => void;
+    let finishDelete!: (response: Response) => void;
     const fetcher = vi
       .fn()
       .mockResolvedValueOnce(
@@ -347,7 +404,13 @@ describe("folder tree interactions", () => {
       .mockImplementationOnce(
         () =>
           new Promise<Response>((resolve) => {
-            finish = resolve;
+            finishImpact = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            finishDelete = resolve;
           }),
       );
     vi.stubGlobal("fetch", fetcher);
@@ -368,9 +431,13 @@ describe("folder tree interactions", () => {
     expect(
       client.getQueryData<FolderDto[]>(queryKeys.folders(owner)),
     ).toHaveLength(3);
-    const operationId = JSON.parse(fetcher.mock.calls[1]![1].body).operationId;
     await act(async () =>
-      finish(
+      finishImpact(response({ ...impact, hasDeletingEntities: false })),
+    );
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3));
+    const operationId = JSON.parse(fetcher.mock.calls[2]![1].body).operationId;
+    await act(async () =>
+      finishDelete(
         response({
           state: "trashed",
           rootFolderId: childId,
@@ -403,6 +470,9 @@ describe("folder tree interactions", () => {
           response({ ...impact, hasDeletingEntities: false }),
         )
         .mockResolvedValueOnce(
+          response({ ...impact, hasDeletingEntities: false }),
+        )
+        .mockResolvedValueOnce(
           response({ error: { code: "FOLDER_STATE_CHANGED" } }, 409),
         ),
     );
@@ -414,6 +484,30 @@ describe("folder tree interactions", () => {
       "文件夹状态已变化",
     );
     expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(
+      client.getQueryData<FolderDto[]>(queryKeys.folders(owner)),
+    ).toHaveLength(3);
+  });
+  it("keeps the dialog and tree when the impact recheck fails", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(
+        response({ ...impact, hasDeletingEntities: false }),
+      )
+      .mockResolvedValueOnce(response({ error: { code: "UNAVAILABLE" } }, 503));
+    vi.stubGlobal("fetch", fetcher);
+    const { user, client } = setup();
+    await menu(user, "花卉", "移入回收站");
+    await screen.findByRole("dialog");
+    await user.click(screen.getByRole("button", { name: "确认移入回收站" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "文件夹操作未完成",
+    );
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(
+      fetcher.mock.calls.some(([, init]) => init?.method === "DELETE"),
+    ).toBe(false);
     expect(
       client.getQueryData<FolderDto[]>(queryKeys.folders(owner)),
     ).toHaveLength(3);

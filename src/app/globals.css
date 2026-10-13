@@ -1891,7 +1891,7 @@ textarea:focus-visible,
 }
 
 @media (max-width: 1200px) {
-  .library-layout {
+  .library-layout[data-inspector="open"] {
     grid-template-columns: minmax(280px, 1fr) 340px;
   }
 
@@ -1982,8 +1982,21 @@ textarea:focus-visible,
 }
 
 @media (max-width: 720px) {
-  .sidebar-folders {
-    display: none;
+  .workspace-sidebar .sidebar-folders {
+    display: block;
+    flex: 0 0 42px;
+  }
+  .sidebar-folders > .folder-rail-toggle {
+    width: 42px;
+    height: 44px;
+  }
+  .sidebar-folders[data-rail-open="true"] .folder-tree-content {
+    left: 8px;
+    right: 8px;
+    bottom: 60px;
+    top: auto;
+    width: auto;
+    max-height: min(70dvh, 520px);
   }
   .library-heading {
     flex-wrap: wrap;

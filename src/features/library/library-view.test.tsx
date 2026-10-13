@@ -203,7 +203,7 @@ describe("Mac-first workspace", () => {
       /@media\s*\(max-width:\s*1100px\)[\s\S]*grid-template-columns:\s*56px minmax\(0,\s*1fr\) auto/,
     );
     expect(css).toMatch(
-      /@media\s*\(max-width:\s*1200px\)[\s\S]*?\.library-layout\s*\{[^}]*grid-template-columns:\s*minmax\(280px,\s*1fr\) 340px/,
+      /@media\s*\(max-width:\s*1200px\)[\s\S]*?\.library-layout\[data-inspector="open"\]\s*\{[^}]*grid-template-columns:\s*minmax\(280px,\s*1fr\) 340px/,
     );
     expect(css).toMatch(
       /@media\s*\(max-width:\s*1200px\)[\s\S]*?\.library-inspector\s*\{[^}]*position:\s*static/,
@@ -221,8 +221,14 @@ describe("Mac-first workspace", () => {
     expect(css).toMatch(
       /@media\s*\(max-width:\s*1100px\)[\s\S]*?\.folder-rail-toggle\s*\{[^}]*display:\s*inline-flex/,
     );
-    expect(css).toMatch(
+    expect(css).not.toMatch(
       /@media\s*\(max-width:\s*720px\)[\s\S]*?\.sidebar-folders\s*\{[^}]*display:\s*none/,
+    );
+    expect(css).toMatch(
+      /@media\s*\(max-width:\s*720px\)[\s\S]*?\.workspace-sidebar\s+\.sidebar-folders\s*\{[^}]*flex:\s*0 0 42px/,
+    );
+    expect(css).toMatch(
+      /@media\s*\(max-width:\s*720px\)[\s\S]*?\.sidebar-folders\[data-rail-open="true"\]\s+\.folder-tree-content\s*\{[^}]*left:\s*8px[^}]*right:\s*8px[^}]*bottom:\s*60px[^}]*width:\s*auto/,
     );
   });
 
@@ -701,17 +707,22 @@ describe("Mac-first workspace", () => {
     const user = userEvent.setup();
     renderLibrary([makePattern(1)]);
 
+    const layout = document.querySelector(".library-layout");
+    expect(layout).not.toHaveAttribute("data-inspector");
     const first = await screen.findByRole("listitem", { name: /Pattern 1/ });
     await user.click(first);
+    expect(layout).toHaveAttribute("data-inspector", "open");
     expect(screen.getByRole("complementary", { name: "图案检查器" })).toHaveClass(
       "library-inspector",
     );
 
     await user.click(screen.getByRole("button", { name: "收起检查器" }));
+    expect(layout).not.toHaveAttribute("data-inspector");
     expect(
       screen.queryByRole("complementary", { name: "图案检查器" }),
     ).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "显示检查器" }));
+    expect(layout).toHaveAttribute("data-inspector", "open");
     expect(screen.getByRole("complementary", { name: "图案检查器" })).toBeVisible();
 
     fireEvent.doubleClick(first.querySelector(".pattern-media")!);

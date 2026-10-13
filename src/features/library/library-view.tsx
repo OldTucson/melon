@@ -144,7 +144,10 @@ export function LibraryView({ initialQuery }: { initialQuery: PatternQuery }) {
   const showInspector = selectedIds.length > 0 && !inspectorCollapsed;
 
   return (
-    <main className="library-layout">
+    <main
+      className="library-layout"
+      data-inspector={showInspector ? "open" : undefined}
+    >
       <section className="library-center" aria-labelledby="library-title">
         <header className="library-heading">
           <div>
