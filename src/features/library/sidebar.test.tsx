@@ -44,8 +44,8 @@ const tags: TagItem[] = [
   },
 ];
 
-function renderSidebar(search = "") {
-  navigation.pathname = "/library";
+function renderSidebar(search = "", pathname = "/library") {
+  navigation.pathname = pathname;
   navigation.searchParams = new URLSearchParams(search);
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
@@ -63,6 +63,20 @@ function renderSidebar(search = "") {
 afterEach(() => cleanup());
 
 describe("workspace sidebar", () => {
+  it.each(["/trash", "/trash-other", "/library"])(
+    "links the trash workspace with exact active route on %s",
+    (pathname) => {
+      renderSidebar("", pathname);
+      const link = screen.getByRole("link", { name: "回收站" });
+      expect(link).toHaveAttribute("href", "/trash");
+      if (pathname === "/trash") {
+        expect(link).toHaveAttribute("aria-current", "page");
+        expect(
+          screen.getByRole("link", { name: "全部图案" }),
+        ).not.toHaveAttribute("aria-current");
+      } else expect(link).not.toHaveAttribute("aria-current");
+    },
+  );
   it("shows folder navigation and does not mark all active in a folder context", () => {
     renderSidebar("unfiled=true");
     expect(screen.getByRole("link", { name: "未分类" })).toHaveAttribute(

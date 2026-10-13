@@ -121,14 +121,16 @@ export function Sidebar() {
           <BarChart3 aria-hidden="true" />
           <span>数据看板</span>
         </span>
-        <span
-          className="sidebar-link sidebar-link-disabled"
-          aria-disabled="true"
-          title="回收站将在删除流程接入后开放"
+        <Link
+          className="sidebar-link"
+          href="/trash"
+          aria-current={activeView === "trash" ? "page" : undefined}
+          data-active={activeView === "trash" ? "true" : undefined}
+          title="回收站"
         >
           <Trash2 aria-hidden="true" />
           <span>回收站</span>
-        </span>
+        </Link>
         <Link
           aria-current={activeView === "settings" ? "page" : undefined}
           className="sidebar-link"
@@ -145,6 +147,7 @@ export function Sidebar() {
 }
 
 function getActiveView(pathname: string, searchParams: URLSearchParams) {
+  if (pathname === "/trash") return "trash";
   if (pathname === "/settings") return "settings";
   if (pathname !== "/library") return null;
   if (searchParams.has("folderId") || searchParams.get("unfiled") === "true")

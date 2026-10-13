@@ -85,13 +85,15 @@ export function BulkActionBar({
   const allLoadedSelected =
     loadedPatterns.length > 0 && count === loadedPatterns.length;
   const tooMany = count > 100;
-  const disabled = mutation.isPending || tooMany;
+  const invalid = count !== selectedIds.length || selected.some((pattern) => pattern.status !== "ready" && pattern.status !== "failed");
+  const disabled = mutation.isPending || tooMany || invalid;
 
   const run = async (
     input:
       | { action: "move"; folderId: string | null }
       | { action: "favorite"; isFavorite: boolean },
   ) => {
+    if (disabled) return;
     setMessage(null);
     try {
       await mutation.mutateBatchAsync({ ...input, patterns: selected });
@@ -101,6 +103,7 @@ export function BulkActionBar({
   };
 
   const confirmTrash = async () => {
+    if (disabled) return;
     setMessage(null);
     try {
       const result = await mutation.mutateBatchAsync({
@@ -243,6 +246,7 @@ export function BulkActionBar({
               每次最多处理 100 个图案
             </span>
           ) : null}
+          {invalid ? <span className="bulk-inline-error" role="alert">选择已变化，请刷新后重新选择</span> : null}
         </div>
       ) : null}
 

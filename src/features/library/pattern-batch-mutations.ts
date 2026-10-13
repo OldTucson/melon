@@ -5,6 +5,7 @@ import {
   type QueryClient,
   type QueryKey,
   useMutation,
+  useIsMutating,
   useQueryClient,
 } from "@tanstack/react-query";
 import { z } from "zod";
@@ -170,7 +171,10 @@ export class InvalidApiResponseError extends Error {
   }
 }
 
-function hasExactIds(actualIds: readonly string[], expectedIds: readonly string[]) {
+function hasExactIds(
+  actualIds: readonly string[],
+  expectedIds: readonly string[],
+) {
   const actual = new Set(actualIds);
   return (
     actual.size === actualIds.length &&
@@ -196,7 +200,9 @@ function parsePatternBatchResult(
     ) ||
     parsed.data.patterns.some((pattern) => pattern.ownerId !== ownerId)
   ) {
-    throw new InvalidApiResponseError("Pattern batch response IDs do not match");
+    throw new InvalidApiResponseError(
+      "Pattern batch response IDs do not match",
+    );
   }
   const refs = new Map(
     intent.patterns.map((pattern) => [pattern.id, pattern] as const),
@@ -212,9 +218,7 @@ function parsePatternBatchResult(
       pattern.deletedAt === null;
     if (intent.action === "move") {
       const expectedVersion =
-        ref.sourceFolderId === intent.folderId
-          ? ref.version
-          : ref.version + 1;
+        ref.sourceFolderId === intent.folderId ? ref.version : ref.version + 1;
       return (
         !isLiveResult ||
         pattern.folderId !== intent.folderId ||
@@ -239,7 +243,9 @@ function parsePatternBatchResult(
     );
   });
   if (invalidActionResult) {
-    throw new InvalidApiResponseError("Pattern batch response action does not match");
+    throw new InvalidApiResponseError(
+      "Pattern batch response action does not match",
+    );
   }
   return parsed.data;
 }
@@ -271,7 +277,12 @@ export function createPatternBatchIntent(
   }));
   const operationId = crypto.randomUUID();
   if (input.action === "move") {
-    return { action: input.action, folderId: input.folderId, operationId, patterns };
+    return {
+      action: input.action,
+      folderId: input.folderId,
+      operationId,
+      patterns,
+    };
   }
   if (input.action === "favorite") {
     return {
@@ -349,7 +360,10 @@ function queryFromKey(key: QueryKey): PatternQuery | undefined {
     : undefined;
 }
 
-function knownQueryExcludes(query: PatternQuery | undefined, item: PatternItem) {
+function knownQueryExcludes(
+  query: PatternQuery | undefined,
+  item: PatternItem,
+) {
   if (!query) return false;
   if (query.scope === "library" && item.status === "trashed") return true;
   if (query.favorite === true && !item.isFavorite) return true;
@@ -422,9 +436,8 @@ function rollbackOptimisticIntent(
   if (!context || intent.action === "trash") return;
   const selected = new Set(intent.patterns.map((pattern) => pattern.id));
   for (const [key, beforeData] of context.lists) {
-    const currentData = queryClient.getQueryData<
-      InfiniteData<PatternPage, string | null>
-    >(key);
+    const currentData =
+      queryClient.getQueryData<InfiniteData<PatternPage, string | null>>(key);
     if (!beforeData || !currentData) continue;
     const beforeById = new Map(
       beforeData.pages.flatMap((page) =>
@@ -525,10 +538,16 @@ export function usePatternBatchMutation(activeQuery: PatternQuery) {
   const ownerId = useQueryOwnerId();
   const queryClient = useQueryClient();
   const activeListKey = queryKeys.patterns(ownerId, activeQuery);
+  const mutationKey = ["owner", ownerId, "pattern-batch"] as const;
+  const sharedPending = useIsMutating({ mutationKey }) > 0;
 
   const batchMutation = useMutation({
-    mutationFn: (intent: PatternBatchIntent) => sendPatternBatch(intent, ownerId),
-    onMutate: async (intent: PatternBatchIntent): Promise<OptimisticContext | undefined> => {
+    mutationKey,
+    mutationFn: (intent: PatternBatchIntent) =>
+      sendPatternBatch(intent, ownerId),
+    onMutate: async (
+      intent: PatternBatchIntent,
+    ): Promise<OptimisticContext | undefined> => {
       if (intent.action === "trash") return undefined;
       await Promise.all([
         queryClient.cancelQueries({ queryKey: patternListPrefix(ownerId) }),
@@ -576,7 +595,10 @@ export function usePatternBatchMutation(activeQuery: PatternQuery) {
   });
 
   const restoreMutation = useMutation({
-    mutationFn: async (input: { operationId: string; patternIds: string[] }) => {
+    mutationFn: async (input: {
+      operationId: string;
+      patternIds: string[];
+    }) => {
       const response = await readApiResponse<unknown>(
         await fetch("/api/trash/patterns/restore", {
           method: "POST",
@@ -597,9 +619,12 @@ export function usePatternBatchMutation(activeQuery: PatternQuery) {
   });
 
   const mutateBatchAsync = (input: PatternBatchInput) => {
-    const activeList = queryClient.getQueryData<
-      InfiniteData<PatternPage, string | null>
-    >(activeListKey);
+    if (queryClient.isMutating({ mutationKey }) > 0)
+      return Promise.reject(new Error("操作正在进行"));
+    const activeList =
+      queryClient.getQueryData<InfiniteData<PatternPage, string | null>>(
+        activeListKey,
+      );
     const activePatterns = new Map(
       activeList?.pages.flatMap((page) =>
         page.items.map((item) => [item.id, item] as const),
@@ -615,12 +640,25 @@ export function usePatternBatchMutation(activeQuery: PatternQuery) {
       ),
     );
     const currentInput: PatternBatchInput = { ...input, patterns };
+    if (
+      patterns.length === 0 ||
+      patterns.length > 100 ||
+      new Set(patterns.map((pattern) => pattern.id)).size !== patterns.length ||
+      patterns.some(
+        (pattern) =>
+          pattern.ownerId !== ownerId ||
+          (pattern.status !== "ready" && pattern.status !== "failed"),
+      )
+    ) {
+      return Promise.reject(new Error("选择已变化，请刷新后重新选择"));
+    }
     return batchMutation.mutateAsync(createPatternBatchIntent(currentInput));
   };
 
   return {
     error: batchMutation.error ?? restoreMutation.error,
-    isPending: batchMutation.isPending || restoreMutation.isPending,
+    isPending:
+      sharedPending || batchMutation.isPending || restoreMutation.isPending,
     mutateBatch: (input: PatternBatchInput) => {
       void mutateBatchAsync(input).catch(() => undefined);
     },

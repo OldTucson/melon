@@ -248,7 +248,8 @@ export function LibraryView({ initialQuery }: { initialQuery: PatternQuery }) {
       ) : null}
       {showInspector && selectedPatterns.length > 1 ? (
         <MultiSelectionInspector
-          count={selectedPatterns.length}
+          activeQuery={initialQuery}
+          patterns={selectedPatterns}
           onCollapse={() => setCollapsedSelectionKey(selectionKey)}
         />
       ) : null}

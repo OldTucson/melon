@@ -126,7 +126,9 @@ function libraryTree(client: QueryClient, initialQuery = query) {
   );
 }
 
-function renderLibrary(items = Array.from({ length: 120 }, (_, i) => makePattern(i + 1))) {
+function renderLibrary(
+  items = Array.from({ length: 120 }, (_, i) => makePattern(i + 1)),
+) {
   const client = createClient(items);
   return {
     client,
@@ -135,15 +137,174 @@ function renderLibrary(items = Array.from({ length: 120 }, (_, i) => makePattern
 }
 
 describe("Mac-first workspace", () => {
+  it("moves a single inspected pattern with a versioned batch request and locks controls while pending", async () => {
+    const item = { ...makePattern(1), folderId: folder.id };
+    const client = createClient([item]);
+    client.setQueryData(queryKeys.folders(ownerId), [folder]);
+    vi.mocked(fetch).mockImplementation(() => new Promise(() => {}));
+    render(libraryTree(client));
+    act(() => useSelectionStore.getState().selectAll([item.id]));
+    const inspector = within(
+      screen.getByRole("complementary", { name: "图案检查器" }),
+    );
+    expect(inspector.getByText("当前位置：设计文件夹")).toBeInTheDocument();
+    fireEvent.click(inspector.getByRole("button", { name: "移动" }));
+    fireEvent.click(inspector.getByRole("radio", { name: "未分类" }));
+    fireEvent.click(inspector.getByRole("button", { name: "移动到此处" }));
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/patterns/batch",
+        expect.objectContaining({ body: expect.any(String) }),
+      ),
+    );
+    const call = vi
+      .mocked(fetch)
+      .mock.calls.find(([url]) => url === "/api/patterns/batch")!;
+    expect(JSON.parse(call[1]!.body as string)).toEqual({
+      action: "move",
+      folderId: null,
+      operationId: expect.any(String),
+      patterns: [{ id: item.id, version: 0 }],
+    });
+    for (const control of inspector.getAllByRole("radio"))
+      expect(control).toBeDisabled();
+    expect(
+      inspector.getByRole("button", { name: "移动到此处" }),
+    ).toBeDisabled();
+  });
+
+  it.each(["move", "favorite", "unfavorite"])(
+    "submits all selected inspector patterns for %s",
+    async (action) => {
+      const items = [makePattern(1), makePattern(2)];
+      const client = createClient(items);
+      client.setQueryData(queryKeys.folders(ownerId), [folder]);
+      vi.mocked(fetch).mockImplementation(() => new Promise(() => {}));
+      render(libraryTree(client));
+      act(() =>
+        useSelectionStore.getState().selectAll(items.map((item) => item.id)),
+      );
+      const inspector = within(
+        screen.getByRole("complementary", { name: "图案检查器" }),
+      );
+      if (action === "move")
+        fireEvent.click(inspector.getByRole("radio", { name: folder.name }));
+      fireEvent.click(
+        inspector.getByRole("button", {
+          name:
+            action === "move"
+              ? "移动到此处"
+              : action === "favorite"
+                ? "添加收藏"
+                : "取消收藏",
+        }),
+      );
+      await waitFor(() =>
+        expect(fetch).toHaveBeenCalledWith(
+          "/api/patterns/batch",
+          expect.anything(),
+        ),
+      );
+      const call = vi
+        .mocked(fetch)
+        .mock.calls.find(([url]) => url === "/api/patterns/batch")!;
+      expect(JSON.parse(call[1]!.body as string)).toEqual({
+        operationId: expect.any(String),
+        patterns: items.map(({ id, version }) => ({ id, version })),
+        ...(action === "move"
+          ? { action, folderId: folder.id }
+          : { action: "favorite", isFavorite: action === "favorite" }),
+      });
+      for (const label of ["移动到此处", "添加收藏", "取消收藏", "移入回收站"])
+        expect(inspector.getByRole("button", { name: label })).toBeDisabled();
+      expect(
+        within(screen.getByLabelText("批量操作")).getByRole("button", {
+          name: "收藏所选",
+        }),
+      ).toBeDisabled();
+    },
+  );
+
+  it("refuses the whole inspector selection when any selected item is not editable", () => {
+    const items = [
+      makePattern(1),
+      { ...makePattern(2), status: "processing" as const },
+    ];
+    renderLibrary(items);
+    act(() =>
+      useSelectionStore.getState().selectAll(items.map((item) => item.id)),
+    );
+    const inspector = within(
+      screen.getByRole("complementary", { name: "图案检查器" }),
+    );
+    expect(
+      inspector.getByText("选择已变化，请刷新后重新选择"),
+    ).toBeInTheDocument();
+    expect(inspector.getByRole("button", { name: "添加收藏" })).toBeDisabled();
+    expect(
+      within(screen.getByLabelText("批量操作")).getByRole("button", {
+        name: "收藏所选",
+      }),
+    ).toBeDisabled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects an entire inspector batch when a newer cached detail became uneditable", async () => {
+    const items = [makePattern(1), makePattern(2)];
+    const client = createClient(items);
+    client.setQueryData(queryKeys.pattern(ownerId, items[1]!.id), {
+      ...items[1],
+      version: 2,
+      status: "deleting",
+    });
+    render(libraryTree(client));
+    act(() =>
+      useSelectionStore.getState().selectAll(items.map((item) => item.id)),
+    );
+    const inspector = within(
+      screen.getByRole("complementary", { name: "图案检查器" }),
+    );
+    fireEvent.click(inspector.getByRole("button", { name: "添加收藏" }));
+    expect(await inspector.findByRole("alert")).toHaveTextContent("选择已变化");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("confirms all selected inspector patterns before moving them to trash", async () => {
+    const items = [makePattern(1), makePattern(2)];
+    renderLibrary(items);
+    act(() =>
+      useSelectionStore.getState().selectAll(items.map((item) => item.id)),
+    );
+    fireEvent.click(
+      within(
+        screen.getByRole("complementary", { name: "图案检查器" }),
+      ).getByRole("button", { name: "移入回收站" }),
+    );
+    expect(screen.getByRole("dialog")).toHaveTextContent("2 个图案");
+    expect(fetch).not.toHaveBeenCalled();
+    vi.mocked(fetch).mockImplementation(() => new Promise(() => {}));
+    fireEvent.click(screen.getByRole("button", { name: "确认移入回收站" }));
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(
+        "/api/patterns/batch",
+        expect.anything(),
+      ),
+    );
+    expect(
+      JSON.parse(vi.mocked(fetch).mock.calls[0]![1]!.body as string),
+    ).toEqual({
+      action: "trash",
+      operationId: expect.any(String),
+      patterns: items.map(({ id, version }) => ({ id, version })),
+    });
+  });
   beforeEach(() => {
     navigation.replace.mockReset();
     navigation.searchParams = new URLSearchParams();
     vi.stubGlobal(
       "ResizeObserver",
       class ResizeObserver {
-        constructor(
-          private readonly callback: ResizeObserverCallback,
-        ) {}
+        constructor(private readonly callback: ResizeObserverCallback) {}
         observe(target: Element) {
           this.callback(
             [
@@ -234,8 +395,7 @@ describe("Mac-first workspace", () => {
 
   it("uses one shell folders GET for the tree, heading and bulk move menu", async () => {
     const fetcher = vi.fn<typeof fetch>(
-      async () =>
-        new Response(JSON.stringify([folder])),
+      async () => new Response(JSON.stringify([folder])),
     );
     vi.stubGlobal("fetch", fetcher);
     const client = createClient([makePattern(1)]);
@@ -260,7 +420,9 @@ describe("Mac-first workspace", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("link", { name: folder.name })).toBeInTheDocument();
     act(() => useSelectionStore.getState().selectAll([makePattern(1).id]));
-    const move = await screen.findByRole("button", { name: "移动" });
+    const move = within(screen.getByLabelText("批量操作")).getByRole("button", {
+      name: "移动",
+    });
     move.focus();
     await userEvent.keyboard("{Enter}");
     expect(
@@ -378,7 +540,9 @@ describe("Mac-first workspace", () => {
       preview.focus();
       await user.keyboard(key);
 
-      expect(screen.getByRole("dialog", { name: "Pattern 1 预览" })).toBeVisible();
+      expect(
+        screen.getByRole("dialog", { name: "Pattern 1 预览" }),
+      ).toBeVisible();
       expect(card).not.toHaveAttribute("data-selected", "true");
     },
   );
@@ -437,9 +601,7 @@ describe("Mac-first workspace", () => {
     const initialRow = await waitFor(() => {
       const row = document.querySelector<HTMLElement>(".virtual-pattern-row");
       expect(row).not.toBeNull();
-      expect(row!.style.gridTemplateColumns).toBe(
-        "repeat(4, minmax(0, 1fr))",
-      );
+      expect(row!.style.gridTemplateColumns).toBe("repeat(4, minmax(0, 1fr))");
       return row!;
     });
     expect(initialRow.style.height).toBe("284px");
@@ -460,9 +622,7 @@ describe("Mac-first workspace", () => {
 
     await waitFor(() => {
       const row = document.querySelector<HTMLElement>(".virtual-pattern-row");
-      expect(row?.style.gridTemplateColumns).toBe(
-        "repeat(4, minmax(0, 1fr))",
-      );
+      expect(row?.style.gridTemplateColumns).toBe("repeat(4, minmax(0, 1fr))");
       expect(row?.style.height).toBe("294px");
       expect(
         document.querySelector<HTMLElement>(".virtual-pattern-canvas")?.style
@@ -482,7 +642,9 @@ describe("Mac-first workspace", () => {
     expect(fetchMock).not.toHaveBeenCalled();
 
     await user.keyboard(" ");
-    expect(screen.getByRole("dialog", { name: "Pattern 1 预览" })).toBeVisible();
+    expect(
+      screen.getByRole("dialog", { name: "Pattern 1 预览" }),
+    ).toBeVisible();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(first).toHaveAttribute("data-selected", "true");
@@ -503,11 +665,13 @@ describe("Mac-first workspace", () => {
 
     await user.click(firstCheckbox);
     expect(firstCheckbox).toBeChecked();
+    expect(screen.getByRole("listitem", { name: /Pattern 1/ })).toHaveAttribute(
+      "data-selected",
+      "true",
+    );
     expect(
-      screen.getByRole("listitem", { name: /Pattern 1/ }),
-    ).toHaveAttribute("data-selected", "true");
-    expect(screen.getByRole("checkbox", { name: "选择 Pattern 2" }))
-      .not.toBeChecked();
+      screen.getByRole("checkbox", { name: "选择 Pattern 2" }),
+    ).not.toBeChecked();
   });
 
   it("forwards Control clicks for additive card selection", () => {
@@ -518,8 +682,12 @@ describe("Mac-first workspace", () => {
       ctrlKey: true,
     });
 
-    expect(screen.getByRole("checkbox", { name: "选择 Pattern 1" })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: "选择 Pattern 2" })).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: "选择 Pattern 1" }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: "选择 Pattern 2" }),
+    ).toBeChecked();
   });
 
   it("selects every loaded result from the bulk selection checkbox", async () => {
@@ -531,8 +699,9 @@ describe("Mac-first workspace", () => {
       screen.getByRole("checkbox", { name: "选择所有已加载图案" }),
     );
 
-    expect(screen.getAllByRole("checkbox", { name: /选择 Pattern/ }))
-      .toHaveLength(3);
+    expect(
+      screen.getAllByRole("checkbox", { name: /选择 Pattern/ }),
+    ).toHaveLength(3);
     for (const checkbox of screen.getAllByRole("checkbox", {
       name: /选择 Pattern/,
     })) {
@@ -621,15 +790,18 @@ describe("Mac-first workspace", () => {
         within(screen.getByLabelText("图库工具栏")).queryByText("已选择 1 项"),
       ).not.toBeInTheDocument(),
     );
-    expect(screen.queryByRole("complementary", { name: "图案检查器" }))
-      .not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("complementary", { name: "图案检查器" }),
+    ).not.toBeInTheDocument();
   });
 
   it("clears selection when the active query changes", async () => {
     const item = makePattern(1);
     const view = renderLibrary([item]);
     fireEvent.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
-    expect(screen.getByRole("checkbox", { name: "选择 Pattern 1" })).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: "选择 Pattern 1" }),
+    ).toBeChecked();
 
     const nextQuery = { ...query, favorite: true };
     act(() => {
@@ -641,8 +813,9 @@ describe("Mac-first workspace", () => {
     });
 
     await waitFor(() =>
-      expect(screen.getByRole("checkbox", { name: "选择 Pattern 1" }))
-        .not.toBeChecked(),
+      expect(
+        screen.getByRole("checkbox", { name: "选择 Pattern 1" }),
+      ).not.toBeChecked(),
     );
   });
 
@@ -712,9 +885,9 @@ describe("Mac-first workspace", () => {
     const first = await screen.findByRole("listitem", { name: /Pattern 1/ });
     await user.click(first);
     expect(layout).toHaveAttribute("data-inspector", "open");
-    expect(screen.getByRole("complementary", { name: "图案检查器" })).toHaveClass(
-      "library-inspector",
-    );
+    expect(
+      screen.getByRole("complementary", { name: "图案检查器" }),
+    ).toHaveClass("library-inspector");
 
     await user.click(screen.getByRole("button", { name: "收起检查器" }));
     expect(layout).not.toHaveAttribute("data-inspector");
@@ -723,23 +896,29 @@ describe("Mac-first workspace", () => {
     ).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "显示检查器" }));
     expect(layout).toHaveAttribute("data-inspector", "open");
-    expect(screen.getByRole("complementary", { name: "图案检查器" })).toBeVisible();
+    expect(
+      screen.getByRole("complementary", { name: "图案检查器" }),
+    ).toBeVisible();
 
     fireEvent.doubleClick(first.querySelector(".pattern-media")!);
-    expect(screen.getByRole("dialog", { name: "Pattern 1 预览" })).toBeVisible();
+    expect(
+      screen.getByRole("dialog", { name: "Pattern 1 预览" }),
+    ).toBeVisible();
   });
 
   it("debounces name changes for 400 ms and flushes the latest name on blur", async () => {
     vi.useFakeTimers();
     const item = makePattern(1);
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body));
-      return Response.json({
-        ...item,
-        ...body.patch,
-        version: item.version + 1,
-      });
-    });
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body));
+        return Response.json({
+          ...item,
+          ...body.patch,
+          version: item.version + 1,
+        });
+      },
+    );
     vi.stubGlobal("fetch", fetchMock);
     renderLibrary([item]);
 
@@ -760,9 +939,9 @@ describe("Mac-first workspace", () => {
       ([, init]) => init?.method === "PATCH",
     );
     expect(patchCalls).toHaveLength(1);
-    expect(
-      JSON.parse(String(patchCalls[0]?.[1]?.body)).patch.name,
-    ).toBe("New pattern name");
+    expect(JSON.parse(String(patchCalls[0]?.[1]?.body)).patch.name).toBe(
+      "New pattern name",
+    );
   });
 
   it("flushes one valid rename when the inspector unmounts before the debounce", async () => {
@@ -776,7 +955,9 @@ describe("Mac-first workspace", () => {
       if (init?.method === "PATCH") return pendingPatch;
       throw new Error("Unexpected request");
     });
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
     vi.stubGlobal("fetch", fetchMock);
     const view = renderLibrary([item]);
 
@@ -806,18 +987,21 @@ describe("Mac-first workspace", () => {
       await pendingPatch;
       await vi.runAllTimersAsync();
     });
-    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH"))
-      .toHaveLength(1);
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH"),
+    ).toHaveLength(1);
     expect(consoleError).not.toHaveBeenCalled();
   });
 
   it("syncs external names only while the local draft is clean", async () => {
     vi.useFakeTimers();
     const item = makePattern(1);
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body));
-      return Response.json({ ...item, ...body.patch, version: 3 });
-    });
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body));
+        return Response.json({ ...item, ...body.patch, version: 3 });
+      },
+    );
     vi.stubGlobal("fetch", fetchMock);
     const { client } = renderLibrary([item]);
 
@@ -883,8 +1067,9 @@ describe("Mac-first workspace", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(400);
     });
-    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH"))
-      .toHaveLength(1);
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH"),
+    ).toHaveLength(1);
 
     await act(async () => {
       resolvePatch(
@@ -943,15 +1128,17 @@ describe("Mac-first workspace", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(400);
     });
-    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH"))
-      .toHaveLength(1);
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH"),
+    ).toHaveLength(1);
 
     fireEvent.blur(input);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1);
     });
-    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH"))
-      .toHaveLength(1);
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH"),
+    ).toHaveLength(1);
   });
 
   it("serializes a newer rename behind the pending request and uses its returned version", async () => {
@@ -980,8 +1167,9 @@ describe("Mac-first workspace", () => {
     fireEvent.change(input, { target: { value: "Latest name" } });
     await act(async () => vi.advanceTimersByTimeAsync(400));
 
-    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH"))
-      .toHaveLength(1);
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH"),
+    ).toHaveLength(1);
     expect(input).toHaveValue("Latest name");
 
     serverItem = { ...item, name: "First name", version: 1 };
@@ -991,8 +1179,9 @@ describe("Mac-first workspace", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH"))
-      .toHaveLength(2);
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH"),
+    ).toHaveLength(2);
     expect(input).toHaveValue("Latest name");
 
     const patchCalls = fetchMock.mock.calls.filter(
@@ -1047,8 +1236,9 @@ describe("Mac-first workspace", () => {
       ),
     );
 
-    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH"))
-      .toHaveLength(1);
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH"),
+    ).toHaveLength(1);
 
     serverItem = { ...item, name: "Renamed first", version: 1 };
     await act(async () => {
@@ -1057,12 +1247,14 @@ describe("Mac-first workspace", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH"))
-      .toHaveLength(2);
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH"),
+    ).toHaveLength(2);
     const favoriteBody = JSON.parse(
       String(
-        fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH")[1]![1]
-          ?.body,
+        fetchMock.mock.calls.filter(
+          ([, init]) => init?.method === "PATCH",
+        )[1]![1]?.body,
       ),
     );
     expect(favoriteBody.patch).toMatchObject({ isFavorite: true, version: 1 });
@@ -1184,10 +1376,11 @@ describe("pattern editor mutation", () => {
     const resolvers = new Map<string, (response: Response) => void>();
     vi.stubGlobal(
       "fetch",
-      vi.fn((input: RequestInfo | URL) =>
-        new Promise<Response>((resolve) => {
-          resolvers.set(String(input), resolve);
-        }),
+      vi.fn(
+        (input: RequestInfo | URL) =>
+          new Promise<Response>((resolve) => {
+            resolvers.set(String(input), resolve);
+          }),
       ),
     );
 

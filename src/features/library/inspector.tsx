@@ -1,6 +1,13 @@
 "use client";
 
-import { ChevronRight, Heart, Layers3 } from "lucide-react";
+import {
+  ChevronRight,
+  FolderInput,
+  Heart,
+  HeartOff,
+  Layers3,
+  Trash2,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { PatternQuery } from "@/features/patterns/contracts";
@@ -9,6 +16,13 @@ import { TagPicker } from "@/features/tags/tag-picker";
 import { IconButton } from "./icon-button";
 import type { PatternItem } from "./library-types";
 import { usePatternPatchMutation } from "./pattern-mutations";
+import {
+  usePatternBatchMutation,
+  type PatternBatchInput,
+} from "./pattern-batch-mutations";
+import { useFoldersQuery } from "@/features/folders/folder-client";
+import { FolderPicker } from "@/features/folders/folder-picker";
+import { TrashPatternsDialog } from "./trash-patterns-dialog";
 
 export function Inspector({
   activeQuery,
@@ -63,10 +77,7 @@ export function Inspector({
       }
       return;
     }
-    if (
-      nextName === latestName.current ||
-      nextName === pendingName.current
-    ) {
+    if (nextName === latestName.current || nextName === pendingName.current) {
       return pendingSave.current ?? Promise.resolve();
     }
     if (pendingSave.current) {
@@ -142,6 +153,11 @@ export function Inspector({
         </IconButton>
       </header>
       <div className="inspector-scroll">
+        <SelectionActions
+          activeQuery={activeQuery}
+          patterns={[pattern]}
+          compact
+        />
         <section className="inspector-section">
           <label className="inspector-field">
             <span>图案名称</span>
@@ -193,7 +209,9 @@ export function Inspector({
             </div>
             <div>
               <dt>原始文件</dt>
-              <dd title={pattern.originalFilename}>{pattern.originalFilename}</dd>
+              <dd title={pattern.originalFilename}>
+                {pattern.originalFilename}
+              </dd>
             </div>
             <div>
               <dt>预览</dt>
@@ -201,7 +219,11 @@ export function Inspector({
             </div>
             <div>
               <dt>更新时间</dt>
-              <dd>{new Intl.DateTimeFormat("zh-CN").format(new Date(pattern.updatedAt))}</dd>
+              <dd>
+                {new Intl.DateTimeFormat("zh-CN").format(
+                  new Date(pattern.updatedAt),
+                )}
+              </dd>
             </div>
           </dl>
         </section>
@@ -219,10 +241,12 @@ export function Inspector({
 }
 
 export function MultiSelectionInspector({
-  count,
+  patterns,
+  activeQuery,
   onCollapse,
 }: {
-  count: number;
+  patterns: PatternItem[];
+  activeQuery: PatternQuery;
   onCollapse: () => void;
 }) {
   return (
@@ -230,16 +254,148 @@ export function MultiSelectionInspector({
       <header className="inspector-header">
         <div>
           <span>多项选择</span>
-          <strong>已选择 {count} 个图案</strong>
+          <strong>已选择 {patterns.length} 个图案</strong>
         </div>
         <IconButton label="收起检查器" onClick={onCollapse}>
           <ChevronRight aria-hidden="true" />
         </IconButton>
       </header>
-      <div className="inspector-empty-state">
-        <p>批量操作将在对应服务接入后开放。</p>
+      <div className="inspector-scroll">
+        <SelectionActions activeQuery={activeQuery} patterns={patterns} />
       </div>
     </aside>
+  );
+}
+
+function SelectionActions({
+  activeQuery,
+  patterns,
+  compact = false,
+}: {
+  activeQuery: PatternQuery;
+  patterns: PatternItem[];
+  compact?: boolean;
+}) {
+  const folders = useFoldersQuery();
+  const mutation = usePatternBatchMutation(activeQuery);
+  const [destination, setDestination] = useState<string | null>(
+    patterns[0]?.folderId ?? null,
+  );
+  const [moveOpen, setMoveOpen] = useState(!compact);
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const invalid = patterns.some(
+    (pattern) => pattern.status !== "ready" && pattern.status !== "failed",
+  );
+  const disabled = mutation.isPending || invalid || patterns.length > 100;
+  const run = async (input: PatternBatchInput) => {
+    if (disabled) return;
+    setMessage(null);
+    try {
+      await mutation.mutateBatchAsync(input);
+      setTrashOpen(false);
+    } catch {
+      setMessage("选择已变化，请刷新后重新选择");
+    }
+  };
+  const currentFolder = folders.data?.find(
+    (folder) => folder.id === patterns[0]?.folderId,
+  );
+  return (
+    <section className="inspector-section inspector-location">
+      {compact ? (
+        <>
+          <p title={currentFolder?.name}>
+            当前位置：
+            {patterns[0]?.folderId
+              ? (currentFolder?.name ?? "位置暂不可用")
+              : "未分类"}
+          </p>
+          <button
+            type="button"
+            className="bulk-action-button"
+            disabled={disabled}
+            onClick={() => setMoveOpen(!moveOpen)}
+          >
+            <FolderInput aria-hidden="true" />
+            移动
+          </button>
+        </>
+      ) : null}
+      {invalid ? <p role="alert">选择已变化，请刷新后重新选择</p> : null}
+      {patterns.length > 100 ? (
+        <p role="alert">每次最多处理 100 个图案</p>
+      ) : null}
+      {moveOpen ? (
+        <>
+          <FolderPicker
+            folders={folders.data ?? []}
+            value={destination}
+            onChange={setDestination}
+            disabled={disabled}
+          />
+          {folders.isPending ? (
+            <p>正在载入文件夹...</p>
+          ) : folders.isError ? (
+            <p role="alert">文件夹载入失败，请刷新</p>
+          ) : null}
+          <button
+            className="bulk-action-button"
+            type="button"
+            disabled={disabled}
+            onClick={() =>
+              void run({ action: "move", folderId: destination, patterns })
+            }
+          >
+            <FolderInput aria-hidden="true" />
+            移动到此处
+          </button>
+        </>
+      ) : null}
+      {!compact ? (
+        <div className="inspector-batch-actions">
+          <button
+            className="bulk-action-button"
+            type="button"
+            disabled={disabled}
+            onClick={() =>
+              void run({ action: "favorite", isFavorite: true, patterns })
+            }
+          >
+            <Heart aria-hidden="true" />
+            添加收藏
+          </button>
+          <button
+            className="bulk-action-button"
+            type="button"
+            disabled={disabled}
+            onClick={() =>
+              void run({ action: "favorite", isFavorite: false, patterns })
+            }
+          >
+            <HeartOff aria-hidden="true" />
+            取消收藏
+          </button>
+          <button
+            className="bulk-action-button"
+            type="button"
+            disabled={disabled}
+            onClick={() => setTrashOpen(true)}
+          >
+            <Trash2 aria-hidden="true" />
+            移入回收站
+          </button>
+        </div>
+      ) : null}
+      {message ? <p role="alert">{message}</p> : null}
+      <TrashPatternsDialog
+        count={patterns.length}
+        open={trashOpen}
+        isPending={mutation.isPending}
+        onOpenChange={setTrashOpen}
+        onConfirm={() => void run({ action: "trash", patterns })}
+      />
+    </section>
   );
 }
 
