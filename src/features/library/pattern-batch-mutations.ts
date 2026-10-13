@@ -7,8 +7,10 @@ import {
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
+import { z } from "zod";
 
 import type { PatternQuery } from "@/features/patterns/contracts";
+import { normalizedUuidSchema } from "@/features/storage/identifiers";
 import { ApiResponseError, readApiResponse } from "@/lib/query/client";
 import { queryKeys } from "@/lib/query/keys";
 import { useQueryOwnerId } from "@/lib/query/provider";
@@ -17,6 +19,81 @@ import type { PatternItem, PatternPage } from "./library-types";
 import { useSelectionStore } from "./selection-store";
 
 type PatternRef = Pick<PatternItem, "id" | "version">;
+
+const patternStatuses = [
+  "draft",
+  "hashing",
+  "uploading",
+  "processing",
+  "ready",
+  "failed",
+  "trashed",
+  "deleting",
+  "deleted",
+] as const;
+const restorablePatternStatuses = [
+  "draft",
+  "hashing",
+  "uploading",
+  "processing",
+  "ready",
+  "failed",
+] as const;
+const previewStatuses = [
+  "pending",
+  "ready",
+  "unsupported",
+  "failed",
+  "manual",
+] as const;
+const patternItemSchema = z
+  .object({
+    id: normalizedUuidSchema,
+    ownerId: normalizedUuidSchema,
+    name: z.string(),
+    originalFilename: z.string(),
+    extension: z.string(),
+    detectedMimeType: z.string().nullable(),
+    sizeBytes: z.string().regex(/^(0|[1-9]\d*)$/),
+    contentHash: z.string().nullable(),
+    status: z.enum(patternStatuses),
+    folderId: normalizedUuidSchema.nullable(),
+    trashBatchId: normalizedUuidSchema.nullable(),
+    preTrashStatus: z.enum(patternStatuses).nullable(),
+    previewStatus: z.enum(previewStatuses),
+    previewAssetId: normalizedUuidSchema.nullable(),
+    thumbnailAssetId: normalizedUuidSchema.nullable(),
+    sourceAssetId: normalizedUuidSchema.nullable(),
+    isFavorite: z.boolean(),
+    version: z.number().int().nonnegative(),
+    commercialVersion: z.number().int().nonnegative(),
+    lastErrorCode: z.string().nullable(),
+    trashedAt: z.string().datetime().nullable(),
+    deletedAt: z.string().datetime().nullable(),
+    changeSeq: z.string().regex(/^(0|[1-9]\d*)$/),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+  })
+  .strict();
+const patternBatchResultSchema = z
+  .object({ patterns: z.array(patternItemSchema).min(1).max(100) })
+  .strict();
+const restoredPatternSchema = z
+  .object({
+    id: normalizedUuidSchema,
+    status: z.enum(restorablePatternStatuses),
+    folderId: normalizedUuidSchema.nullable(),
+    version: z.number().int().nonnegative(),
+    changeSeq: z.string().regex(/^(0|[1-9]\d*)$/),
+    updatedAt: z.string().datetime(),
+  })
+  .strict();
+const restorePatternsResultSchema = z
+  .object({
+    state: z.literal("restored"),
+    patterns: z.array(restoredPatternSchema).min(1).max(100),
+  })
+  .strict();
 
 export type PatternBatchInput =
   | { action: "move"; folderId: string | null; patterns: PatternItem[] }
@@ -42,14 +119,9 @@ export type PatternBatchIntent =
       patterns: PatternRef[];
     };
 
-export type PatternBatchResult = { patterns: PatternItem[] };
+export type PatternBatchResult = z.infer<typeof patternBatchResultSchema>;
 
-type RestorePatternsResult = {
-  state: "restored";
-  patterns: Array<
-    Pick<PatternItem, "id" | "folderId" | "status" | "version" | "changeSeq" | "updatedAt">
-  >;
-};
+type RestorePatternsResult = z.infer<typeof restorePatternsResultSchema>;
 
 type PatternListSnapshot = [
   queryKey: QueryKey,
@@ -68,6 +140,74 @@ type OptimisticContext = {
 
 const patternListPrefix = (ownerId: string) =>
   ["owner", ownerId, "patterns"] as const;
+
+export class InvalidApiResponseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidApiResponseError";
+  }
+}
+
+function hasExactIds(actualIds: readonly string[], expectedIds: readonly string[]) {
+  const actual = new Set(actualIds);
+  return (
+    actual.size === actualIds.length &&
+    actualIds.length === expectedIds.length &&
+    expectedIds.every((id) => actual.has(id))
+  );
+}
+
+function parsePatternBatchResult(
+  value: unknown,
+  intent: PatternBatchIntent,
+  ownerId: string,
+): PatternBatchResult {
+  const parsed = patternBatchResultSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new InvalidApiResponseError("Invalid pattern batch response");
+  }
+  const expectedIds = intent.patterns.map((pattern) => pattern.id);
+  if (
+    !hasExactIds(
+      parsed.data.patterns.map((pattern) => pattern.id),
+      expectedIds,
+    ) ||
+    parsed.data.patterns.some((pattern) => pattern.ownerId !== ownerId)
+  ) {
+    throw new InvalidApiResponseError("Pattern batch response IDs do not match");
+  }
+  const invalidActionResult = parsed.data.patterns.some((pattern) => {
+    if (intent.action === "move") return pattern.folderId !== intent.folderId;
+    if (intent.action === "favorite") {
+      return pattern.isFavorite !== intent.isFavorite;
+    }
+    return (
+      pattern.status !== "trashed" ||
+      pattern.trashBatchId !== intent.operationId
+    );
+  });
+  if (invalidActionResult) {
+    throw new InvalidApiResponseError("Pattern batch response action does not match");
+  }
+  return parsed.data;
+}
+
+function parseRestorePatternsResult(
+  value: unknown,
+  patternIds: readonly string[],
+): RestorePatternsResult {
+  const parsed = restorePatternsResultSchema.safeParse(value);
+  if (
+    !parsed.success ||
+    !hasExactIds(
+      parsed.data.patterns.map((pattern) => pattern.id),
+      patternIds,
+    )
+  ) {
+    throw new InvalidApiResponseError("Invalid pattern restore response");
+  }
+  return parsed.data;
+}
 
 export function createPatternBatchIntent(
   input: PatternBatchInput,
@@ -88,14 +228,18 @@ export function createPatternBatchIntent(
   return { action: input.action, operationId, patterns };
 }
 
-export async function sendPatternBatch(intent: PatternBatchIntent) {
-  return readApiResponse<PatternBatchResult>(
+export async function sendPatternBatch(
+  intent: PatternBatchIntent,
+  ownerId: string,
+) {
+  const response = await readApiResponse<unknown>(
     await fetch("/api/patterns/batch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(intent),
     }),
   );
+  return parsePatternBatchResult(response, intent, ownerId);
 }
 
 const updatePages = (
@@ -168,6 +312,61 @@ function applyIntentToLists(
   }
 }
 
+function rollbackOptimisticItem(
+  current: PatternItem,
+  before: PatternItem | undefined,
+  intent: PatternBatchIntent,
+) {
+  if (!before || current.version !== before.version) return current;
+  if (intent.action === "move") {
+    return current.folderId === intent.folderId
+      ? { ...current, folderId: before.folderId }
+      : current;
+  }
+  if (intent.action === "favorite") {
+    return current.isFavorite === intent.isFavorite
+      ? { ...current, isFavorite: before.isFavorite }
+      : current;
+  }
+  return current;
+}
+
+function rollbackOptimisticIntent(
+  queryClient: QueryClient,
+  intent: PatternBatchIntent,
+  context: OptimisticContext | undefined,
+) {
+  if (!context || intent.action === "trash") return;
+  const selected = new Set(intent.patterns.map((pattern) => pattern.id));
+  for (const [key, beforeData] of context.lists) {
+    const currentData = queryClient.getQueryData<
+      InfiniteData<PatternPage, string | null>
+    >(key);
+    if (!beforeData || !currentData) continue;
+    const beforeById = new Map(
+      beforeData.pages.flatMap((page) =>
+        page.items.map((item) => [item.id, item] as const),
+      ),
+    );
+    queryClient.setQueryData<InfiniteData<PatternPage, string | null>>(
+      key,
+      updatePages(currentData, (item) =>
+        selected.has(item.id)
+          ? rollbackOptimisticItem(item, beforeById.get(item.id), intent)
+          : item,
+      ),
+    );
+  }
+  for (const [key, before] of context.details) {
+    const current = queryClient.getQueryData<PatternItem>(key);
+    if (!current) continue;
+    queryClient.setQueryData(
+      key,
+      rollbackOptimisticItem(current, before, intent),
+    );
+  }
+}
+
 function applyServerPatterns(
   queryClient: QueryClient,
   ownerId: string,
@@ -234,7 +433,7 @@ export function usePatternBatchMutation(activeQuery: PatternQuery) {
   const activeListKey = queryKeys.patterns(ownerId, activeQuery);
 
   const batchMutation = useMutation({
-    mutationFn: sendPatternBatch,
+    mutationFn: (intent: PatternBatchIntent) => sendPatternBatch(intent, ownerId),
     onMutate: async (intent: PatternBatchIntent): Promise<OptimisticContext | undefined> => {
       if (intent.action === "trash") return undefined;
       await Promise.all([
@@ -264,13 +463,13 @@ export function usePatternBatchMutation(activeQuery: PatternQuery) {
       }
       return { details, lists };
     },
-    onError: (_error, _intent, context) => {
-      for (const [key, data] of context?.lists ?? []) {
-        queryClient.setQueryData(key, data);
-      }
-      for (const [key, data] of context?.details ?? []) {
-        queryClient.setQueryData(key, data);
-      }
+    onError: async (_error, intent, context) => {
+      rollbackOptimisticIntent(queryClient, intent, context);
+      await invalidateBatchCaches(
+        queryClient,
+        ownerId,
+        intent.patterns.map((pattern) => pattern.id),
+      );
     },
     onSuccess: async (result) => {
       applyServerPatterns(queryClient, ownerId, result.patterns);
@@ -283,20 +482,21 @@ export function usePatternBatchMutation(activeQuery: PatternQuery) {
   });
 
   const restoreMutation = useMutation({
-    mutationFn: async (input: { operationId: string; patternIds: string[] }) =>
-      readApiResponse<RestorePatternsResult>(
+    mutationFn: async (input: { operationId: string; patternIds: string[] }) => {
+      const response = await readApiResponse<unknown>(
         await fetch("/api/trash/patterns/restore", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(input),
         }),
-      ),
-    onSuccess: async (result) => {
-      await invalidateBatchCaches(
-        queryClient,
-        ownerId,
-        result.patterns.map((pattern) => pattern.id),
       );
+      return parseRestorePatternsResult(response, input.patternIds);
+    },
+    onSuccess: async (_result, input) => {
+      await invalidateBatchCaches(queryClient, ownerId, input.patternIds);
+    },
+    onError: async (_error, input) => {
+      await invalidateBatchCaches(queryClient, ownerId, input.patternIds);
     },
     retry: shouldRetryMutation,
     retryDelay: 0,

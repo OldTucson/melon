@@ -19,10 +19,27 @@ export function TrashPatternsDialog({
   open: boolean;
 }) {
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+    <Dialog.Root
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen && isPending) return;
+        onOpenChange(nextOpen);
+      }}
+    >
       <Dialog.Portal>
         <Dialog.Overlay className="dialog-overlay" />
-        <Dialog.Content className="confirm-dialog">
+        <Dialog.Content
+          className="confirm-dialog"
+          onEscapeKeyDown={(event) => {
+            if (isPending) event.preventDefault();
+          }}
+          onInteractOutside={(event) => {
+            if (isPending) event.preventDefault();
+          }}
+          onPointerDownOutside={(event) => {
+            if (isPending) event.preventDefault();
+          }}
+        >
           <header className="confirm-dialog-header">
             <div>
               <Dialog.Title>移入回收站</Dialog.Title>

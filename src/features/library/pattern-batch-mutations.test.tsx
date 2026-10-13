@@ -36,6 +36,9 @@ const pattern = (index: number): PatternItem => ({
   trashBatchId: null,
   preTrashStatus: null,
   previewStatus: "ready",
+  previewAssetId: null,
+  thumbnailAssetId: null,
+  sourceAssetId: null,
   isFavorite: false,
   version: index,
   commercialVersion: 0,
@@ -70,6 +73,7 @@ function Harness({ items }: { items: PatternItem[] }) {
   const mutation = usePatternBatchMutation(query);
   return (
     <>
+      {mutation.error ? <div role="alert">Mutation failed</div> : null}
       <button
         type="button"
         onClick={() =>
@@ -164,7 +168,7 @@ describe("pattern batch mutation", () => {
     }
   });
 
-  it("keeps trashed rows until success and clears only IDs returned by the server", async () => {
+  it("keeps trashed rows until success and clears only the requested IDs", async () => {
     const items = [pattern(1), pattern(2), pattern(3)];
     const client = clientWith(items);
     let resolve!: (response: Response) => void;
@@ -178,14 +182,99 @@ describe("pattern batch mutation", () => {
       ?.pages[0]?.items.map((item) => item.id)).toEqual(items.map((item) => item.id));
 
     await act(async () => {
-      resolve(Response.json({ patterns: [{ ...items[0]!, status: "trashed", version: 2 }] }));
+      const intent = JSON.parse(
+        String(vi.mocked(fetch).mock.calls[0]?.[1]?.body),
+      ) as { operationId: string };
+      resolve(Response.json({
+        patterns: items.slice(0, 2).map((item) => ({
+          ...item,
+          status: "trashed",
+          trashBatchId: intent.operationId,
+          preTrashStatus: item.status,
+          version: item.version + 1,
+        })),
+      }));
     });
 
     await waitFor(() => {
       expect(client.getQueryData<InfiniteData<PatternPage>>(queryKeys.patterns(ownerId, query))
-        ?.pages[0]?.items.map((item) => item.id)).toEqual([items[1]!.id, items[2]!.id]);
-      expect(useSelectionStore.getState().selectedIds).toEqual([items[1]!.id, items[2]!.id]);
+        ?.pages[0]?.items.map((item) => item.id)).toEqual([items[2]!.id]);
+      expect(useSelectionStore.getState().selectedIds).toEqual([items[2]!.id]);
     });
+  });
+
+  it.each([
+    ["malformed", () => ({ patterns: "invalid" })],
+    ["missing fields", (valid: PatternItem[]) => {
+      const missing = { ...valid[0] } as Partial<PatternItem>;
+      delete missing.name;
+      return { patterns: [missing, valid[1]] };
+    }],
+    ["empty", () => ({ patterns: [] })],
+    ["partial", (valid: PatternItem[]) => ({ patterns: [valid[0]] })],
+    ["duplicate", (valid: PatternItem[]) => ({ patterns: [valid[0], valid[0]] })],
+    ["wrong ID", (valid: PatternItem[]) => ({
+      patterns: [valid[0], { ...valid[1], id: pattern(99).id }],
+    })],
+    ["extra ID", (valid: PatternItem[]) => ({
+      patterns: [...valid, { ...pattern(99), isFavorite: true }],
+    })],
+    ["unexpected fields", (valid: PatternItem[]) => ({
+      patterns: valid,
+      unexpected: true,
+    })],
+  ] as const)("rejects a %s batch success response without clearing selection", async (_name, makeResponse) => {
+    const items = [pattern(1), pattern(2)];
+    const valid = items.map((item) => ({
+      ...item,
+      isFavorite: true,
+      version: item.version + 1,
+    }));
+    const client = clientWith(items);
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json(makeResponse(valid))));
+    useSelectionStore.getState().selectAll(items.map((item) => item.id));
+    renderHarness(client, items);
+
+    fireEvent.click(screen.getByRole("button", { name: "Favorite" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Mutation failed");
+    expect(fetch).toHaveBeenCalledTimes(2);
+    const requestBodies = vi.mocked(fetch).mock.calls.map(([, init]) =>
+      JSON.parse(String(init?.body)) as { operationId: string },
+    );
+    expect(requestBodies[0]!.operationId).toBe(requestBodies[1]!.operationId);
+    expect(useSelectionStore.getState().selectedIds).toEqual(
+      items.map((item) => item.id),
+    );
+    for (const item of items) {
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: queryKeys.pattern(ownerId, item.id),
+        exact: true,
+      });
+    }
+  });
+
+  it.each([
+    { action: "favorite", button: "Favorite" },
+    { action: "move", button: "Move" },
+    { action: "trash", button: "Trash" },
+  ])("rejects a $action response whose action result does not match", async ({ button }) => {
+    const items = [pattern(1), pattern(2)];
+    const client = clientWith(items);
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      patterns: items.map((item) => ({ ...item, version: item.version + 1 })),
+    })));
+    useSelectionStore.getState().selectAll(items.map((item) => item.id));
+    renderHarness(client, items);
+
+    fireEvent.click(screen.getByRole("button", { name: button }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Mutation failed");
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(useSelectionStore.getState().selectedIds).toEqual(
+      items.map((item) => item.id),
+    );
   });
 
   it("keeps filtered rows selected until an optimistic favorite request succeeds", async () => {
@@ -246,5 +335,65 @@ describe("pattern batch mutation", () => {
         ),
       ).toEqual(beforeDetails);
     });
+  });
+
+  it("preserves concurrent higher-version writes while rolling back and invalidating a failed batch", async () => {
+    const items = [pattern(1), pattern(2)];
+    const client = clientWith(items);
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    let reject!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((done) => { reject = done; })));
+    renderHarness(client, items);
+
+    fireEvent.click(screen.getByRole("button", { name: "Favorite" }));
+    await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+
+    const concurrent = {
+      ...items[0]!,
+      name: "Concurrent rename",
+      isFavorite: true,
+      version: 20,
+      commercialVersion: 4,
+      changeSeq: "20",
+    };
+    client.setQueryData(queryKeys.pattern(ownerId, concurrent.id), concurrent);
+    client.setQueryData<InfiniteData<PatternPage, string | null>>(
+      queryKeys.patterns(ownerId, query),
+      page([concurrent, { ...items[1]!, isFavorite: true }]),
+    );
+
+    await act(async () => {
+      reject(Response.json(
+        { error: { code: "PATTERN_STATE_CHANGED", message: "changed" } },
+        { status: 409 },
+      ));
+    });
+
+    await waitFor(() => {
+      expect(client.getQueryData(queryKeys.pattern(ownerId, concurrent.id)))
+        .toEqual(concurrent);
+      expect(
+        client
+          .getQueryData<InfiniteData<PatternPage>>(queryKeys.patterns(ownerId, query))
+          ?.pages[0]?.items,
+      ).toEqual([concurrent, items[1]]);
+    });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["owner", ownerId, "patterns"],
+    });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: queryKeys.folders(ownerId),
+      exact: true,
+    });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: queryKeys.trash(ownerId),
+      exact: true,
+    });
+    for (const item of items) {
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: queryKeys.pattern(ownerId, item.id),
+        exact: true,
+      });
+    }
   });
 });
