@@ -879,7 +879,7 @@ git commit -m "feat: list and restore trash batches"
 - Create: `scripts/cleanup-trash.ts`
 - Modify: `package.json`
 
-- [ ] **Step 1: Write failing operation-state and OSS retry tests**
+- [x] **Step 1: Write failing operation-state and OSS retry tests**
 
 Add a typed result union:
 
@@ -904,7 +904,7 @@ failDeleteCall: number | null = null;
 
 Assert 1,001 object keys produce two calls and that an already-missing object is success.
 
-- [ ] **Step 2: Make pending replay explicit**
+- [x] **Step 2: Make pending replay explicit**
 
 Keep `claimOperation` backward compatible, and add exact helpers:
 
@@ -917,7 +917,7 @@ Store `{ state: 'pending', target }` in the claim transaction before returning t
 
 Extend the grouped trash read model to match each deleting target to its pending operation and return that operation's ID as `purgeOperationId`. This makes retry after a browser refresh resume the original idempotent operation.
 
-- [ ] **Step 3: Implement the claim phase**
+- [x] **Step 3: Implement the claim phase**
 
 For ordinary pattern purge, reject patterns tied to a folder batch. For folder purge, lock the complete batch. Both require `trashed`; replay continuation also accepts the same rows already in `deleting`. Set `status='deleting'`, retain `trashBatchId`, set `lastErrorCode=null` on patterns, and persist the target in the operation result in the same transaction.
 
@@ -929,7 +929,7 @@ type PurgeTarget =
   | { kind: "folder_batch"; trashBatchId: string };
 ```
 
-- [ ] **Step 4: Implement OSS cleanup and tombstone finalization**
+- [x] **Step 4: Implement OSS cleanup and tombstone finalization**
 
 Outside the transaction, load object keys from owned asset rows and call the existing `OssAdapter.deleteObjects`; it already chunks to the OSS maximum. On failure, update only `lastErrorCode='OSS_DELETE_FAILED'` and throw `new AppError('OSS_DELETE_FAILED', 502, 'OSS object deletion failed')`.
 
@@ -941,7 +941,7 @@ pattern_tags -> assets -> pattern tombstones
 
 Do not delete the pattern row. Update it to a minimal tombstone: `status='deleted'`, clear `folderId`, `trashBatchId`, `preTrashStatus`, hashes and errors, set `deletedAt`, increment version, and retain identity/name/timestamps required by sync. Mark folder rows `deleted`, clear batch and parent references after descendants have been finalized, set `deletedAt`, and retain identity/name. Emit one `patterns.deleted` or `folder_tree.deleted` change event and store `{ state:'complete', counts }`.
 
-- [ ] **Step 5: Add purge routes and the 30-day cleanup command**
+- [x] **Step 5: Add purge routes and the 30-day cleanup command**
 
 Both endpoints call the same service used by maintenance. `scripts/cleanup-trash.ts` loads server environment, finds expired `trashed` batches and pending purge operations, and processes them sequentially with isolated error reporting. Generate a fresh operation ID only for a newly expired batch; resume pending operations with their stored operation ID.
 
@@ -953,7 +953,7 @@ Add:
 
 The script exits nonzero if any batch remains failed, making scheduler failures visible.
 
-- [ ] **Step 6: Verify and commit**
+- [x] **Step 6: Verify and commit**
 
 ```bash
 npx --yes --package=node@24 -c 'npm test -- src/lib/db/operation.test.ts src/test/fake-oss.test.ts src/app/api/trash/patterns/purge/route.test.ts src/app/api/trash/folder-batches/[trashBatchId]/purge/route.test.ts'
