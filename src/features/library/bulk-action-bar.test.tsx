@@ -112,6 +112,8 @@ describe("bulk action bar", () => {
           status: "trashed",
           trashBatchId: body.operationId,
           preTrashStatus: item.status,
+          trashedAt: "2026-10-08T01:00:00.000Z",
+          deletedAt: null,
           version: item.version + 1,
         })) });
       }
@@ -149,6 +151,8 @@ describe("bulk action bar", () => {
           status: "trashed",
           trashBatchId: body.operationId,
           preTrashStatus: item.status,
+          trashedAt: "2026-10-08T01:00:00.000Z",
+          deletedAt: null,
           version: item.version + 1,
         })) });
       }
@@ -237,6 +241,8 @@ describe("bulk action bar", () => {
           status: "trashed",
           trashBatchId: body.operationId,
           preTrashStatus: item.status,
+          trashedAt: "2026-10-08T01:00:00.000Z",
+          deletedAt: null,
           version: item.version + 1,
         })) }));
       });

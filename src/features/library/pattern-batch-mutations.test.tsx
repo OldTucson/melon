@@ -14,13 +14,17 @@ import { queryKeys } from "@/lib/query/keys";
 import { QueryOwnerProvider } from "@/lib/query/provider";
 
 import type { PatternItem, PatternPage } from "./library-types";
-import { usePatternBatchMutation } from "./pattern-batch-mutations";
+import {
+  type PatternBatchIntent,
+  usePatternBatchMutation,
+} from "./pattern-batch-mutations";
 import { useSelectionStore } from "./selection-store";
 
 const ownerId = "10000000-0000-4000-8000-000000000000";
 const folderId = "20000000-0000-4000-8000-000000000000";
 const query = toPatternQuery(parseLibrarySearchParams(new URLSearchParams()));
 const favoriteQuery = { ...query, favorite: true };
+const responseTimestamp = "2026-10-08T01:00:00.000Z";
 
 const pattern = (index: number): PatternItem => ({
   id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
@@ -49,6 +53,161 @@ const pattern = (index: number): PatternItem => ({
   createdAt: "2026-10-08T00:00:00.000Z",
   updatedAt: "2026-10-08T00:00:00.000Z",
 });
+
+function validBatchPatterns(
+  items: PatternItem[],
+  intent: PatternBatchIntent,
+  options: { moveNoOp?: boolean } = {},
+): PatternItem[] {
+  const versions = new Map(
+    intent.patterns.map((item) => [item.id, item.version] as const),
+  );
+  return items.map((item) => {
+    const inputVersion = versions.get(item.id)!;
+    if (intent.action === "trash") {
+      return {
+        ...item,
+        status: "trashed",
+        preTrashStatus: item.status === "failed" ? "failed" : "ready",
+        trashBatchId: intent.operationId,
+        trashedAt: responseTimestamp,
+        deletedAt: null,
+        version: inputVersion + 1,
+      };
+    }
+    return {
+      ...item,
+      status: item.status === "failed" ? "failed" : "ready",
+      folderId: intent.action === "move" ? intent.folderId : item.folderId,
+      isFavorite:
+        intent.action === "favorite" ? intent.isFavorite : item.isFavorite,
+      preTrashStatus: null,
+      trashBatchId: null,
+      trashedAt: null,
+      deletedAt: null,
+      version:
+        intent.action === "move" && options.moveNoOp
+          ? inputVersion
+          : inputVersion + 1,
+    };
+  });
+}
+
+type BatchButton = "Favorite" | "Move" | "Trash";
+
+type InvalidStateCase = {
+  button: BatchButton;
+  name: string;
+  mutate: (
+    patterns: PatternItem[],
+    intent: PatternBatchIntent,
+  ) => PatternItem[];
+};
+
+function changeFirst(
+  patterns: PatternItem[],
+  patch: Partial<PatternItem>,
+): PatternItem[] {
+  return patterns.map((item, index) =>
+    index === 0 ? { ...item, ...patch } : item,
+  );
+}
+
+const invalidStateCases: InvalidStateCase[] = [
+  {
+    button: "Favorite",
+    name: "favorite deleted status",
+    mutate: (patterns) => changeFirst(patterns, { status: "deleted" }),
+  },
+  {
+    button: "Favorite",
+    name: "favorite pre-trash status",
+    mutate: (patterns) => changeFirst(patterns, { preTrashStatus: "ready" }),
+  },
+  {
+    button: "Favorite",
+    name: "favorite trash batch",
+    mutate: (patterns) => changeFirst(patterns, { trashBatchId: folderId }),
+  },
+  {
+    button: "Favorite",
+    name: "favorite trashed timestamp",
+    mutate: (patterns) => changeFirst(patterns, { trashedAt: responseTimestamp }),
+  },
+  {
+    button: "Favorite",
+    name: "favorite deleted timestamp",
+    mutate: (patterns) => changeFirst(patterns, { deletedAt: responseTimestamp }),
+  },
+  {
+    button: "Move",
+    name: "move trashed status",
+    mutate: (patterns) => changeFirst(patterns, { status: "trashed" }),
+  },
+  {
+    button: "Move",
+    name: "move deleting status",
+    mutate: (patterns) => changeFirst(patterns, { status: "deleting" }),
+  },
+  {
+    button: "Move",
+    name: "move deleted timestamp",
+    mutate: (patterns) => changeFirst(patterns, { deletedAt: responseTimestamp }),
+  },
+  {
+    button: "Trash",
+    name: "trash missing pre-trash status",
+    mutate: (patterns) => changeFirst(patterns, { preTrashStatus: null }),
+  },
+  {
+    button: "Trash",
+    name: "trash missing trashed timestamp",
+    mutate: (patterns) => changeFirst(patterns, { trashedAt: null }),
+  },
+  {
+    button: "Trash",
+    name: "trash deleted timestamp",
+    mutate: (patterns) => changeFirst(patterns, { deletedAt: responseTimestamp }),
+  },
+  {
+    button: "Favorite",
+    name: "favorite version does not advance",
+    mutate: (patterns, intent) =>
+      changeFirst(patterns, { version: intent.patterns[0]!.version }),
+  },
+  {
+    button: "Favorite",
+    name: "favorite version jumps",
+    mutate: (patterns, intent) =>
+      changeFirst(patterns, { version: intent.patterns[0]!.version + 2 }),
+  },
+  {
+    button: "Trash",
+    name: "trash version does not advance",
+    mutate: (patterns, intent) =>
+      changeFirst(patterns, { version: intent.patterns[0]!.version }),
+  },
+  {
+    button: "Trash",
+    name: "trash version jumps",
+    mutate: (patterns, intent) =>
+      changeFirst(patterns, { version: intent.patterns[0]!.version + 2 }),
+  },
+  {
+    button: "Move",
+    name: "move version regresses",
+    mutate: (patterns, intent) =>
+      changeFirst(patterns, {
+        version: Math.max(0, intent.patterns[0]!.version - 1),
+      }),
+  },
+  {
+    button: "Move",
+    name: "move version jumps",
+    mutate: (patterns, intent) =>
+      changeFirst(patterns, { version: intent.patterns[0]!.version + 2 }),
+  },
+];
 
 function page(items: PatternItem[]): InfiniteData<PatternPage, string | null> {
   return { pages: [{ items, nextCursor: null }], pageParams: [null] };
@@ -133,11 +292,12 @@ describe("pattern batch mutation", () => {
     });
     const invalidate = vi.spyOn(client, "invalidateQueries");
     let attempts = 0;
-    vi.stubGlobal("fetch", vi.fn(async () => {
+    vi.stubGlobal("fetch", vi.fn(async (_input, init) => {
       attempts += 1;
       if (attempts === 1) throw new TypeError("network down");
+      const intent = JSON.parse(String(init?.body)) as PatternBatchIntent;
       return Response.json({
-        patterns: items.map((item) => ({ ...item, isFavorite: true, version: item.version + 1 })),
+        patterns: validBatchPatterns(items, intent),
       });
     }));
     useSelectionStore.getState().selectAll(items.map((item) => item.id));
@@ -184,15 +344,9 @@ describe("pattern batch mutation", () => {
     await act(async () => {
       const intent = JSON.parse(
         String(vi.mocked(fetch).mock.calls[0]?.[1]?.body),
-      ) as { operationId: string };
+      ) as PatternBatchIntent;
       resolve(Response.json({
-        patterns: items.slice(0, 2).map((item) => ({
-          ...item,
-          status: "trashed",
-          trashBatchId: intent.operationId,
-          preTrashStatus: item.status,
-          version: item.version + 1,
-        })),
+        patterns: validBatchPatterns(items.slice(0, 2), intent),
       }));
     });
 
@@ -275,6 +429,98 @@ describe("pattern batch mutation", () => {
     expect(useSelectionStore.getState().selectedIds).toEqual(
       items.map((item) => item.id),
     );
+  });
+
+  it.each(invalidStateCases)(
+    "rejects $name without changing caches or selection",
+    async ({ button, mutate }) => {
+      const items = [pattern(1), pattern(2)];
+      const client = clientWith(items);
+      const invalidate = vi.spyOn(client, "invalidateQueries");
+      vi.stubGlobal("fetch", vi.fn(async (_input, init) => {
+        const intent = JSON.parse(String(init?.body)) as PatternBatchIntent;
+        return Response.json({
+          patterns: mutate(validBatchPatterns(items, intent), intent),
+        });
+      }));
+      useSelectionStore.getState().selectAll(items.map((item) => item.id));
+      renderHarness(client, items);
+
+      fireEvent.click(screen.getByRole("button", { name: button }));
+
+      expect(
+        await screen.findByRole("alert", {}, { timeout: 500 }),
+      ).toHaveTextContent("Mutation failed");
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(useSelectionStore.getState().selectedIds).toEqual(
+        items.map((item) => item.id),
+      );
+      expect(
+        items.map((item) =>
+          client.getQueryData(queryKeys.pattern(ownerId, item.id)),
+        ),
+      ).toEqual(items);
+      expect(
+        client
+          .getQueryData<InfiniteData<PatternPage>>(queryKeys.patterns(ownerId, query))
+          ?.pages[0]?.items,
+      ).toEqual(items);
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: ["owner", ownerId, "patterns"],
+      });
+    },
+  );
+
+  it.each([
+    {
+      button: "Move" as const,
+      items: [
+        { ...pattern(1), folderId },
+        { ...pattern(2), folderId },
+      ],
+      moveNoOp: true,
+      name: "move no-op keeps the input version",
+    },
+    {
+      button: "Move" as const,
+      items: [pattern(1), pattern(2)],
+      moveNoOp: false,
+      name: "move change advances by one version",
+    },
+    {
+      button: "Favorite" as const,
+      items: [pattern(1), pattern(2)],
+      moveNoOp: false,
+      name: "favorite advances by one version",
+    },
+    {
+      button: "Trash" as const,
+      items: [pattern(1), pattern(2)],
+      moveNoOp: false,
+      name: "trash advances by one version",
+    },
+  ])("accepts a valid $name response", async ({ button, items, moveNoOp }) => {
+    const client = clientWith(items);
+    let responsePatterns: PatternItem[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_input, init) => {
+      const intent = JSON.parse(String(init?.body)) as PatternBatchIntent;
+      responsePatterns = validBatchPatterns(items, intent, { moveNoOp });
+      return Response.json({ patterns: responsePatterns });
+    }));
+    useSelectionStore.getState().selectAll(items.map((item) => item.id));
+    renderHarness(client, items);
+
+    fireEvent.click(screen.getByRole("button", { name: button }));
+
+    await waitFor(() =>
+      expect(useSelectionStore.getState().selectedIds).toEqual([]),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      items.map((item) =>
+        client.getQueryData(queryKeys.pattern(ownerId, item.id)),
+      ),
+    ).toEqual(responsePatterns);
   });
 
   it("keeps filtered rows selected until an optimistic favorite request succeeds", async () => {

@@ -176,14 +176,41 @@ function parsePatternBatchResult(
   ) {
     throw new InvalidApiResponseError("Pattern batch response IDs do not match");
   }
+  const refs = new Map(
+    intent.patterns.map((pattern) => [pattern.id, pattern] as const),
+  );
   const invalidActionResult = parsed.data.patterns.some((pattern) => {
-    if (intent.action === "move") return pattern.folderId !== intent.folderId;
+    const ref = refs.get(pattern.id);
+    if (!ref) return true;
+    const isLiveResult =
+      (pattern.status === "ready" || pattern.status === "failed") &&
+      pattern.preTrashStatus === null &&
+      pattern.trashBatchId === null &&
+      pattern.trashedAt === null &&
+      pattern.deletedAt === null;
+    if (intent.action === "move") {
+      return (
+        !isLiveResult ||
+        pattern.folderId !== intent.folderId ||
+        (pattern.version !== ref.version &&
+          pattern.version !== ref.version + 1)
+      );
+    }
     if (intent.action === "favorite") {
-      return pattern.isFavorite !== intent.isFavorite;
+      return (
+        !isLiveResult ||
+        pattern.isFavorite !== intent.isFavorite ||
+        pattern.version !== ref.version + 1
+      );
     }
     return (
       pattern.status !== "trashed" ||
-      pattern.trashBatchId !== intent.operationId
+      (pattern.preTrashStatus !== "ready" &&
+        pattern.preTrashStatus !== "failed") ||
+      pattern.trashBatchId !== intent.operationId ||
+      pattern.trashedAt === null ||
+      pattern.deletedAt !== null ||
+      pattern.version !== ref.version + 1
     );
   });
   if (invalidActionResult) {
