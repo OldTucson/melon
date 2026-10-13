@@ -11,6 +11,7 @@ import {
 
 import { Sidebar } from "./sidebar";
 import { Topbar } from "./topbar";
+import { useFoldersQuery } from "@/features/folders/folder-client";
 
 export function WorkspaceShell({
   children,
@@ -19,6 +20,7 @@ export function WorkspaceShell({
   children: React.ReactNode;
   user: { displayName: string; email: string };
 }) {
+  useFoldersQuery(true);
   return (
     <Tooltip.Provider delayDuration={350}>
       <UploadManagerProvider>

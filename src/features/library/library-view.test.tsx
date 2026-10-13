@@ -32,6 +32,8 @@ import { QueryOwnerProvider } from "@/lib/query/provider";
 import { LibraryView } from "./library-view";
 import { usePatternPatchMutation } from "./pattern-mutations";
 import { WorkspaceShell } from "./workspace-shell";
+import { useSelectionStore } from "./selection-store";
+import type { FolderDto } from "@/features/folders/folder-client";
 
 const navigation = vi.hoisted(() => ({
   pathname: "/library",
@@ -73,6 +75,24 @@ const makePattern = (index: number): PatternItem => ({
 });
 
 const query = toPatternQuery(parseLibrarySearchParams(new URLSearchParams()));
+
+const folder: FolderDto = {
+  id: "20000000-0000-4000-8000-000000000001",
+  ownerId,
+  parentId: null,
+  name: "设计文件夹",
+  normalizedName: "设计文件夹",
+  status: "active",
+  version: 0,
+  trashBatchId: null,
+  trashedAt: null,
+  deletedAt: null,
+  changeSeq: "1",
+  createdAt: "2026-10-08T00:00:00.000Z",
+  updatedAt: "2026-10-08T00:00:00.000Z",
+  directPatternCount: 1,
+  recursivePatternCount: 2,
+};
 
 function createClient(items: PatternItem[]) {
   const client = new QueryClient({
@@ -198,6 +218,126 @@ describe("Mac-first workspace", () => {
       /@media\s*\(max-width:\s*720px\)[\s\S]*?\.library-layout\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/,
     );
     expect(css).toMatch(/\.workspace\s*\{[^}]*overflow-x:\s*clip/s);
+    expect(css).toMatch(
+      /@media\s*\(max-width:\s*1100px\)[\s\S]*?\.folder-rail-toggle\s*\{[^}]*display:\s*inline-flex/,
+    );
+    expect(css).toMatch(
+      /@media\s*\(max-width:\s*720px\)[\s\S]*?\.sidebar-folders\s*\{[^}]*display:\s*none/,
+    );
+  });
+
+  it("uses one shell folders GET for the tree, heading and bulk move menu", async () => {
+    const fetcher = vi.fn<typeof fetch>(
+      async () =>
+        new Response(JSON.stringify([folder])),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    const client = createClient([makePattern(1)]);
+    const active = { ...query, folderId: folder.id };
+    client.setQueryData(
+      queryKeys.patterns(ownerId, active),
+      client.getQueryData(queryKeys.patterns(ownerId, query)),
+    );
+    render(
+      <QueryClientProvider client={client}>
+        <QueryOwnerProvider ownerId={ownerId}>
+          <WorkspaceShell
+            user={{ displayName: "Lin", email: "lin@example.test" }}
+          >
+            <LibraryView initialQuery={active} />
+          </WorkspaceShell>
+        </QueryOwnerProvider>
+      </QueryClientProvider>,
+    );
+    expect(
+      await screen.findByRole("heading", { level: 1, name: folder.name }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: folder.name })).toBeInTheDocument();
+    act(() => useSelectionStore.getState().selectAll([makePattern(1).id]));
+    const move = await screen.findByRole("button", { name: "移动" });
+    move.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(
+      await screen.findByRole("menuitem", { name: folder.name }),
+    ).toBeInTheDocument();
+    expect(
+      fetcher.mock.calls.filter(([url]) => url === "/api/folders"),
+    ).toHaveLength(1);
+  });
+
+  it("shows folder heading and canonical descendants toggle preserving filters", async () => {
+    const client = createClient([]);
+    client.setQueryData(queryKeys.folders(ownerId), [folder]);
+    const active = {
+      ...query,
+      folderId: folder.id,
+      q: "花",
+      favorite: true,
+      cursor: "old",
+    };
+    client.setQueryData(queryKeys.patterns(ownerId, active), {
+      pages: [{ items: [], nextCursor: null }],
+      pageParams: [null],
+    });
+    const rendered = render(libraryTree(client, active));
+    expect(
+      screen.getByRole("heading", { level: 1, name: folder.name }),
+    ).toBeInTheDocument();
+    const toggle = screen.getByRole("checkbox", { name: "包含子文件夹内容" });
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+    expect(navigation.replace).toHaveBeenLastCalledWith(
+      `/library?q=%E8%8A%B1&favorite=true&folderId=${folder.id}&includeDescendants=false`,
+    );
+    const shallow = { ...active, includeDescendants: false };
+    client.setQueryData(queryKeys.patterns(ownerId, shallow), {
+      pages: [{ items: [], nextCursor: null }],
+      pageParams: [null],
+    });
+    rendered.rerender(libraryTree(client, shallow));
+    expect(
+      screen.getByRole("checkbox", { name: "包含子文件夹内容" }),
+    ).not.toBeChecked();
+    fireEvent.click(screen.getByRole("checkbox", { name: "包含子文件夹内容" }));
+    expect(navigation.replace).toHaveBeenLastCalledWith(
+      `/library?q=%E8%8A%B1&favorite=true&folderId=${folder.id}`,
+    );
+  });
+
+  it("handles unfiled/missing folder heading and clears selection and preview on query changes", () => {
+    const client = createClient([makePattern(1)]);
+    const rendered = render(libraryTree(client));
+    act(() =>
+      useSelectionStore.setState({
+        selectedIds: [makePattern(1).id],
+        previewId: makePattern(1).id,
+      }),
+    );
+    const active = { ...query, unfiled: true };
+    client.setQueryData(
+      queryKeys.patterns(ownerId, active),
+      client.getQueryData(queryKeys.patterns(ownerId, query)),
+    );
+    rendered.rerender(libraryTree(client, active));
+    expect(
+      screen.getByRole("heading", { level: 1, name: "未分类" }),
+    ).toBeInTheDocument();
+    expect(useSelectionStore.getState()).toMatchObject({
+      selectedIds: [],
+      previewId: null,
+    });
+    const missing = { ...query, folderId: folder.id };
+    client.setQueryData(queryKeys.patterns(ownerId, missing), {
+      pages: [{ items: [], nextCursor: null }],
+      pageParams: [null],
+    });
+    rendered.rerender(libraryTree(client, missing));
+    expect(
+      screen.getByRole("heading", { level: 1, name: "全部图案" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("checkbox", { name: "包含子文件夹内容" }),
+    ).not.toBeInTheDocument();
   });
 
   it("renders a bounded virtual result region instead of every result", async () => {

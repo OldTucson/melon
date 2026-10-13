@@ -3,7 +3,6 @@
 import * as Checkbox from "@radix-ui/react-checkbox";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { useQuery } from "@tanstack/react-query";
 import {
   Check,
   CheckCheck,
@@ -17,27 +16,14 @@ import {
 import { useMemo, useState } from "react";
 
 import type { PatternQuery } from "@/features/patterns/contracts";
-import { readApiResponse } from "@/lib/query/client";
-import { queryKeys } from "@/lib/query/keys";
-import { useQueryOwnerId } from "@/lib/query/provider";
+import { useFoldersQuery } from "@/features/folders/folder-client";
 
 import type { PatternItem } from "./library-types";
 import { usePatternBatchMutation } from "./pattern-batch-mutations";
 import { useSelectionStore } from "./selection-store";
 import { TrashPatternsDialog } from "./trash-patterns-dialog";
 
-type FolderOption = {
-  id: string;
-  name: string;
-  parentId: string | null;
-  status: "active" | "trashed" | "deleting" | "deleted";
-};
-
 type UndoNotice = { patternIds: string[] };
-
-async function fetchFolders() {
-  return readApiResponse<FolderOption[]>(await fetch("/api/folders"));
-}
 
 function ActionButton({
   children,
@@ -82,7 +68,6 @@ export function BulkActionBar({
   activeQuery: PatternQuery;
   loadedPatterns: PatternItem[];
 }) {
-  const ownerId = useQueryOwnerId();
   const selectedIds = useSelectionStore((state) => state.selectedIds);
   const clear = useSelectionStore((state) => state.clear);
   const selectAll = useSelectionStore((state) => state.selectAll);
@@ -95,11 +80,7 @@ export function BulkActionBar({
     const ids = new Set(selectedIds);
     return loadedPatterns.filter((pattern) => ids.has(pattern.id));
   }, [loadedPatterns, selectedIds]);
-  const folders = useQuery({
-    queryKey: queryKeys.folders(ownerId),
-    queryFn: fetchFolders,
-    enabled: moveOpen,
-  });
+  const folders = useFoldersQuery();
   const count = selected.length;
   const allLoadedSelected =
     loadedPatterns.length > 0 && count === loadedPatterns.length;
@@ -195,7 +176,10 @@ export function BulkActionBar({
               </Tooltip.Portal>
             </Tooltip.Root>
             <DropdownMenu.Portal>
-              <DropdownMenu.Content className="filter-menu-content" sideOffset={6}>
+              <DropdownMenu.Content
+                className="filter-menu-content"
+                sideOffset={6}
+              >
                 <DropdownMenu.Label className="filter-menu-label">
                   移动到
                 </DropdownMenu.Label>
@@ -265,7 +249,11 @@ export function BulkActionBar({
       {notice ? (
         <div className="bulk-notice" role="status">
           <span>已将 {notice.patternIds.length} 个图案移入回收站</span>
-          <button disabled={mutation.isPending} type="button" onClick={() => void undoTrash()}>
+          <button
+            disabled={mutation.isPending}
+            type="button"
+            onClick={() => void undoTrash()}
+          >
             <RotateCcw aria-hidden="true" />
             撤销
           </button>

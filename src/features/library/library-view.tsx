@@ -3,10 +3,7 @@
 /* eslint-disable @next/next/no-img-element */
 
 import * as Dialog from "@radix-ui/react-dialog";
-import {
-  type InfiniteData,
-  useInfiniteQuery,
-} from "@tanstack/react-query";
+import { type InfiniteData, useInfiniteQuery } from "@tanstack/react-query";
 import { Download, X } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -23,15 +20,13 @@ import { IconButton } from "./icon-button";
 import { Inspector, MultiSelectionInspector } from "./inspector";
 import { BulkActionBar } from "./bulk-action-bar";
 import type { PatternPage } from "./library-types";
-import {
-  LibraryToolbar,
-  type LibraryViewMode,
-} from "./library-toolbar";
+import { LibraryToolbar, type LibraryViewMode } from "./library-toolbar";
 import { FormatPlaceholder } from "./pattern-card";
 import { PatternGrid } from "./pattern-grid";
 import { usePatternPatchMutation } from "./pattern-mutations";
 import { serializeLibrarySearchParams } from "./query-state";
 import { useSelectionStore } from "./selection-store";
+import { useFoldersQuery } from "@/features/folders/folder-client";
 
 async function fetchPatternPage(query: PatternQuery, cursor: string | null) {
   const searchParams = serializeLibrarySearchParams(query);
@@ -55,6 +50,13 @@ export function LibraryView({ initialQuery }: { initialQuery: PatternQuery }) {
   const router = useRouter();
   const pathname = usePathname();
   const ownerId = useQueryOwnerId();
+  const folders = useFoldersQuery();
+  const activeFolder = !initialQuery.unfiled
+    ? folders.data?.find(
+        (folder) =>
+          folder.id === initialQuery.folderId && folder.status === "active",
+      )
+    : undefined;
   const [viewMode, setViewMode] = useState<LibraryViewMode>("grid");
   const [collapsedSelectionKey, setCollapsedSelectionKey] = useState<
     string | null
@@ -98,7 +100,8 @@ export function LibraryView({ initialQuery }: { initialQuery: PatternQuery }) {
 
   useEffect(() => {
     clearSelection();
-  }, [clearSelection, querySignature]);
+    closePreview();
+  }, [clearSelection, closePreview, querySignature]);
 
   useEffect(() => {
     reconcileSelection(orderedIds);
@@ -122,7 +125,13 @@ export function LibraryView({ initialQuery }: { initialQuery: PatternQuery }) {
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [clearSelection, closePreview, previewId, selectedIds.length, togglePreview]);
+  }, [
+    clearSelection,
+    closePreview,
+    previewId,
+    selectedIds.length,
+    togglePreview,
+  ]);
 
   const updateQuery = (nextQuery: PatternQuery) => {
     const parsed = patternQuerySchema.parse(nextQuery);
@@ -138,8 +147,32 @@ export function LibraryView({ initialQuery }: { initialQuery: PatternQuery }) {
         <header className="library-heading">
           <div>
             <p>私人图案库</p>
-            <h1 id="library-title">全部图案</h1>
+            <h1 id="library-title">
+              {initialQuery.unfiled
+                ? "未分类"
+                : (activeFolder?.name ?? "全部图案")}
+            </h1>
           </div>
+          {activeFolder && (
+            <label className="folder-descendants-toggle">
+              <input
+                type="checkbox"
+                aria-label="包含子文件夹内容"
+                checked={initialQuery.includeDescendants !== false}
+                onChange={(event) => {
+                  clearSelection();
+                  closePreview();
+                  updateQuery({
+                    ...initialQuery,
+                    includeDescendants: event.target.checked,
+                    cursor: undefined,
+                    unfiled: undefined,
+                  });
+                }}
+              />
+              包含子文件夹内容
+            </label>
+          )}
         </header>
         <div className="library-controls">
           <LibraryToolbar
@@ -153,10 +186,7 @@ export function LibraryView({ initialQuery }: { initialQuery: PatternQuery }) {
             selectedCount={selectedIds.length}
             viewMode={viewMode}
           />
-          <BulkActionBar
-            activeQuery={initialQuery}
-            loadedPatterns={items}
-          />
+          <BulkActionBar activeQuery={initialQuery} loadedPatterns={items} />
         </div>
 
         {patternsQuery.isPending ? (

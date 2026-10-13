@@ -18,6 +18,7 @@ import { queryKeys } from "@/lib/query/keys";
 import { useQueryOwnerId } from "@/lib/query/provider";
 
 import type { TagItem } from "./library-types";
+import { FolderTree } from "@/features/folders/folder-tree";
 
 const primaryItems = [
   { id: "all", href: "/library", icon: ImageIcon, label: "全部图案" },
@@ -75,6 +76,8 @@ export function Sidebar() {
           );
         })}
       </div>
+
+      <FolderTree />
 
       <div className="sidebar-section sidebar-tags" aria-label="标签">
         <p className="sidebar-section-label">标签</p>
@@ -144,6 +147,8 @@ export function Sidebar() {
 function getActiveView(pathname: string, searchParams: URLSearchParams) {
   if (pathname === "/settings") return "settings";
   if (pathname !== "/library") return null;
+  if (searchParams.has("folderId") || searchParams.get("unfiled") === "true")
+    return null;
   if (searchParams.get("untagged") === "true") return "untagged";
   if (searchParams.get("favorite") === "true") return "favorite";
 
@@ -152,10 +157,7 @@ function getActiveView(pathname: string, searchParams: URLSearchParams) {
     ...searchParams.getAll("tagIds"),
   ];
   if (tagIds.length === 1) return `tag:${tagIds[0]}`;
-  if (
-    searchParams.has("sort") &&
-    searchParams.get("sort") === "updated_desc"
-  ) {
+  if (searchParams.has("sort") && searchParams.get("sort") === "updated_desc") {
     return "recent";
   }
   return "all";

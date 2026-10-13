@@ -18,6 +18,7 @@ const ownerId = "10000000-0000-4000-8000-000000000001";
 vi.mock("next/navigation", () => ({
   usePathname: () => navigation.pathname,
   useSearchParams: () => navigation.searchParams,
+  useRouter: () => ({ replace: vi.fn() }),
 }));
 
 const tags: TagItem[] = [
@@ -62,6 +63,19 @@ function renderSidebar(search = "") {
 afterEach(() => cleanup());
 
 describe("workspace sidebar", () => {
+  it("shows folder navigation and does not mark all active in a folder context", () => {
+    renderSidebar("unfiled=true");
+    expect(screen.getByRole("link", { name: "未分类" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(screen.getByRole("link", { name: "全部图案" })).not.toHaveAttribute(
+      "aria-current",
+    );
+    expect(
+      screen.getByRole("button", { name: "新建文件夹" }),
+    ).toBeInTheDocument();
+  });
   it("shows the untagged view and the real tag list with fixed swatches", () => {
     renderSidebar();
 
@@ -89,11 +103,13 @@ describe("workspace sidebar", () => {
   ])("marks only the URL-backed %s view active", (search, activeLabel) => {
     renderSidebar(search);
 
-    const links = screen.getAllByRole("link").filter((link) =>
-      ["全部图案", "最近使用", "收藏", "未打标签", "花卉", "几何"].includes(
-        link.textContent ?? "",
-      ),
-    );
+    const links = screen
+      .getAllByRole("link")
+      .filter((link) =>
+        ["全部图案", "最近使用", "收藏", "未打标签", "花卉", "几何"].includes(
+          link.textContent ?? "",
+        ),
+      );
     for (const link of links) {
       if (link.textContent === activeLabel) {
         expect(link).toHaveAttribute("data-active", "true");

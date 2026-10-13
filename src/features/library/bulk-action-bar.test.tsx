@@ -253,31 +253,37 @@ describe("bulk action bar", () => {
     },
   );
 
-  it("loads active folders and moves the selected versions to the chosen folder", async () => {
+  it("reuses cached active folders and moves the selected versions to the chosen folder", async () => {
     const user = userEvent.setup();
     const folderId = "20000000-0000-4000-8000-000000000000";
     const batchBodies: Array<Record<string, unknown>> = [];
-    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url === "/api/folders") {
-        return Response.json([
-          { id: folderId, name: "家居", parentId: null, status: "active" },
-        ]);
-      }
-      if (url === "/api/patterns/batch") {
-        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        batchBodies.push(body);
-        return Response.json({
-          patterns: items.map((item) => ({
-            ...item,
-            folderId,
-            version: item.version + 1,
-          })),
-        });
-      }
-      throw new Error(`Unexpected request: ${url}`);
-    }));
-    renderBar();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/patterns/batch") {
+          const body = JSON.parse(String(init?.body)) as Record<
+            string,
+            unknown
+          >;
+          batchBodies.push(body);
+          return Response.json({
+            patterns: items.map((item) => ({
+              ...item,
+              folderId,
+              version: item.version + 1,
+            })),
+          });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      }),
+    );
+    const { client } = renderBar();
+    act(() =>
+      client.setQueryData(queryKeys.folders(ownerId), [
+        { id: folderId, name: "家居", parentId: null, status: "active" },
+      ]),
+    );
 
     await user.click(screen.getByRole("button", { name: "移动" }));
     await user.click(await screen.findByRole("menuitem", { name: "家居" }));
