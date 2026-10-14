@@ -6,10 +6,19 @@ import { getServerEnv } from "@/lib/env/server";
 
 import { AppError, validationError } from "./app-error";
 
-type RouteHandler<Context = unknown> = (
+type RouteResult = Response | Promise<Response>;
+
+type StaticRouteHandler = (request: Request) => RouteResult;
+
+type ContextRouteHandler<Context> = (
+  request: Request,
+  context: Context,
+) => RouteResult;
+
+type WrappedRouteHandler<Context> = (
   request: Request,
   context?: Context,
-) => Response | Promise<Response>;
+) => RouteResult;
 
 const errorResponse = (
   code: string,
@@ -29,10 +38,14 @@ const errorResponse = (
     { status, headers: { "x-request-id": requestId } },
   );
 
-export const withRoute = <Context = unknown>(
-  handler: RouteHandler<Context>,
-): RouteHandler<Context> =>
-  async (request, context) => {
+export function withRoute(handler: StaticRouteHandler): StaticRouteHandler;
+export function withRoute<Context>(
+  handler: ContextRouteHandler<Context>,
+): ContextRouteHandler<Context>;
+export function withRoute<Context>(
+  handler: WrappedRouteHandler<Context>,
+): WrappedRouteHandler<Context> {
+  return async (request, context) => {
     const requestId = randomUUID();
 
     try {
@@ -66,6 +79,7 @@ export const withRoute = <Context = unknown>(
       );
     }
   };
+}
 
 export async function readJson(request: Request): Promise<unknown> {
   try {
