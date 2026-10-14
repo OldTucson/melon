@@ -1598,6 +1598,520 @@ textarea:focus-visible,
   padding: 22px 16px;
 }
 
+.inspector-tabs {
+  min-height: 100%;
+}
+
+.inspector-tab-list {
+  position: sticky;
+  z-index: 4;
+  top: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  height: 38px;
+  padding: 0 10px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.inspector-tab-list button {
+  position: relative;
+  min-width: 0;
+  padding: 0 6px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.inspector-tab-list button[data-state="active"] {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.inspector-tab-list button[data-state="active"]::after {
+  position: absolute;
+  right: 12px;
+  bottom: -1px;
+  left: 12px;
+  height: 2px;
+  content: "";
+  background: var(--primary);
+}
+
+.inspector-tab-content {
+  min-width: 0;
+  outline: 0;
+}
+
+.authorization-tab {
+  min-width: 0;
+}
+
+.authorization-tab-state,
+.authorization-empty-state {
+  padding: 28px 16px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.authorization-summary {
+  display: grid;
+  grid-template-columns: 1fr 1.3fr;
+  gap: 14px 10px;
+  padding: 18px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.authorization-summary > div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.authorization-summary > div:nth-child(2) {
+  text-align: right;
+}
+
+.authorization-summary span,
+.authorization-form-field > span,
+.authorization-field-control label > span,
+.authorization-kind-control legend {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.authorization-summary strong {
+  overflow: hidden;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.authorization-summary strong[data-state="standard"] {
+  color: var(--status-standard);
+}
+
+.authorization-summary strong[data-state="field_exclusive"] {
+  color: var(--status-exclusive);
+}
+
+.authorization-summary strong[data-state="global_buyout"] {
+  color: var(--status-buyout);
+}
+
+.authorization-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.authorization-toolbar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.authorization-toolbar input {
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.authorization-toolbar .primary-button,
+.authorization-form .primary-button,
+.authorization-form .secondary-button,
+.authorization-inline-field-create .secondary-button,
+.authorization-load-more,
+.authorization-field-create .primary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  gap: 5px;
+  padding: 5px 9px;
+  font-size: 11px;
+}
+
+.authorization-toolbar svg,
+.authorization-form-actions svg,
+.authorization-field-create svg {
+  width: 14px;
+  height: 14px;
+}
+
+.authorization-notice {
+  margin: 0;
+  padding: 9px 16px;
+  color: var(--text-muted);
+  background: var(--canvas);
+  border-bottom: 1px solid var(--border);
+  font-size: 10px;
+}
+
+.authorization-editor {
+  padding: 14px 16px 18px;
+  background: var(--canvas);
+  border-bottom: 1px solid var(--border);
+}
+
+.authorization-editor-heading,
+.authorization-row-heading,
+.authorization-row-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  gap: 8px;
+}
+
+.authorization-editor-heading {
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+
+.authorization-form {
+  display: grid;
+  gap: 12px;
+}
+
+.authorization-kind-control {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.authorization-kind-control legend {
+  margin-bottom: 6px;
+  padding: 0;
+}
+
+.authorization-kind-control > div {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+}
+
+.authorization-kind-control label {
+  min-width: 0;
+}
+
+.authorization-kind-control label + label {
+  border-left: 1px solid var(--border);
+}
+
+.authorization-kind-control input {
+  position: absolute;
+  opacity: 0;
+}
+
+.authorization-kind-control span {
+  display: grid;
+  place-items: center;
+  min-height: 30px;
+  padding: 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.authorization-kind-control label:has(input:checked) span {
+  color: var(--on-primary);
+  background: var(--primary);
+}
+
+.authorization-kind-control label:has(input:focus-visible) {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+.authorization-form-field,
+.authorization-field-control,
+.authorization-field-combobox {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.authorization-field-combobox {
+  position: relative;
+}
+
+.authorization-field-label {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.authorization-combobox-input {
+  position: relative;
+}
+
+.authorization-combobox-input input {
+  padding-right: 28px;
+}
+
+.authorization-combobox-input > svg {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  width: 14px;
+  height: 14px;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.authorization-combobox-list {
+  position: absolute;
+  z-index: 12;
+  top: calc(100% + 3px);
+  right: 0;
+  left: 0;
+  display: grid;
+  max-height: 190px;
+  padding: 5px;
+  overflow: auto;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 18%);
+}
+
+.authorization-combobox-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 30px;
+  gap: 8px;
+  padding: 5px 7px;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.authorization-combobox-list button[data-active="true"] {
+  background: var(--canvas);
+}
+
+.authorization-combobox-list button svg {
+  width: 13px;
+  height: 13px;
+  color: var(--primary);
+}
+
+.authorization-combobox-list p {
+  margin: 0;
+  padding: 9px 7px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.authorization-form input,
+.authorization-form select,
+.authorization-form textarea,
+.authorization-inline-field-create input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.authorization-form input,
+.authorization-form select,
+.authorization-inline-field-create input {
+  height: 34px;
+}
+
+.authorization-form textarea {
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.authorization-form-field small {
+  color: var(--text-muted);
+  font-size: 9px;
+  text-align: right;
+}
+
+.authorization-form [role="alert"],
+.authorization-field-settings [role="alert"] {
+  color: var(--status-buyout);
+  font-size: 10px;
+}
+
+.money-input {
+  position: relative;
+}
+
+.money-input > span {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: 9px;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.money-input input {
+  padding-left: 24px;
+  font-variant-numeric: tabular-nums;
+}
+
+.authorization-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.authorization-field-control .text-icon-button {
+  justify-self: start;
+  margin: 0;
+  padding: 0;
+  color: var(--primary);
+  background: transparent;
+  border: 0;
+}
+
+.authorization-inline-field-create {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+
+.authorization-history {
+  display: grid;
+}
+
+.authorization-row {
+  position: relative;
+  min-width: 0;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.authorization-row[data-status="void"] {
+  opacity: 0.62;
+}
+
+.authorization-row-heading > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.authorization-row-heading strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.authorization-row-heading span,
+.authorization-row-meta,
+.authorization-row > p,
+.authorization-void-label {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.authorization-row-menu {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+}
+
+.authorization-row-meta {
+  margin-top: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.authorization-row-meta strong {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.authorization-row > p {
+  margin: 8px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.authorization-void-label {
+  display: inline-block;
+  margin-top: 7px;
+  color: var(--status-buyout);
+}
+
+.authorization-menu-content {
+  width: 150px;
+}
+
+.authorization-empty-state strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.authorization-empty-state p {
+  margin: 6px 0 0;
+}
+
+.authorization-load-more {
+  width: calc(100% - 32px);
+  margin: 12px 16px 18px;
+}
+
+.history-confirmation-list {
+  display: grid;
+  max-height: 220px;
+  gap: 0;
+  margin: 0;
+  padding: 0 18px 18px;
+  overflow: auto;
+  list-style: none;
+}
+
+.history-confirmation-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.history-confirmation-list li > span:nth-child(2) {
+  grid-column: 1;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.history-confirmation-list strong {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  font-variant-numeric: tabular-nums;
+}
+
 .dialog-overlay {
   position: fixed;
   z-index: 80;
@@ -2386,6 +2900,103 @@ textarea:focus-visible,
   margin-top: 12px;
 }
 
+.settings-section-label p {
+  margin: 7px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.authorization-field-settings {
+  min-width: 0;
+}
+
+.authorization-field-create {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.authorization-field-create label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.authorization-field-create input {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  padding: 7px 9px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.field-name-preview {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.authorization-field-settings > [role="alert"] {
+  margin: 9px 0 0;
+}
+
+.authorization-field-list {
+  display: grid;
+  margin-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.authorization-field-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 42px;
+  gap: 9px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.authorization-field-row > svg,
+.authorization-field-scope svg {
+  width: 14px;
+  height: 14px;
+  color: var(--text-muted);
+}
+
+.authorization-field-scope {
+  display: grid;
+  place-items: center;
+}
+
+.field-custom-mark {
+  width: 7px;
+  height: 7px;
+  background: var(--primary);
+  border-radius: 50%;
+}
+
+.field-system-label {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.authorization-field-row .icon-button {
+  width: 28px;
+  height: 28px;
+}
+
+.archived-field-list summary {
+  padding: 12px 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
 @media (max-width: 560px) {
   .auth-shell {
     align-items: start;
@@ -2403,6 +3014,14 @@ textarea:focus-visible,
   .settings-section {
     grid-template-columns: 1fr;
     gap: 14px;
+  }
+
+  .authorization-field-create {
+    grid-template-columns: 1fr;
+  }
+
+  .authorization-field-create .primary-button {
+    width: 100%;
   }
 }
 

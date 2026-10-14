@@ -1,8 +1,11 @@
+import * as Tooltip from "@radix-ui/react-tooltip";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import { useTheme } from "next-themes";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AuthenticatedThemeProvider } from "@/features/theme/authenticated-theme-provider";
+import { QueryOwnerProvider } from "@/lib/query/provider";
 
 const requireUser = vi.hoisted(() => vi.fn());
 
@@ -20,7 +23,17 @@ describe("settings page", () => {
     vi.mocked(useTheme).mockReturnValue({
       setTheme,
     } as unknown as ReturnType<typeof useTheme>);
-    vi.stubGlobal("fetch", vi.fn());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response("[]", {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+      ),
+    );
     const user = {
       id: "20b64d24-5e18-4127-b69a-5eb76a67960a",
       email: "owner@example.test",
@@ -33,12 +46,19 @@ describe("settings page", () => {
     requireUser.mockResolvedValue(user);
     const { default: SettingsPage } = await import("./page");
 
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
     render(
       <AuthenticatedThemeProvider
         userId={user.id}
         serverPreference={user.themePreference}
       >
-        {await SettingsPage()}
+        <QueryClientProvider client={client}>
+          <QueryOwnerProvider ownerId={user.id}>
+            <Tooltip.Provider>{await SettingsPage()}</Tooltip.Provider>
+          </QueryOwnerProvider>
+        </QueryClientProvider>
       </AuthenticatedThemeProvider>,
     );
 
@@ -46,6 +66,8 @@ describe("settings page", () => {
     expect(screen.getByRole("heading", { name: "设置" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "夜间" })).toBeChecked();
     expect(setTheme).toHaveBeenCalledWith("dark");
-    expect(fetch).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/authorization-fields?includeArchived=true",
+    );
   });
 });

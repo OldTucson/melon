@@ -377,7 +377,7 @@ Expected: all transport tests pass and no response contains a JavaScript `bigint
 - Test: `src/features/authorizations/field-settings.test.tsx`
 - Test: `src/features/authorizations/authorization-form.test.tsx`, `authorization-tab.test.tsx`
 
-- [ ] **Step 1: Install form dependencies and write failing component tests**
+- [x] **Step 1: Install form dependencies and write failing component tests**
 
 ```bash
 npm install react-hook-form @hookform/resolvers
@@ -385,7 +385,7 @@ npm install react-hook-form @hookform/resolvers
 
 Test the segmented kind control, conditional field combobox, RMB precision, future-date rejection, required customer, optional 1,000-character note, create-custom-field command, second confirmation and stale-version refresh. Assert void records are hidden until the “显示作废记录” switch is enabled.
 
-- [ ] **Step 2: Implement field settings**
+- [x] **Step 2: Implement field settings**
 
 Show system fields with a lock icon and custom fields with an archive action. Creation trims and previews the normalized name; archive uses a confirmation dialog that states historical records remain. Archived fields are absent from new forms but can still appear in history snapshots.
 
@@ -399,7 +399,7 @@ return fields.map((field) => (
 ));
 ```
 
-- [ ] **Step 3: Implement the authorization form**
+- [x] **Step 3: Implement the authorization form**
 
 Use a three-segment control for ordinary/exclusive/buyout. Ordinary and exclusive render a searchable field combobox; buyout removes it from form values. `MoneyInput` retains the user's decimal string and submits only after server-compatible validation. The form receives `commercialVersion` and record `version`, generates an operation ID once per submission intent, and reuses it on network retry.
 
@@ -412,7 +412,7 @@ const formSchema = authorizationInputSchema.superRefine((value, context) => {
 
 When the server returns `AUTHORIZATION_HISTORY_CONFIRMATION_REQUIRED`, open a dialog listing existing effective count and recent records. Resubmit the same values and operation intent with `historyConfirmed=true` only after explicit confirmation. A stale-state response closes confirmation, refetches the whole tab and requires a new user action.
 
-- [ ] **Step 4: Add inspector tabs and mutation behavior**
+- [x] **Step 4: Add inspector tabs and mutation behavior**
 
 Use Radix Tabs with “基本信息” and “商业授权”. The commercial tab renders status, lifetime effective income, effective count, add action and paged history. Edit/void/restore live in each row menu. Mutations invalidate pattern detail, active library lists, authorization history and dashboard keys only after success; there is no optimistic commercial write.
 
@@ -425,7 +425,7 @@ await Promise.all([
 ]);
 ```
 
-- [ ] **Step 5: Verify accessibility and commit**
+- [x] **Step 5: Verify accessibility and commit**
 
 ```bash
 npm test -- src/features/authorizations/field-settings.test.tsx src/features/authorizations/authorization-form.test.tsx src/features/authorizations/authorization-tab.test.tsx

@@ -1,11 +1,11 @@
 "use client";
 
+import * as Tabs from "@radix-ui/react-tabs";
 import {
   X,
   FolderInput,
   Heart,
   HeartOff,
-  Layers3,
   Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -13,6 +13,7 @@ import { ResponsivePanel } from "@/components/responsive-panel";
 
 import type { PatternQuery } from "@/features/patterns/contracts";
 import { TagPicker } from "@/features/tags/tag-picker";
+import { AuthorizationTab } from "@/features/authorizations/authorization-tab";
 
 import { IconButton } from "./icon-button";
 import type { PatternItem } from "./library-types";
@@ -146,7 +147,7 @@ export function Inspector({
     <InspectorPanel onCollapse={onCollapse}>
       <header className="inspector-header">
         <div>
-          <span>基本信息</span>
+          <span>图案检查器</span>
           <strong title={pattern.name}>{pattern.name}</strong>
         </div>
         <IconButton label="收起检查器" onClick={onCollapse}>
@@ -154,88 +155,98 @@ export function Inspector({
         </IconButton>
       </header>
       <div className="inspector-scroll">
-        <SelectionActions
-          activeQuery={activeQuery}
-          patterns={[pattern]}
-          compact
-        />
-        <section className="inspector-section">
-          <label className="inspector-field">
-            <span>图案名称</span>
-            <input
-              aria-label="图案名称"
-              maxLength={160}
-              value={name}
-              onBlur={() => void saveName(name)}
-              onChange={(event) => {
-                const nextName = event.target.value;
-                latestDraft.current = nextName;
-                setName(nextName);
-                setSaveError(null);
-                scheduleNameSave(nextName);
-              }}
+        <Tabs.Root className="inspector-tabs" defaultValue="details">
+          <Tabs.List className="inspector-tab-list" aria-label="图案信息视图">
+            <Tabs.Trigger value="details">基本信息</Tabs.Trigger>
+            <Tabs.Trigger value="authorizations">商业授权</Tabs.Trigger>
+          </Tabs.List>
+          <Tabs.Content value="details" className="inspector-tab-content">
+            <SelectionActions
+              activeQuery={activeQuery}
+              patterns={[pattern]}
+              compact
             />
-          </label>
-          {saveError ? (
-            <p role="alert">
-              {saveError === "empty"
-                ? "名称不能为空"
-                : "名称未能保存，已恢复原值"}
-            </p>
-          ) : null}
-          <button
-            className="inspector-favorite"
-            type="button"
-            aria-pressed={pattern.isFavorite}
-            onClick={() =>
-              mutation.mutatePattern({
-                patternId: pattern.id,
-                patch: {
-                  version: pattern.version,
-                  isFavorite: !pattern.isFavorite,
-                },
-              })
-            }
+            <section className="inspector-section">
+              <label className="inspector-field">
+                <span>图案名称</span>
+                <input
+                  aria-label="图案名称"
+                  maxLength={160}
+                  value={name}
+                  onBlur={() => void saveName(name)}
+                  onChange={(event) => {
+                    const nextName = event.target.value;
+                    latestDraft.current = nextName;
+                    setName(nextName);
+                    setSaveError(null);
+                    scheduleNameSave(nextName);
+                  }}
+                />
+              </label>
+              {saveError ? (
+                <p role="alert">
+                  {saveError === "empty"
+                    ? "名称不能为空"
+                    : "名称未能保存，已恢复原值"}
+                </p>
+              ) : null}
+              <button
+                className="inspector-favorite"
+                type="button"
+                aria-pressed={pattern.isFavorite}
+                onClick={() =>
+                  mutation.mutatePattern({
+                    patternId: pattern.id,
+                    patch: {
+                      version: pattern.version,
+                      isFavorite: !pattern.isFavorite,
+                    },
+                  })
+                }
+              >
+                <Heart
+                  aria-hidden="true"
+                  fill={pattern.isFavorite ? "currentColor" : "none"}
+                />
+                {pattern.isFavorite ? "已收藏" : "添加收藏"}
+              </button>
+              <dl className="pattern-facts">
+                <div>
+                  <dt>格式</dt>
+                  <dd>{pattern.extension.toUpperCase()}</dd>
+                </div>
+                <div>
+                  <dt>原始文件</dt>
+                  <dd title={pattern.originalFilename}>
+                    {pattern.originalFilename}
+                  </dd>
+                </div>
+                <div>
+                  <dt>预览</dt>
+                  <dd>{previewLabel(pattern.previewStatus)}</dd>
+                </div>
+                <div>
+                  <dt>更新时间</dt>
+                  <dd>
+                    {new Intl.DateTimeFormat("zh-CN").format(
+                      new Date(pattern.updatedAt),
+                    )}
+                  </dd>
+                </div>
+              </dl>
+            </section>
+            <TagPicker activeQuery={activeQuery} patternId={pattern.id} />
+          </Tabs.Content>
+          <Tabs.Content
+            value="authorizations"
+            className="inspector-tab-content"
           >
-            <Heart
-              aria-hidden="true"
-              fill={pattern.isFavorite ? "currentColor" : "none"}
+            <AuthorizationTab
+              disabled={pattern.status !== "ready"}
+              patternId={pattern.id}
             />
-            {pattern.isFavorite ? "已收藏" : "添加收藏"}
-          </button>
-          <dl className="pattern-facts">
-            <div>
-              <dt>格式</dt>
-              <dd>{pattern.extension.toUpperCase()}</dd>
-            </div>
-            <div>
-              <dt>原始文件</dt>
-              <dd title={pattern.originalFilename}>
-                {pattern.originalFilename}
-              </dd>
-            </div>
-            <div>
-              <dt>预览</dt>
-              <dd>{previewLabel(pattern.previewStatus)}</dd>
-            </div>
-            <div>
-              <dt>更新时间</dt>
-              <dd>
-                {new Intl.DateTimeFormat("zh-CN").format(
-                  new Date(pattern.updatedAt),
-                )}
-              </dd>
-            </div>
-          </dl>
-        </section>
-        <TagPicker activeQuery={activeQuery} patternId={pattern.id} />
-        <section className="inspector-section inspector-coming-soon">
-          <div className="inspector-section-heading">
-            <h3>商业授权</h3>
-            <Layers3 aria-hidden="true" />
-          </div>
-          <p>商业授权记录将在下一阶段接入。</p>
-        </section>
+          </Tabs.Content>
+        </Tabs.Root>
       </div>
     </InspectorPanel>
   );
