@@ -301,7 +301,7 @@ git commit -m "feat: enforce authorization transactions"
 - Test: `src/app/api/patterns/[patternId]/authorizations/route.test.ts`
 - Test: `src/app/api/authorizations/[authorizationId]/route.test.ts`
 
-- [ ] **Step 1: Write failing transport and authorization tests**
+- [x] **Step 1: Write failing transport and authorization tests**
 
 Test 401 without a session, 400 for invalid money/date/type/field combinations, 404 for cross-owner IDs, 409 for every stable business code, and 200 replay for duplicate operation IDs. Assert a request body containing `ownerId` cannot redirect ownership.
 
@@ -321,7 +321,7 @@ const payload = {
 };
 ```
 
-- [ ] **Step 2: Implement Zod transport schemas and DTO conversion**
+- [x] **Step 2: Implement Zod transport schemas and DTO conversion**
 
 Create and edit transport schemas accept `priceYuan` as a string, parse on the server, and never accept `priceFen` from the browser. DTOs return `priceFen` and aggregate money as base-10 strings plus display-ready yuan strings. Dates remain `YYYY-MM-DD` strings, not midnight timestamps.
 
@@ -340,7 +340,7 @@ export const authorizationInputSchema = z.object({
 });
 ```
 
-- [ ] **Step 3: Implement thin authenticated handlers**
+- [x] **Step 3: Implement thin authenticated handlers**
 
 Every handler uses `requireUser`, validates path params and body, delegates to one service method, and returns stable error JSON through `withRoute`. List history uses cursor pagination ordered by `authorizedOn desc, createdAt desc, id desc` and supports `includeVoid=false` by default.
 
@@ -353,7 +353,7 @@ export const POST = withRoute(async (request: Request, context: RouteContext) =>
 });
 ```
 
-- [ ] **Step 4: Verify and commit the API surface**
+- [x] **Step 4: Verify and commit the API surface**
 
 ```bash
 npm test -- src/app/api/authorization-fields src/app/api/patterns/'[patternId]'/authorizations src/app/api/authorizations

@@ -1,7 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { ZodError } from "zod";
+import { z, ZodError } from "zod";
 
 import { normalizedUuidSchema } from "@/features/storage/identifiers";
 import { nextChangeSeq } from "@/lib/db/change-seq";
@@ -18,8 +18,11 @@ import {
   advancePatternCommercialVersion,
   editAuthorizationRow,
   getAuthorizationReference,
+  getAuthorizationSummaryRow,
+  getCommercialPatternReadRow,
   getVisibleAuthorizationFieldRow,
   insertAuthorizationRow,
+  listAuthorizationHistoryRows,
   listActiveAuthorizationRows,
   lockAuthorizationRow,
   lockCommercialPattern,
@@ -27,6 +30,7 @@ import {
   type AuthorizationRow,
   type CommercialPatternRow,
 } from "./authorization-repository";
+import { resolveCommercialState } from "./commercial-state";
 import {
   authorizationCreateMutationSchema,
   authorizationEditMutationSchema,
@@ -72,6 +76,19 @@ type PreparedAuthorization = Omit<AuthorizationDetails, "priceYuan"> & {
 
 export type AuthorizationDto = ReturnType<typeof toAuthorizationDto>;
 
+const historyCursorSchema = z.object({
+  authorizedOn: z.iso.date(),
+  createdAt: z.string().datetime(),
+  id: normalizedUuidSchema,
+});
+
+const authorizationHistoryQuerySchema = z.object({
+  patternId: normalizedUuidSchema,
+  includeVoid: z.boolean().default(false),
+  limit: z.number().int().min(1).max(100).default(50),
+  cursor: z.string().min(1).max(2048).optional(),
+});
+
 function toAuthorizationDto(row: AuthorizationRow) {
   return {
     id: row.id,
@@ -101,6 +118,31 @@ function parseOrValidationError<T>(parse: () => T): T {
     if (error instanceof ZodError) throw validationError();
     throw error;
   }
+}
+
+function decodeHistoryCursor(value: string) {
+  try {
+    const parsed = historyCursorSchema.parse(
+      JSON.parse(Buffer.from(value, "base64url").toString("utf8")),
+    );
+    return {
+      authorizedOn: parsed.authorizedOn,
+      createdAt: new Date(parsed.createdAt),
+      id: parsed.id,
+    };
+  } catch {
+    throw new AppError("INVALID_CURSOR", 400, "Invalid cursor");
+  }
+}
+
+function encodeHistoryCursor(row: AuthorizationRow) {
+  return Buffer.from(
+    JSON.stringify({
+      authorizedOn: row.authorizedOn,
+      createdAt: row.createdAt.toISOString(),
+      id: row.id,
+    }),
+  ).toString("base64url");
 }
 
 function notFound(message = "Authorization not found"): never {
@@ -315,6 +357,58 @@ async function finishCommercialMutation(
     result,
   );
   return result;
+}
+
+export async function listAuthorizations(input: {
+  ownerId: string;
+  patternId: string;
+  includeVoid?: boolean;
+  limit?: number;
+  cursor?: string;
+}) {
+  const query = parseOrValidationError(() =>
+    authorizationHistoryQuerySchema.parse({
+      patternId: input.patternId,
+      includeVoid: input.includeVoid,
+      limit: input.limit,
+      cursor: input.cursor,
+    }),
+  );
+  const pattern = await getCommercialPatternReadRow(
+    input.ownerId,
+    query.patternId,
+  );
+  if (!pattern) notFound("Pattern not found");
+
+  const [rows, summary] = await Promise.all([
+    listAuthorizationHistoryRows({
+      ownerId: input.ownerId,
+      patternId: query.patternId,
+      includeVoid: query.includeVoid,
+      limit: query.limit,
+      cursor: query.cursor ? decodeHistoryCursor(query.cursor) : undefined,
+    }),
+    getAuthorizationSummaryRow(input.ownerId, query.patternId),
+  ]);
+  if (!summary) throw new Error("AUTHORIZATION_SUMMARY_MISSING");
+
+  const hasMore = rows.length > query.limit;
+  const page = rows.slice(0, query.limit);
+  const last = page.at(-1);
+  return {
+    items: page.map(toAuthorizationDto),
+    nextCursor: hasMore && last ? encodeHistoryCursor(last) : null,
+    commercialVersion: pattern.commercialVersion,
+    summary: {
+      state: resolveCommercialState([
+        ...(summary.hasStandard ? (["standard"] as const) : []),
+        ...(summary.hasExclusive ? (["field_exclusive"] as const) : []),
+        ...(summary.hasBuyout ? (["global_buyout"] as const) : []),
+      ]),
+      activeCount: summary.activeCount,
+      revenueFen: summary.revenueFen,
+    },
+  };
 }
 
 export async function createAuthorization(input: CreateAuthorizationInput) {

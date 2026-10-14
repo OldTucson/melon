@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, desc, eq, or, sql } from "drizzle-orm";
+import { and, desc, eq, lt, ne, or, sql, type SQL } from "drizzle-orm";
 
 import { db, type DbTransaction } from "@/lib/db/client";
 import {
@@ -267,3 +267,98 @@ export async function getAuthorizationRow(
   return row;
 }
 
+export async function getCommercialPatternReadRow(
+  ownerId: string,
+  patternId: string,
+) {
+  const [row] = await db
+    .select({
+      id: patterns.id,
+      status: patterns.status,
+      commercialVersion: patterns.commercialVersion,
+    })
+    .from(patterns)
+    .where(
+      and(
+        eq(patterns.ownerId, ownerId),
+        eq(patterns.id, patternId),
+        ne(patterns.status, "deleted"),
+      ),
+    )
+    .limit(1);
+  return row;
+}
+
+export type AuthorizationHistoryCursor = {
+  authorizedOn: string;
+  createdAt: Date;
+  id: string;
+};
+
+export function listAuthorizationHistoryRows(input: {
+  ownerId: string;
+  patternId: string;
+  includeVoid: boolean;
+  limit: number;
+  cursor?: AuthorizationHistoryCursor;
+}) {
+  const predicates: SQL[] = [
+    eq(authorizations.ownerId, input.ownerId),
+    eq(authorizations.patternId, input.patternId),
+  ];
+  if (!input.includeVoid) predicates.push(eq(authorizations.status, "active"));
+  if (input.cursor) {
+    predicates.push(
+      or(
+        lt(authorizations.authorizedOn, input.cursor.authorizedOn),
+        and(
+          eq(authorizations.authorizedOn, input.cursor.authorizedOn),
+          lt(authorizations.createdAt, input.cursor.createdAt),
+        ),
+        and(
+          eq(authorizations.authorizedOn, input.cursor.authorizedOn),
+          eq(authorizations.createdAt, input.cursor.createdAt),
+          lt(authorizations.id, input.cursor.id),
+        ),
+      )!,
+    );
+  }
+
+  return db
+    .select()
+    .from(authorizations)
+    .where(and(...predicates))
+    .orderBy(
+      desc(authorizations.authorizedOn),
+      desc(authorizations.createdAt),
+      desc(authorizations.id),
+    )
+    .limit(input.limit + 1);
+}
+
+type AuthorizationSummaryRow = {
+  activeCount: number;
+  revenueFen: string;
+  hasStandard: boolean;
+  hasExclusive: boolean;
+  hasBuyout: boolean;
+};
+
+export async function getAuthorizationSummaryRow(
+  ownerId: string,
+  patternId: string,
+) {
+  const [row] = await db.execute<AuthorizationSummaryRow>(sql`
+    select
+      count(*)::int as "activeCount",
+      coalesce(sum(price_fen), 0)::text as "revenueFen",
+      coalesce(bool_or(kind = 'standard'::authorization_kind), false) as "hasStandard",
+      coalesce(bool_or(kind = 'field_exclusive'::authorization_kind), false) as "hasExclusive",
+      coalesce(bool_or(kind = 'global_buyout'::authorization_kind), false) as "hasBuyout"
+    from authorizations
+    where owner_id = ${ownerId}
+      and pattern_id = ${patternId}
+      and status = 'active'::authorization_status
+  `);
+  return row;
+}
