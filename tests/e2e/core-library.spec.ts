@@ -19,17 +19,28 @@ test("uploads, tags, filters, previews, favorites, and downloads", async ({
   });
 
   await expect(page.getByText("上传完成")).toBeVisible();
+  const inspectorDialog = page.getByRole("dialog", { name: "图案检查器" });
   let card = page.getByRole("listitem", {
     name: new RegExp(filename.replace(".png", ""), "i"),
   });
-  await expect(card).toBeVisible();
+  await expect
+    .poll(async () => {
+      const [inspectorVisible, cardVisible] = await Promise.all([
+        inspectorDialog.isVisible(),
+        card.isVisible(),
+      ]);
+      return inspectorVisible || cardVisible;
+    })
+    .toBe(true);
+  const inspectorIsModal = await inspectorDialog.isVisible();
+  if (!inspectorIsModal) await expect(card).toBeVisible();
 
   const nameInput = page.getByLabel("图案名称");
   await expect(nameInput).toBeVisible();
   await nameInput.fill(patternName);
   await nameInput.press("Tab");
   card = page.getByRole("listitem", { name: new RegExp(patternName, "i") });
-  await expect(card).toBeVisible();
+  if (!inspectorIsModal) await expect(card).toBeVisible();
 
   const createTag = page.getByRole("button", { name: "创建标签" });
   await expect(createTag).toBeEnabled();
@@ -37,6 +48,12 @@ test("uploads, tags, filters, previews, favorites, and downloads", async ({
   await page.getByLabel("标签名称").fill(tagName);
   await page.getByRole("button", { name: "保存并添加标签" }).click();
   await expect(page.getByRole("checkbox", { name: tagName })).toBeChecked();
+
+  if (inspectorIsModal) {
+    await inspectorDialog.getByRole("button", { name: "收起检查器" }).click();
+    await expect(inspectorDialog).toBeHidden();
+  }
+  await expect(card).toBeVisible();
 
   await page.getByRole("button", { name: "筛选标签" }).click();
   await page.getByRole("menuitemcheckbox", { name: tagName }).click();
