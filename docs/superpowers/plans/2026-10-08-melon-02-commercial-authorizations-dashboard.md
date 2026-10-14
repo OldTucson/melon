@@ -206,7 +206,7 @@ git commit -m "feat: add authorization field and money rules"
 - Test: `src/features/authorizations/authorization-service.integration.test.ts`
 - Test: `src/features/authorizations/authorization-concurrency.integration.test.ts`
 
-- [ ] **Step 1: Write failing rule-matrix tests**
+- [x] **Step 1: Write failing rule-matrix tests**
 
 Cover each row of this matrix:
 
@@ -233,7 +233,7 @@ it.each([
 });
 ```
 
-- [ ] **Step 2: Implement the shared locked mutation transaction**
+- [x] **Step 2: Implement the shared locked mutation transaction**
 
 All create/edit/void/restore methods call one internal boundary:
 
@@ -250,7 +250,7 @@ async function withLockedCommercialState<T>(input: CommercialMutationKey, run: (
 
 `lockOwnedPattern` issues `select ... for update`. Before starting, the public service returns any stored `(ownerId, operationId)` replay result. Create/edit/restore compare `pattern.commercialVersion` immediately after locking. Void first loads the owned row: if already void, it returns the current DTO without a version comparison or new change event; otherwise it compares both versions. A successful transaction validates the rule matrix, writes the authorization, increments `commercialVersion`, claims operation ID, obtains `changeSeq`, writes `ChangeLog`, then returns an exact DTO.
 
-- [ ] **Step 3: Implement create and edit semantics**
+- [x] **Step 3: Implement create and edit semantics**
 
 Create validates active field ownership, date, amount, history confirmation and kind/field shape. Edit first checks record `version`, then validates the proposed full row against the active set excluding its own ID. Changing field updates `fieldNameSnapshot`; changing kind to global buyout sets `fieldId=null` and snapshot null.
 
@@ -264,7 +264,7 @@ const proposed = {
 await assertAuthorizationSetIsValid({ proposed, active: activeRows.filter((row) => row.id !== current.id), historyConfirmed });
 ```
 
-- [ ] **Step 4: Implement void and restore semantics**
+- [x] **Step 4: Implement void and restore semantics**
 
 Void changes active to void and sets `voidedAt`; an already-void record returns its current DTO without a second change event. Restore validates the archived field is still selectable, reruns exclusivity and buyout rules, sets active and clears `voidedAt`. A conflict returns `AUTHORIZATION_RESTORE_CONFLICT` without mutation.
 
@@ -276,7 +276,7 @@ const next = action === "void"
   : { status: "active" as const, voidedAt: null };
 ```
 
-- [ ] **Step 5: Prove serialization under concurrency and commit**
+- [x] **Step 5: Prove serialization under concurrency and commit**
 
 Run two database connections with barriers so a standard grant and buyout target the same version concurrently. Assert only the transaction that acquires a valid state commits and no illegal final set exists.
 
