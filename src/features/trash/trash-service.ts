@@ -18,6 +18,11 @@ import {
   parseFolderBatchRestoreMutation,
   parsePatternRestoreMutation,
 } from "./contracts";
+import {
+  listPatternCommercialDeletionImpacts,
+  sumCommercialDeletionImpacts,
+  type CommercialDeletionImpact,
+} from "./commercial-impact";
 import { parsePendingPurgeOperation } from "./trash-purge-service";
 import {
   findNonDeletedFolderBatchIds,
@@ -51,7 +56,7 @@ const restorablePatternStatusSet = new Set<string>(restorablePatternStatuses);
 
 export type TrashState = "trashed" | "deleting";
 
-export type TrashPatternDto = {
+export type TrashPatternDto = CommercialDeletionImpact & {
   id: string;
   name: string;
   originalFilename: string;
@@ -67,7 +72,7 @@ export type TrashPatternDto = {
   trashedAt: string;
 };
 
-export type TrashFolderBatchDto = {
+export type TrashFolderBatchDto = CommercialDeletionImpact & {
   trashBatchId: string;
   rootFolderId: string;
   rootFolderName: string;
@@ -80,7 +85,7 @@ export type TrashFolderBatchDto = {
   expiresAt: string;
 };
 
-export type TrashPatternBatchDto = {
+export type TrashPatternBatchDto = CommercialDeletionImpact & {
   trashBatchId: string;
   state: TrashState;
   lastErrorCode: string | null;
@@ -224,12 +229,16 @@ function batchDates(
   };
 }
 
-function toTrashPatternDto(row: TrashPatternReadRow): TrashPatternDto {
+function toTrashPatternDto(
+  row: TrashPatternReadRow,
+  impact: CommercialDeletionImpact,
+): TrashPatternDto {
   if (row.trashedAt === null) internalError("Trash pattern timestamp is invalid");
   if (row.status !== "trashed" && row.status !== "deleting") {
     internalError("Trash pattern state is invalid");
   }
   return {
+    ...impact,
     id: row.id,
     name: row.name,
     originalFilename: row.originalFilename,
@@ -259,8 +268,20 @@ function sortBatches<T extends { trashedAt: string; trashBatchId: string }>(
 
 export async function listTrash(input: { ownerId: string }): Promise<TrashListDto> {
   const rows = await db.transaction(
-    (tx) => listTrashRows(input.ownerId, tx),
+    async (tx) => {
+      const trashRows = await listTrashRows(input.ownerId, tx);
+      const patternIds = trashRows.patterns.map((pattern) => pattern.id).sort(compareIds);
+      const commercialImpacts = await listPatternCommercialDeletionImpacts(
+        input.ownerId,
+        patternIds,
+        tx,
+      );
+      return { ...trashRows, commercialImpacts };
+    },
     { isolationLevel: "repeatable read", accessMode: "read only" },
+  );
+  const commercialImpactByPatternId = new Map(
+    rows.commercialImpacts.map(({ patternId, ...impact }) => [patternId, impact]),
   );
   const foldersByBatch = new Map<string, TrashFolderRow[]>();
   const folderIdsByBatch = new Map<string, Set<string>>();
@@ -396,7 +417,15 @@ export async function listTrash(input: { ownerId: string }): Promise<TrashListDt
     if (isDeleting !== Boolean(purgeOperationId)) {
       internalError("Trash folder batch purge operation is invalid");
     }
+    const commercialImpact = sumCommercialDeletionImpacts(
+      patternRows.map((pattern) => {
+        const impact = commercialImpactByPatternId.get(pattern.id);
+        if (!impact) internalError("Trash pattern commercial impact is missing");
+        return impact;
+      }),
+    );
     folderBatches.push({
+      ...commercialImpact,
       trashBatchId,
       rootFolderId: roots[0]!.id,
       rootFolderName: roots[0]!.name,
@@ -433,7 +462,13 @@ export async function listTrash(input: { ownerId: string }): Promise<TrashListDt
       internalError("Trash pattern batch has multiple purge operations");
     }
     const purgeOperationId = [...deletingOperationIds][0] ?? null;
+    const orderedImpacts = orderedPatterns.map((pattern) => {
+      const impact = commercialImpactByPatternId.get(pattern.id);
+      if (!impact) internalError("Trash pattern commercial impact is missing");
+      return impact;
+    });
     patternBatches.push({
+      ...sumCommercialDeletionImpacts(orderedImpacts),
       trashBatchId,
       state: patternRows.some((row) => row.status === "deleting")
         ? "deleting"
@@ -441,7 +476,9 @@ export async function listTrash(input: { ownerId: string }): Promise<TrashListDt
       lastErrorCode: stableErrorCode(patternRows),
       purgeOperationId,
       ...batchDates(patternRows),
-      patterns: orderedPatterns.map(toTrashPatternDto),
+      patterns: orderedPatterns.map((pattern, index) =>
+        toTrashPatternDto(pattern, orderedImpacts[index]!),
+      ),
     });
   }
 

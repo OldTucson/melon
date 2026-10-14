@@ -5,6 +5,8 @@ import { ZodError } from "zod";
 import { ApiResponseError, readApiResponse } from "@/lib/query/client";
 import { queryKeys } from "@/lib/query/keys";
 import { useQueryOwnerId } from "@/lib/query/provider";
+import { dashboardKeys } from "@/features/analytics/query-keys";
+import { authorizationKeys } from "@/features/authorizations/query-keys";
 import {
   patternRestoreMutationSchema,
   folderBatchRestoreMutationSchema,
@@ -149,19 +151,27 @@ export function useTrashMutation() {
       client.invalidateQueries({ queryKey: queryKeys.trash(ownerId) }),
       client.invalidateQueries({ queryKey: queryKeys.folders(ownerId) }),
       client.invalidateQueries({ queryKey: ["owner", ownerId, "patterns"] }),
+      client.invalidateQueries({ queryKey: dashboardKeys.all(ownerId) }),
       ...(intent.kind === "patterns"
-        ? intent.patternIds.map((id) =>
+        ? intent.patternIds.flatMap((id) => [
             client.invalidateQueries({
               queryKey: queryKeys.pattern(ownerId, id),
             }),
-          )
+            client.invalidateQueries({
+              queryKey: authorizationKeys.historyRoot(ownerId, id),
+            }),
+          ])
         : [
             client.invalidateQueries({
               queryKey: ["owner", ownerId, "pattern"],
             }),
+            client.invalidateQueries({
+              queryKey: authorizationKeys.all(ownerId),
+            }),
           ]),
     ]);
   return useMutation({
+    networkMode: "always",
     mutationFn: async (intent: TrashIntent) => {
       if (intent.kind === "patterns")
         return intent.action === "restore"

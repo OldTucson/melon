@@ -445,6 +445,10 @@ describe("trash read model and restore services", () => {
         purgeOperationId: folderPurgeOperationId,
         trashedAt: newest.toISOString(),
         expiresAt: new Date(earliest.getTime() + 30 * DAY_MS).toISOString(),
+        activeAuthorizationCount: 0,
+        activeRevenueFen: "0",
+        totalAuthorizationCount: 0,
+        assetCount: 1,
       },
       {
         trashBatchId: zeroPatternBatchId,
@@ -457,6 +461,10 @@ describe("trash read model and restore services", () => {
         purgeOperationId: null,
         trashedAt: middle.toISOString(),
         expiresAt: new Date(middle.getTime() + 30 * DAY_MS).toISOString(),
+        activeAuthorizationCount: 0,
+        activeRevenueFen: "0",
+        totalAuthorizationCount: 0,
+        assetCount: 0,
       },
     ]);
     expect(result.patternBatches).toEqual([
@@ -467,6 +475,10 @@ describe("trash read model and restore services", () => {
         purgeOperationId: patternPurgeOperationId,
         trashedAt: newest.toISOString(),
         expiresAt: new Date(middle.getTime() + 30 * DAY_MS).toISOString(),
+        activeAuthorizationCount: 0,
+        activeRevenueFen: "0",
+        totalAuthorizationCount: 0,
+        assetCount: 0,
         patterns: [
           {
             id: ordinaryHighId,
@@ -482,6 +494,10 @@ describe("trash read model and restore services", () => {
             version: 0,
             lastErrorCode: "A_ERROR",
             trashedAt: newest.toISOString(),
+            activeAuthorizationCount: 0,
+            activeRevenueFen: "0",
+            totalAuthorizationCount: 0,
+            assetCount: 0,
           },
           {
             id: ordinaryLowId,
@@ -497,6 +513,10 @@ describe("trash read model and restore services", () => {
             version: 0,
             lastErrorCode: "Z_ERROR",
             trashedAt: middle.toISOString(),
+            activeAuthorizationCount: 0,
+            activeRevenueFen: "0",
+            totalAuthorizationCount: 0,
+            assetCount: 0,
           },
         ],
       },

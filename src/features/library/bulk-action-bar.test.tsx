@@ -12,6 +12,7 @@ import type { PatternItem } from "./library-types";
 import { BulkActionBar } from "./bulk-action-bar";
 import { useSelectionStore } from "./selection-store";
 import { useCreateFolderMutation } from "@/features/folders/folder-mutations";
+import { dashboardKeys } from "@/features/analytics/query-keys";
 
 const ownerId = "10000000-0000-4000-8000-000000000000";
 const query = toPatternQuery(parseLibrarySearchParams(new URLSearchParams()));
@@ -42,6 +43,13 @@ const items = [1, 2].map((index): PatternItem => ({
   createdAt: "2026-10-08T00:00:00.000Z",
   updatedAt: "2026-10-08T00:00:00.000Z",
 }));
+const deletionImpact = {
+  activeAuthorizationCount: 2,
+  activeRevenueFen: "100000",
+  totalAuthorizationCount: 3,
+  assetCount: 4,
+  purgeOn: "2026-11-13T00:00:00.000Z",
+};
 
 function CreateFolderButton() {
   const mutation = useCreateFolderMutation();
@@ -51,7 +59,10 @@ function CreateFolderButton() {
   })}>创建测试文件夹</button>;
 }
 
-function renderBar(includeCreator = false) {
+function renderBar(
+  includeCreator = false,
+  loadedPatterns: PatternItem[] = items,
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return {
     client,
@@ -62,7 +73,7 @@ function renderBar(includeCreator = false) {
             {includeCreator && <CreateFolderButton />}
             <BulkActionBar
               activeQuery={query}
-              loadedPatterns={items}
+              loadedPatterns={loadedPatterns}
             />
           </Tooltip.Provider>
         </QueryOwnerProvider>
@@ -117,22 +128,155 @@ describe("bulk action bar", () => {
     expect(client.getQueryData<Array<{id: string}>>(queryKeys.folders(ownerId))?.map(folder => folder.id)).toEqual([realId]);
   });
 
-  it("cancels trash without sending a request", async () => {
+  it("loads authoritative deletion impact and cancels without trashing", async () => {
     const user = userEvent.setup();
-    vi.stubGlobal("fetch", vi.fn());
-    renderBar();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === "/api/patterns/deletion-impact") {
+          return Response.json(deletionImpact);
+        }
+        throw new Error(`Unexpected request: ${String(input)}`);
+      }),
+    );
+    renderBar(
+      false,
+      items.map((item, index) => ({
+        ...item,
+        commercialSummary: {
+          state: "standard",
+          activeCount: 1,
+          revenueFen: index === 0 ? "60000" : "40000",
+        },
+      })),
+    );
 
     await user.click(screen.getByRole("button", { name: "移入回收站" }));
-    expect(screen.getByRole("dialog", { name: "移入回收站" })).toHaveTextContent(
-      "2 个图案",
+    const dialog = screen.getByRole("dialog", { name: "移入回收站" });
+    expect(dialog).toHaveTextContent("2 个图案");
+    expect(await screen.findByText("有效授权 2 笔 · ¥1,000.00")).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("共 3 条授权记录 · 4 个文件");
+    expect(dialog).toHaveTextContent("预计永久删除：");
+    expect(dialog).toHaveTextContent(
+      "永久删除后，授权历史和过去看板收入也会删除。",
     );
     await user.click(screen.getByRole("button", { name: "取消" }));
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/patterns/deletion-impact",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ patternIds: items.map((item) => item.id) }),
+      }),
+    );
     expect(fetch).not.toHaveBeenCalledWith(
       "/api/patterns/batch",
       expect.anything(),
     );
+  });
+
+  it("blocks confirmation until authoritative deletion impact loads", async () => {
+    const user = userEvent.setup();
+    let finish!: (response: Response) => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            finish = resolve;
+          }),
+      ),
+    );
+    renderBar();
+
+    await user.click(screen.getByRole("button", { name: "移入回收站" }));
+    expect(
+      screen.getByRole("button", { name: "确认移入回收站" }),
+    ).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("正在核对授权和文件");
+
+    await act(async () => {
+      finish(
+        Response.json({
+          activeAuthorizationCount: 0,
+          activeRevenueFen: "0",
+          totalAuthorizationCount: 0,
+          assetCount: 2,
+          purgeOn: "2026-11-13T00:00:00.000Z",
+        }),
+      );
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "确认移入回收站" }),
+      ).toBeEnabled(),
+    );
+  });
+
+  it("keeps confirmation blocked after an impact request fails and recovers on retry", async () => {
+    const user = userEvent.setup();
+    let impactRequestCount = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) !== "/api/patterns/deletion-impact") {
+          throw new Error(`Unexpected request: ${String(input)}`);
+        }
+        impactRequestCount += 1;
+        if (impactRequestCount === 1) {
+          return Response.json(
+            { error: { code: "INTERNAL_ERROR" } },
+            { status: 500 },
+          );
+        }
+        return Response.json(deletionImpact);
+      }),
+    );
+    renderBar();
+
+    await user.click(screen.getByRole("button", { name: "移入回收站" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "无法核对删除影响，请重试。",
+    );
+    expect(
+      screen.getByRole("button", { name: "确认移入回收站" }),
+    ).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "重新核对" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "确认移入回收站" }),
+      ).toBeEnabled(),
+    );
+    expect(impactRequestCount).toBe(2);
+  });
+
+  it("rejects a deletion impact whose active count exceeds its total", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) !== "/api/patterns/deletion-impact") {
+          throw new Error(`Unexpected request: ${String(input)}`);
+        }
+        return Response.json({
+          ...deletionImpact,
+          activeAuthorizationCount: 4,
+          totalAuthorizationCount: 3,
+        });
+      }),
+    );
+    renderBar();
+
+    await user.click(screen.getByRole("button", { name: "移入回收站" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "无法核对删除影响，请重试。",
+    );
+    expect(
+      screen.getByRole("button", { name: "确认移入回收站" }),
+    ).toBeDisabled();
   });
 
   it("confirms trash and restores the exact server-confirmed patterns with a new operation ID", async () => {
@@ -141,6 +285,9 @@ describe("bulk action bar", () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "/api/folders") return Response.json([]);
+      if (url === "/api/patterns/deletion-impact") {
+        return Response.json(deletionImpact);
+      }
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       calls.push({ url, body });
       if (url === "/api/patterns/batch") {
@@ -162,6 +309,11 @@ describe("bulk action bar", () => {
     renderBar();
 
     await user.click(screen.getByRole("button", { name: "移入回收站" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "确认移入回收站" }),
+      ).toBeEnabled(),
+    );
     await user.click(screen.getByRole("button", { name: "确认移入回收站" }));
     expect(await screen.findByRole("status")).toHaveTextContent("已将 2 个图案移入回收站");
 
@@ -181,6 +333,9 @@ describe("bulk action bar", () => {
     const restoreCalls: Array<Record<string, unknown>> = [];
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url === "/api/patterns/deletion-impact") {
+        return Response.json(deletionImpact);
+      }
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       if (url === "/api/patterns/batch") {
         return Response.json({ patterns: items.map((item) => ({
@@ -212,6 +367,11 @@ describe("bulk action bar", () => {
     const { client } = renderBar();
 
     await user.click(screen.getByRole("button", { name: "移入回收站" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "确认移入回收站" }),
+      ).toBeEnabled(),
+    );
     await user.click(screen.getByRole("button", { name: "确认移入回收站" }));
     expect(await screen.findByRole("status")).toHaveTextContent("已将 2 个图案移入回收站");
     const invalidate = vi.spyOn(client, "invalidateQueries");
@@ -233,6 +393,9 @@ describe("bulk action bar", () => {
       queryKey: queryKeys.trash(ownerId),
       exact: true,
     });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: dashboardKeys.all(ownerId),
+    });
     for (const item of items) {
       expect(invalidate).toHaveBeenCalledWith({
         queryKey: queryKeys.pattern(ownerId, item.id),
@@ -246,16 +409,28 @@ describe("bulk action bar", () => {
     async (dismissal) => {
       const user = userEvent.setup();
       let resolve!: (response: Response) => void;
-      vi.stubGlobal("fetch", vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
-        new Promise<Response>((done) => {
-          resolve = (response) => done(response);
-          void init;
-        })));
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+          if (String(input) === "/api/patterns/deletion-impact") {
+            return Promise.resolve(Response.json(deletionImpact));
+          }
+          return new Promise<Response>((done) => {
+            resolve = (response) => done(response);
+            void init;
+          });
+        }),
+      );
       renderBar();
 
       await user.click(screen.getByRole("button", { name: "移入回收站" }));
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: "确认移入回收站" }),
+        ).toBeEnabled(),
+      );
       await user.click(screen.getByRole("button", { name: "确认移入回收站" }));
-      await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+      await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
       expect(screen.getByRole("dialog", { name: "移入回收站" })).toBeVisible();
 
       if (dismissal === "Escape") {
@@ -269,9 +444,12 @@ describe("bulk action bar", () => {
 
       expect(screen.getByRole("dialog", { name: "移入回收站" })).toBeVisible();
 
-      const body = JSON.parse(
-        String(vi.mocked(fetch).mock.calls[0]?.[1]?.body),
-      ) as { operationId: string };
+      const batchCall = vi
+        .mocked(fetch)
+        .mock.calls.find(([url]) => url === "/api/patterns/batch")!;
+      const body = JSON.parse(String(batchCall[1]?.body)) as {
+        operationId: string;
+      };
       await act(async () => {
         resolve(Response.json({ patterns: items.map((item) => ({
           ...item,

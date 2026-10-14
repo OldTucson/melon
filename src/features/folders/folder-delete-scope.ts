@@ -4,6 +4,16 @@ import { createHash } from "node:crypto";
 
 import type { FolderDeleteImpact } from "./contracts";
 
+export type FolderDeleteScope = Pick<
+  FolderDeleteImpact,
+  | "folderCount"
+  | "patternCount"
+  | "alreadyTrashedFolderCount"
+  | "alreadyTrashedPatternCount"
+  | "hasDeletingEntities"
+  | "scopeFingerprint"
+>;
+
 type ScopeEntity = { id: string; status: string };
 
 const canonicalScope = (entities: readonly ScopeEntity[]) =>
@@ -24,7 +34,7 @@ export function folderDeleteScopeFingerprintFromParts(
 export function buildFolderDeleteImpact(
   folders: readonly ScopeEntity[],
   patterns: readonly ScopeEntity[],
-): FolderDeleteImpact {
+): FolderDeleteScope {
   return {
     folderCount: folders.length,
     patternCount: patterns.length,

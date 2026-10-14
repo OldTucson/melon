@@ -39,6 +39,11 @@ export const folderDeleteImpactSchema = z
     alreadyTrashedPatternCount: z.number().int().nonnegative(),
     hasDeletingEntities: z.boolean(),
     scopeFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+    activeAuthorizationCount: z.number().int().nonnegative(),
+    activeRevenueFen: z.string().regex(/^(0|[1-9]\d*)$/),
+    totalAuthorizationCount: z.number().int().nonnegative(),
+    assetCount: z.number().int().nonnegative(),
+    purgeOn: z.string().datetime(),
   })
   .strict()
   .superRefine((impact, context) => {
@@ -54,6 +59,13 @@ export const folderDeleteImpactSchema = z
         code: "custom",
         path: ["alreadyTrashedPatternCount"],
         message: "Trashed pattern count exceeds pattern count",
+      });
+    }
+    if (impact.activeAuthorizationCount > impact.totalAuthorizationCount) {
+      context.addIssue({
+        code: "custom",
+        path: ["activeAuthorizationCount"],
+        message: "Active authorization count exceeds total count",
       });
     }
   });

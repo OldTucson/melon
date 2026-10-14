@@ -693,7 +693,7 @@ describe("folder tree trash service", () => {
     ).rejects.toMatchObject({
       code: "FOLDER_DELETE_SCOPE_CHANGED",
       status: 409,
-      details: latestImpact,
+      details: { ...latestImpact, purgeOn: expect.any(String) },
     });
     await expect(
       readFolders(ownerA, [rootId, replacementChildId]),

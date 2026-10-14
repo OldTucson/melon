@@ -2232,6 +2232,27 @@ textarea:focus-visible,
   margin-top: 8px;
 }
 
+.trash-commercial-impact {
+  display: grid;
+  gap: 5px;
+  margin-top: 14px;
+  padding: 12px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--danger) 7%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--danger) 22%, var(--border));
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.trash-commercial-impact span {
+  color: var(--text-muted);
+}
+
+.trash-commercial-impact p {
+  color: var(--danger);
+}
+
 .confirm-dialog-header h2,
 .confirm-dialog-header p {
   margin: 0;

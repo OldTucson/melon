@@ -55,7 +55,11 @@ const deleteImpactMatches = (
   left.alreadyTrashedFolderCount === right.alreadyTrashedFolderCount &&
   left.alreadyTrashedPatternCount === right.alreadyTrashedPatternCount &&
   left.hasDeletingEntities === right.hasDeletingEntities &&
-  left.scopeFingerprint === right.scopeFingerprint;
+  left.scopeFingerprint === right.scopeFingerprint &&
+  left.activeAuthorizationCount === right.activeAuthorizationCount &&
+  left.activeRevenueFen === right.activeRevenueFen &&
+  left.totalAuthorizationCount === right.totalAuthorizationCount &&
+  left.assetCount === right.assetCount;
 
 export function FolderTree() {
   const folders = useFoldersQuery(),

@@ -2,6 +2,7 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 import { Trash2 } from "lucide-react";
+import { formatFenForDisplay } from "@/features/authorizations/api";
 import type { FolderDeleteImpact } from "./folder-mutations";
 
 export function FolderDeleteDialog({
@@ -50,6 +51,27 @@ export function FolderDeleteDialog({
             </div>
           </header>
           <div className="folder-delete-details">
+            <div className="trash-commercial-impact">
+              <strong>
+                有效授权 {impact.activeAuthorizationCount} 笔 ·{" "}
+                {formatFenForDisplay(impact.activeRevenueFen)}
+              </strong>
+              <span>
+                共 {impact.totalAuthorizationCount} 条授权记录 ·{" "}
+                {impact.assetCount} 个文件
+              </span>
+              <span>
+                预计永久删除：
+                <time dateTime={impact.purgeOn}>
+                  {new Intl.DateTimeFormat("zh-CN").format(
+                    new Date(impact.purgeOn),
+                  )}
+                </time>
+              </span>
+              <p className="trash-commercial-warning">
+                永久删除后，授权历史和过去看板收入也会删除。
+              </p>
+            </div>
             {(impact.alreadyTrashedFolderCount > 0 ||
               impact.alreadyTrashedPatternCount > 0) && (
               <p>

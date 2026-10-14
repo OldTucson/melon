@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { onlineManager } from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -13,6 +14,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { QueryOwnerProvider } from "@/lib/query/provider";
 import { queryKeys } from "@/lib/query/keys";
 import { TrashView } from "./trash-view";
+import { dashboardKeys } from "@/features/analytics/query-keys";
+import { authorizationKeys } from "@/features/authorizations/query-keys";
 import {
   restorePatterns,
   purgePatterns,
@@ -43,6 +46,10 @@ const pattern = (n: number) => ({
   version: 1,
   lastErrorCode: null,
   trashedAt: date,
+  activeAuthorizationCount: 1,
+  activeRevenueFen: n === 1 ? "60000" : "40000",
+  totalAuthorizationCount: n === 1 ? 2 : 1,
+  assetCount: 1,
 });
 const data = (): TrashList => ({
   folderBatches: [
@@ -57,6 +64,10 @@ const data = (): TrashList => ({
       purgeOperationId: null,
       trashedAt: date,
       expiresAt: "2026-11-07T00:00:00.000Z",
+      activeAuthorizationCount: 2,
+      activeRevenueFen: "100000",
+      totalAuthorizationCount: 3,
+      assetCount: 4,
     },
   ],
   patternBatches: [
@@ -67,6 +78,10 @@ const data = (): TrashList => ({
       purgeOperationId: null,
       trashedAt: date,
       expiresAt: "2026-11-07T00:00:00.000Z",
+      activeAuthorizationCount: 2,
+      activeRevenueFen: "100000",
+      totalAuthorizationCount: 3,
+      assetCount: 2,
       patterns: [pattern(1), pattern(2)],
     },
   ],
@@ -107,7 +122,9 @@ beforeEach(() =>
   ),
 );
 afterEach(() => {
+  onlineManager.setOnline(true);
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -118,6 +135,9 @@ it("renders folder groups as one row and ordinary patterns as selectable rows", 
   expect(within(group).getByText("2 个文件夹 · 3 个图案")).toBeInTheDocument();
   expect(within(group).queryByRole("checkbox")).not.toBeInTheDocument();
   expect(within(group).getByText(/到期/)).toHaveTextContent("2026/11/7");
+  expect(within(group).getByText(/有效授权/)).toHaveTextContent(
+    "有效授权 2 笔 · ¥1,000.00",
+  );
   expect(screen.getAllByRole("checkbox")).toHaveLength(2);
 });
 it("selects and focuses an ordinary pattern from a dashboard deep link", async () => {
@@ -190,6 +210,12 @@ it("restores only checked ordinary patterns and invalidates owner caches after c
   expect(invalidate).toHaveBeenCalledWith({
     queryKey: queryKeys.pattern(ownerId, id(1)),
   });
+  expect(invalidate).toHaveBeenCalledWith({
+    queryKey: dashboardKeys.all(ownerId),
+  });
+  expect(invalidate).toHaveBeenCalledWith({
+    queryKey: authorizationKeys.historyRoot(ownerId, id(1)),
+  });
 });
 it("requires a second confirmation with precise objects/counts, supports cancel, and keeps pending rows visible", async () => {
   const { wrapper } = setup(data());
@@ -199,6 +225,15 @@ it("requires a second confirmation with precise objects/counts, supports cancel,
   expect(screen.getByRole("dialog")).toHaveTextContent("1 个图案");
   expect(screen.getByRole("dialog")).toHaveTextContent("图案1");
   expect(screen.getByRole("dialog")).toHaveTextContent("不可恢复");
+  expect(screen.getByRole("dialog")).toHaveTextContent(
+    "有效授权 1 笔 · ¥600.00",
+  );
+  expect(screen.getByRole("dialog")).toHaveTextContent(
+    "共 2 条授权记录 · 1 个文件",
+  );
+  expect(screen.getByRole("dialog")).toHaveTextContent(
+    "永久删除后，授权历史和过去看板收入也会删除。",
+  );
   fireEvent.click(screen.getByRole("button", { name: "取消" }));
   expect(fetch).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "永久删除所选" }));
@@ -210,6 +245,48 @@ it("requires a second confirmation with precise objects/counts, supports cancel,
   ).toEqual({ operationId: expect.any(String), patternIds: [id(1)] });
   expect(screen.getByLabelText("选择图案1")).toBeDisabled();
   expect(screen.getByText("正在永久删除...")).toBeInTheDocument();
+});
+
+it("disables permanent deletion while offline without sending a request", () => {
+  vi.spyOn(window.navigator, "onLine", "get").mockReturnValue(false);
+  const { wrapper } = setup(data());
+  render(<TrashView />, { wrapper });
+  fireEvent.click(screen.getByRole("checkbox", { name: "选择图案1" }));
+  fireEvent.click(screen.getByRole("button", { name: "永久删除所选" }));
+
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "永久删除需要联网，请恢复网络后重试",
+  );
+  expect(
+    screen.getByRole("button", { name: "确认永久删除" }),
+  ).toBeDisabled();
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it("executes trash mutations immediately instead of queueing them for reconnect", async () => {
+  const { wrapper } = setup(data());
+  const { result } = renderHook(() => useTrashMutation(), { wrapper });
+  vi.mocked(fetch).mockResolvedValue(
+    Response.json({
+      state: "complete",
+      deletedPatternCount: 1,
+      deletedFolderCount: 0,
+    }),
+  );
+  onlineManager.setOnline(false);
+
+  const request = result.current.mutateAsync({
+    kind: "patterns",
+    action: "purge",
+    operationId,
+    patternIds: [id(1)],
+  });
+  try {
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+  } finally {
+    onlineManager.setOnline(true);
+    await request;
+  }
 });
 
 it("keeps a 100-name permanent-delete confirmation in a bounded scroll region with its footer outside", () => {
@@ -254,6 +331,12 @@ it("restores and confirms a folder batch without exposing its patterns", async (
   fireEvent.click(group.getByRole("button", { name: "永久删除" }));
   expect(screen.getByRole("dialog")).toHaveTextContent("夏日果园");
   expect(screen.getByRole("dialog")).toHaveTextContent("2 个文件夹 · 3 个图案");
+  expect(screen.getByRole("dialog")).toHaveTextContent(
+    "有效授权 2 笔 · ¥1,000.00",
+  );
+  expect(screen.getByRole("dialog")).toHaveTextContent(
+    "共 3 条授权记录 · 4 个文件",
+  );
   fireEvent.click(screen.getByRole("button", { name: "取消" }));
   vi.mocked(fetch).mockImplementation((url) =>
     response(
@@ -589,6 +672,10 @@ it.each(["folder", "patterns"] as const)(
         trashBatchId: id(20 + n),
         state: "deleting",
         purgeOperationId: operationId,
+        activeAuthorizationCount: 2,
+        activeRevenueFen: n === 1 ? "100000" : "80000",
+        totalAuthorizationCount: n === 1 ? 3 : 2,
+        assetCount: 2,
         patterns: [{ ...pattern(n), status: "deleting" }, pattern(n + 10)],
       }));
     }

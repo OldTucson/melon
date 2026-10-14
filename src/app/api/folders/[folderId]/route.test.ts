@@ -34,6 +34,11 @@ const expectedImpact = {
   alreadyTrashedPatternCount: 0,
   hasDeletingEntities: false,
   scopeFingerprint: "a".repeat(64),
+  activeAuthorizationCount: 2,
+  activeRevenueFen: "100000",
+  totalAuthorizationCount: 3,
+  assetCount: 4,
+  purgeOn: "2026-11-07T00:00:00.000Z",
 };
 
 describe("folder item Route Handlers", () => {

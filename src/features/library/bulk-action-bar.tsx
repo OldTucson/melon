@@ -270,7 +270,7 @@ export function BulkActionBar({
       ) : null}
 
       <TrashPatternsDialog
-        count={count}
+        patterns={selected}
         isPending={mutation.isPending}
         open={trashOpen}
         onConfirm={() => void confirmTrash()}

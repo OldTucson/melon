@@ -12,6 +12,8 @@ import {
 } from "@/features/folders/folder-service";
 import { closeDatabase, db } from "@/lib/db/client";
 import {
+  assets,
+  authorizations,
   changeLog,
   folders,
   operations,
@@ -31,6 +33,13 @@ const libraryPatternStatuses = [
   "ready",
   "failed",
 ] as const satisfies readonly PatternStatus[];
+const emptyCommercialImpact = {
+  activeAuthorizationCount: 0,
+  activeRevenueFen: "0",
+  totalAuthorizationCount: 0,
+  assetCount: 0,
+  purgeOn: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+};
 
 const seedUser = async (email: string) => {
   const id = randomUUID();
@@ -199,8 +208,16 @@ describe("folder service", () => {
       name: "Foreign impact folder",
     });
 
-    await seedPattern({ ownerId: ownerA, folderId: root, status: "ready" });
-    await seedPattern({ ownerId: ownerA, folderId: root, status: "trashed" });
+    const commercialReady = await seedPattern({
+      ownerId: ownerA,
+      folderId: root,
+      status: "ready",
+    });
+    const commercialTrashed = await seedPattern({
+      ownerId: ownerA,
+      folderId: root,
+      status: "trashed",
+    });
     await seedPattern({
       ownerId: ownerA,
       folderId: activeChild,
@@ -222,6 +239,70 @@ describe("folder service", () => {
     await seedPattern({ ownerId: ownerA, folderId: unrelated });
     await seedPattern({ ownerId: ownerB, folderId: foreign });
 
+    await db.insert(authorizations).values([
+      {
+        id: randomUUID(),
+        ownerId: ownerA,
+        patternId: commercialReady,
+        operationId: randomUUID(),
+        kind: "global_buyout",
+        licenseeName: "Active ready",
+        priceFen: 60000n,
+        authorizedOn: "2026-10-01",
+      },
+      {
+        id: randomUUID(),
+        ownerId: ownerA,
+        patternId: commercialReady,
+        operationId: randomUUID(),
+        kind: "global_buyout",
+        licenseeName: "Void history",
+        priceFen: 10000n,
+        authorizedOn: "2026-09-01",
+        status: "void",
+        voidedAt: new Date("2026-10-02T00:00:00.000Z"),
+      },
+      {
+        id: randomUUID(),
+        ownerId: ownerA,
+        patternId: commercialTrashed,
+        operationId: randomUUID(),
+        kind: "global_buyout",
+        licenseeName: "Active trashed",
+        priceFen: 40000n,
+        authorizedOn: "2026-08-01",
+      },
+    ]);
+    await db.insert(assets).values([
+      {
+        id: randomUUID(),
+        ownerId: ownerA,
+        patternId: commercialReady,
+        role: "source",
+        objectKey: `${ownerA}/${commercialReady}/source`,
+        originalFilename: "ready.psd",
+        sizeBytes: 1024n,
+      },
+      {
+        id: randomUUID(),
+        ownerId: ownerA,
+        patternId: commercialReady,
+        role: "preview",
+        objectKey: `${ownerA}/${commercialReady}/preview`,
+        originalFilename: "ready.png",
+        sizeBytes: 128n,
+      },
+      {
+        id: randomUUID(),
+        ownerId: ownerA,
+        patternId: commercialTrashed,
+        role: "source",
+        objectKey: `${ownerA}/${commercialTrashed}/source`,
+        originalFilename: "trashed.psd",
+        sizeBytes: 2048n,
+      },
+    ]);
+
     const foldersBefore = await db
       .select()
       .from(folders)
@@ -242,6 +323,11 @@ describe("folder service", () => {
       alreadyTrashedPatternCount: 2,
       hasDeletingEntities: true,
       scopeFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      activeAuthorizationCount: 2,
+      activeRevenueFen: "100000",
+      totalAuthorizationCount: 3,
+      assetCount: 3,
+      purgeOn: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
     });
 
     await expect(
@@ -277,6 +363,7 @@ describe("folder service", () => {
       alreadyTrashedPatternCount: 0,
       hasDeletingEntities: false,
       scopeFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      ...emptyCommercialImpact,
     });
   });
 
@@ -320,6 +407,7 @@ describe("folder service", () => {
       alreadyTrashedPatternCount: 1,
       hasDeletingEntities: false,
       scopeFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      ...emptyCommercialImpact,
     });
     await expect(
       getFolderDeleteImpact({ ownerId: ownerA, folderId: deletingRoot }),
@@ -330,6 +418,7 @@ describe("folder service", () => {
       alreadyTrashedPatternCount: 0,
       hasDeletingEntities: true,
       scopeFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+      ...emptyCommercialImpact,
     });
 
     for (const folderId of [deletedRoot, foreignRoot, randomUUID()]) {

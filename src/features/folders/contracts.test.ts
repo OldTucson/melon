@@ -67,6 +67,11 @@ describe("folder contracts", () => {
       alreadyTrashedPatternCount: 0,
       hasDeletingEntities: false,
       scopeFingerprint: "a".repeat(64),
+      activeAuthorizationCount: 0,
+      activeRevenueFen: "0",
+      totalAuthorizationCount: 0,
+      assetCount: 0,
+      purgeOn: "2026-11-07T00:00:00.000Z",
     };
 
     expect(

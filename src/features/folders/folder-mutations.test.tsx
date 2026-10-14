@@ -3,6 +3,7 @@ import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QueryOwnerProvider } from "@/lib/query/provider";
 import { queryKeys } from "@/lib/query/keys";
+import { dashboardKeys } from "@/features/analytics/query-keys";
 import {
   useCreateFolderMutation,
   useRenameFolderMutation,
@@ -22,6 +23,11 @@ const expectedImpact = {
   alreadyTrashedPatternCount: 0,
   hasDeletingEntities: false,
   scopeFingerprint: "a".repeat(64),
+  activeAuthorizationCount: 2,
+  activeRevenueFen: "100000",
+  totalAuthorizationCount: 3,
+  assetCount: 4,
+  purgeOn: "2026-11-07T00:00:00.000Z",
 };
 const folder = {
   id,
@@ -305,6 +311,9 @@ describe("folder mutations", () => {
       expect(invalidate).toHaveBeenCalledWith(
         expect.objectContaining({ queryKey: ["owner", owner, suffix] }),
       );
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: dashboardKeys.all(owner),
+    });
   });
   it("retains subtree on invalid delete success and invalidates to converge", async () => {
     const { client, wrapper } = setup();
@@ -373,6 +382,11 @@ describe("folder mutations", () => {
           alreadyTrashedPatternCount: 4,
           hasDeletingEntities: true,
           scopeFingerprint: "b".repeat(64),
+          activeAuthorizationCount: 1,
+          activeRevenueFen: "60000",
+          totalAuthorizationCount: 2,
+          assetCount: 3,
+          purgeOn: "2026-11-07T00:00:00.000Z",
         }),
       ),
     );

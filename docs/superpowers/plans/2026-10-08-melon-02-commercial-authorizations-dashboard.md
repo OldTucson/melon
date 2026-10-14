@@ -641,7 +641,7 @@ Expected: tests pass in light and dark theme renderings with no text-only color 
 - Test: `src/features/patterns/deletion-service.integration.test.ts`
 - Test: `src/features/library/trash-view.test.tsx`
 
-- [ ] **Step 1: Write failing lifecycle and race tests**
+- [x] **Step 1: Write failing lifecycle and race tests**
 
 Prove that trashing preserves authorizations and period revenue, excludes the pattern from current-library state, makes commercial history read-only, and restores all data. Permanent deletion must remove active/void authorizations, assets, pattern-tag links and old commercial change payloads; scrub the pattern into a final deleted tombstone; and reduce historical dashboard values.
 
@@ -656,7 +656,7 @@ await permanentDeletePattern({ ownerId, patternId, version: version + 1 });
 expect(await dashboardRevenue(ownerId)).toBe("0");
 ```
 
-- [ ] **Step 2: Implement trash and restore under the pattern row lock**
+- [x] **Step 2: Implement trash and restore under the pattern row lock**
 
 Trash locks `(ownerId, patternId)`, requires `ready`, changes to `trashed`, sets `trashedAt`, increments normal pattern version and appends a change. Restore locks the same row, requires `trashed`, returns to `ready`, clears `trashedAt` and appends a change. Authorization service already checks `ready`, so trashed commercial history becomes read-only.
 
@@ -667,7 +667,7 @@ const next = action === "trash"
 await updateLockedPattern(tx, pattern.id, pattern.version, next);
 ```
 
-- [ ] **Step 3: Calculate and present deletion impact**
+- [x] **Step 3: Calculate and present deletion impact**
 
 The impact endpoint returns effective count, effective revenue as a string, total records including void, asset count and `purgeOn = trashedAt + 30 days`. Both the initial trash confirmation and trash view state: “永久删除后，授权历史和过去看板收入也会删除。” Manual permanent delete requires typing the pattern name or an explicit destructive confirmation, and only works online.
 
@@ -681,7 +681,7 @@ export type DeletionImpactDto = {
 };
 ```
 
-- [ ] **Step 4: Implement idempotent permanent deletion**
+- [x] **Step 4: Implement idempotent permanent deletion**
 
 Load trashed pattern/version and asset keys, delete OSS objects first through an idempotent adapter call, then open a transaction and lock the pattern again. Abort if it was restored or changed. Delete authorization rows and their commercial `ChangeLog` entries, delete asset/tag relations, scrub user metadata, set `status=deleted`/`deletedAt`, increment change sequence, and insert one final pattern deletion tombstone without commercial payload. Repeating the operation returns the existing deleted result.
 
@@ -698,7 +698,7 @@ return db.transaction(async (tx) => {
 
 The 30-day scheduler is wired in phase 04; this task exposes the same service for manual deletion and future job calls.
 
-- [ ] **Step 5: Verify C semantics and commit**
+- [x] **Step 5: Verify C semantics and commit**
 
 ```bash
 npm run test:integration -- src/features/patterns/trash-service.integration.test.ts src/features/patterns/deletion-service.integration.test.ts

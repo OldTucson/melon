@@ -35,7 +35,7 @@ import { createUploadService } from "@/features/uploads/upload-service";
 
 import { createTrashPurgeService } from "./trash-purge-service";
 import { listExpiredTrashTargets } from "./trash-purge-repository";
-import { listTrash } from "./trash-service";
+import { listTrash, restorePatterns } from "./trash-service";
 
 const now = new Date("2026-10-13T03:00:00.000Z");
 const trashedAt = new Date("2026-09-01T00:00:00.000Z");
@@ -953,6 +953,59 @@ describe("trash permanent purge", () => {
     });
     expect(await db.select().from(changeLog)).toHaveLength(1);
     expect(oss.deleteCalls).toHaveLength(2);
+  });
+
+  it("blocks restore after permanent deletion has claimed the pattern", async () => {
+    const ownerId = await seedUser("purge-restore-race@example.test");
+    const patternId = await seedTrashedPattern({
+      ownerId,
+      trashBatchId: randomUUID(),
+      name: "Delete wins",
+    });
+    const deleting = deferred();
+    const release = deferred();
+    class BlockingOss extends FakeOssAdapter {
+      override async deleteObjectsUnderPrefix(prefix: string, keys: string[]) {
+        deleting.resolve();
+        await release.promise;
+        return super.deleteObjectsUnderPrefix(prefix, keys);
+      }
+    }
+    const oss = new BlockingOss();
+    await seedSourceAsset(ownerId, patternId, oss);
+    const service = createTrashPurgeService({
+      database: db,
+      oss,
+      now: () => now,
+    });
+    const purge = service.purgePatterns({
+      ownerId,
+      operationId: randomUUID(),
+      patternIds: [patternId],
+    });
+
+    await deleting.promise;
+    await expectAppError(
+      restorePatterns({
+        ownerId,
+        operationId: randomUUID(),
+        patternIds: [patternId],
+      }),
+      "TRASH_PURGE_IN_PROGRESS",
+      409,
+    );
+    release.resolve();
+    await expect(purge).resolves.toEqual({
+      state: "complete",
+      deletedPatternCount: 1,
+      deletedFolderCount: 0,
+    });
+    await expect(
+      db
+        .select({ status: patterns.status })
+        .from(patterns)
+        .where(eq(patterns.id, patternId)),
+    ).resolves.toEqual([{ status: "deleted" }]);
   });
 
   it("rejects ambiguous pending operations within one ordinary trash batch", async () => {

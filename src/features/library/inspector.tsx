@@ -419,7 +419,7 @@ function SelectionActions({
       ) : null}
       {message ? <p role="alert">{message}</p> : null}
       <TrashPatternsDialog
-        count={patterns.length}
+        patterns={patterns}
         open={trashOpen}
         isPending={mutation.isPending}
         onOpenChange={setTrashOpen}

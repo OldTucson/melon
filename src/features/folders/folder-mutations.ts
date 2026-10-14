@@ -4,6 +4,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { ApiResponseError, readApiResponse } from "@/lib/query/client";
 import { queryKeys } from "@/lib/query/keys";
+import { dashboardKeys } from "@/features/analytics/query-keys";
+import { authorizationKeys } from "@/features/authorizations/query-keys";
 import { useQueryOwnerId } from "@/lib/query/provider";
 import {
   type FolderDeleteImpact,
@@ -268,6 +270,8 @@ export function useTrashFolderMutation() {
         client.invalidateQueries({ queryKey: ["owner", ownerId, "patterns"] }),
         client.invalidateQueries({ queryKey: ["owner", ownerId, "pattern"] }),
         client.invalidateQueries({ queryKey: queryKeys.trash(ownerId) }),
+        client.invalidateQueries({ queryKey: dashboardKeys.all(ownerId) }),
+        client.invalidateQueries({ queryKey: authorizationKeys.all(ownerId) }),
       ]),
   });
 }

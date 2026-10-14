@@ -66,6 +66,11 @@ const impact = {
   alreadyTrashedPatternCount: 3,
   hasDeletingEntities: true,
   scopeFingerprint: "a".repeat(64),
+  activeAuthorizationCount: 2,
+  activeRevenueFen: "100000",
+  totalAuthorizationCount: 3,
+  assetCount: 4,
+  purgeOn: "2026-11-07T00:00:00.000Z",
 };
 const response = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status });
@@ -332,6 +337,15 @@ describe("folder tree interactions", () => {
       "1 个文件夹、3 个图案已在回收站",
     );
     expect(screen.getByRole("dialog")).toHaveTextContent("正在永久删除");
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      "有效授权 2 笔 · ¥1,000.00",
+    );
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      "共 3 条授权记录 · 4 个文件",
+    );
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      "永久删除后，授权历史和过去看板收入也会删除。",
+    );
     expect(
       screen.getByRole("button", { name: "确认移入回收站" }),
     ).toBeDisabled();

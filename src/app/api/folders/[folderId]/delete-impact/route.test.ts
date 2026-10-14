@@ -24,6 +24,11 @@ const impact = {
   alreadyTrashedPatternCount: 2,
   hasDeletingEntities: true,
   scopeFingerprint: "a".repeat(64),
+  activeAuthorizationCount: 2,
+  activeRevenueFen: "100000",
+  totalAuthorizationCount: 3,
+  assetCount: 4,
+  purgeOn: "2026-11-07T00:00:00.000Z",
 };
 
 describe("folder delete-impact Route Handler", () => {

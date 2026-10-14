@@ -12,6 +12,8 @@ import { z } from "zod";
 
 import type { PatternQuery } from "@/features/patterns/contracts";
 import { normalizedUuidSchema } from "@/features/storage/identifiers";
+import { dashboardKeys } from "@/features/analytics/query-keys";
+import { authorizationKeys } from "@/features/authorizations/query-keys";
 import { ApiResponseError, readApiResponse } from "@/lib/query/client";
 import { queryKeys } from "@/lib/query/keys";
 import { useQueryOwnerId } from "@/lib/query/provider";
@@ -506,6 +508,7 @@ async function invalidateBatchCaches(
   queryClient: QueryClient,
   ownerId: string,
   patternIds: readonly string[],
+  commercialLifecycleChange = false,
 ) {
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: patternListPrefix(ownerId) }),
@@ -523,6 +526,18 @@ async function invalidateBatchCaches(
         exact: true,
       }),
     ),
+    ...(commercialLifecycleChange
+      ? [
+          queryClient.invalidateQueries({
+            queryKey: dashboardKeys.all(ownerId),
+          }),
+          ...patternIds.map((patternId) =>
+            queryClient.invalidateQueries({
+              queryKey: authorizationKeys.historyRoot(ownerId, patternId),
+            }),
+          ),
+        ]
+      : []),
   ]);
 }
 
@@ -597,13 +612,19 @@ export function usePatternBatchMutation(activeQuery: PatternQuery) {
         queryClient,
         ownerId,
         intent.patterns.map((pattern) => pattern.id),
+        intent.action === "trash",
       );
     },
-    onSuccess: async (result) => {
+    onSuccess: async (result, intent) => {
       applyServerPatterns(queryClient, ownerId, result.patterns);
       const succeededIds = result.patterns.map((pattern) => pattern.id);
       useSelectionStore.getState().removeSelected(succeededIds);
-      await invalidateBatchCaches(queryClient, ownerId, succeededIds);
+      await invalidateBatchCaches(
+        queryClient,
+        ownerId,
+        succeededIds,
+        intent.action === "trash",
+      );
     },
     retry: shouldRetryMutation,
     retryDelay: 0,
@@ -624,10 +645,20 @@ export function usePatternBatchMutation(activeQuery: PatternQuery) {
       return parseRestorePatternsResult(response, input.patternIds);
     },
     onSuccess: async (_result, input) => {
-      await invalidateBatchCaches(queryClient, ownerId, input.patternIds);
+      await invalidateBatchCaches(
+        queryClient,
+        ownerId,
+        input.patternIds,
+        true,
+      );
     },
     onError: async (_error, input) => {
-      await invalidateBatchCaches(queryClient, ownerId, input.patternIds);
+      await invalidateBatchCaches(
+        queryClient,
+        ownerId,
+        input.patternIds,
+        true,
+      );
     },
     retry: shouldRetryMutation,
     retryDelay: 0,

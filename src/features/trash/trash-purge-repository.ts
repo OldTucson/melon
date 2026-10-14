@@ -17,6 +17,8 @@ import { UPLOAD_WRITE_DRAIN_GRACE_MS } from "@/features/storage/upload-timing";
 import { db, type DbTransaction } from "@/lib/db/client";
 import {
   assets,
+  authorizations,
+  changeLog,
   folders,
   operations,
   patterns,
@@ -331,6 +333,47 @@ export async function deletePurgeRelations(
   patternIds: readonly string[],
 ) {
   requireSortedUniqueNormalizedIds(patternIds);
+  const authorizationRows = await tx
+    .select({ id: authorizations.id })
+    .from(authorizations)
+    .where(
+      and(
+        eq(authorizations.ownerId, ownerId),
+        inArray(authorizations.patternId, patternIds),
+      ),
+    );
+  const authorizationIds = authorizationRows.map((row) => row.id).sort();
+  if (authorizationIds.length > 0) {
+    await tx
+      .delete(changeLog)
+      .where(
+        and(
+          eq(changeLog.ownerId, ownerId),
+          eq(changeLog.entityType, "authorization"),
+          inArray(changeLog.entityId, authorizationIds),
+        ),
+      );
+  }
+  await tx
+    .delete(operations)
+    .where(
+      and(
+        eq(operations.ownerId, ownerId),
+        like(operations.kind, "authorization.%"),
+        sql`${operations.result} ->> 'patternId' in (${sql.join(
+          patternIds.map((patternId) => sql`${patternId}`),
+          sql`, `,
+        )})`,
+      ),
+    );
+  await tx
+    .delete(authorizations)
+    .where(
+      and(
+        eq(authorizations.ownerId, ownerId),
+        inArray(authorizations.patternId, patternIds),
+      ),
+    );
   const wherePattern = (ownerColumn: typeof patternTags.ownerId, patternColumn: typeof patternTags.patternId) =>
     and(eq(ownerColumn, ownerId), inArray(patternColumn, patternIds));
   await tx.delete(patternTags).where(wherePattern(patternTags.ownerId, patternTags.patternId));
@@ -363,12 +406,20 @@ export async function finalizePatternTombstones(
     .update(patterns)
     .set({
       folderId: null,
+      name: "",
+      originalFilename: "",
+      extension: "",
+      detectedMimeType: null,
+      sizeBytes: 0n,
       status: "deleted",
+      previewStatus: "unsupported",
       isFavorite: false,
       contentHash: null,
+      commercialVersion: 0,
       lastErrorCode: null,
       trashBatchId: null,
       preTrashStatus: null,
+      trashedAt: null,
       deletedAt: input.now,
       version: sql`${patterns.version} + 1`,
       changeSeq: input.changeSeq,

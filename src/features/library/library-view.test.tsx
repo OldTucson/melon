@@ -94,6 +94,13 @@ const folder: FolderDto = {
   directPatternCount: 1,
   recursivePatternCount: 2,
 };
+const deletionImpact = {
+  activeAuthorizationCount: 0,
+  activeRevenueFen: "0",
+  totalAuthorizationCount: 0,
+  assetCount: 2,
+  purgeOn: "2026-11-13T00:00:00.000Z",
+};
 
 function createClient(items: PatternItem[]) {
   const client = new QueryClient({
@@ -181,9 +188,10 @@ describe("Mac-first workspace", () => {
         expect.anything(),
       ),
     );
-    expect(
-      JSON.parse(vi.mocked(fetch).mock.calls[0]![1]!.body as string),
-    ).toEqual({
+    const moveCall = vi
+      .mocked(fetch)
+      .mock.calls.find(([url]) => url === "/api/patterns/batch")!;
+    expect(JSON.parse(moveCall[1]!.body as string)).toEqual({
       action: "move",
       folderId: null,
       operationId: expect.any(String),
@@ -324,6 +332,11 @@ describe("Mac-first workspace", () => {
 
   it("confirms all selected inspector patterns before moving them to trash", async () => {
     const items = [makePattern(1), makePattern(2)];
+    vi.mocked(fetch).mockImplementation((input) =>
+      String(input) === "/api/patterns/deletion-impact"
+        ? Promise.resolve(Response.json(deletionImpact))
+        : new Promise(() => {}),
+    );
     renderLibrary(items);
     act(() =>
       useSelectionStore.getState().selectAll(items.map((item) => item.id)),
@@ -334,8 +347,11 @@ describe("Mac-first workspace", () => {
       ).getByRole("button", { name: "移入回收站" }),
     );
     expect(screen.getByRole("dialog")).toHaveTextContent("2 个图案");
-    expect(fetch).not.toHaveBeenCalled();
-    vi.mocked(fetch).mockImplementation(() => new Promise(() => {}));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "确认移入回收站" }),
+      ).toBeEnabled(),
+    );
     fireEvent.click(screen.getByRole("button", { name: "确认移入回收站" }));
     await waitFor(() =>
       expect(fetch).toHaveBeenCalledWith(
@@ -343,9 +359,10 @@ describe("Mac-first workspace", () => {
         expect.anything(),
       ),
     );
-    expect(
-      JSON.parse(vi.mocked(fetch).mock.calls[0]![1]!.body as string),
-    ).toEqual({
+    const batchCall = vi
+      .mocked(fetch)
+      .mock.calls.find(([url]) => url === "/api/patterns/batch")!;
+    expect(JSON.parse(batchCall[1]!.body as string)).toEqual({
       action: "trash",
       operationId: expect.any(String),
       patterns: items.map(({ id, version }) => ({ id, version })),

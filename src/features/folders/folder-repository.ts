@@ -34,6 +34,10 @@ export type FolderDeleteImpactRow = {
   alreadyTrashedPatternCount: number;
   hasDeletingEntities: boolean;
   scopeFingerprint: string;
+  activeAuthorizationCount: number;
+  activeRevenueFen: string;
+  totalAuthorizationCount: number;
+  assetCount: number;
 };
 
 export type InsertFolderInput = {
@@ -85,6 +89,10 @@ type RawFolderDeleteImpactRow = {
   hasDeletingEntities: boolean;
   folderScope: string;
   patternScope: string;
+  activeAuthorizationCount: bigint | number | string;
+  activeRevenueFen: string;
+  totalAuthorizationCount: bigint | number | string;
+  assetCount: bigint | number | string;
 };
 
 type FolderQueryExecutor = Pick<DbTransaction, "execute">;
@@ -266,23 +274,8 @@ export async function getFolderDeleteImpactRow(
         ) as "folderScope"
       from subtree
       where subtree.owner_id = ${ownerId}
-    ), pattern_impact as (
-      select
-        count(pattern.id) as "patternCount",
-        count(pattern.id) filter (
-          where pattern.status = 'trashed'::pattern_status
-        ) as "alreadyTrashedPatternCount",
-        coalesce(
-          bool_or(pattern.status = 'deleting'::pattern_status),
-          false
-        ) as "hasDeletingPatterns",
-        coalesce(
-          string_agg(
-            pattern.id::text || ':' || pattern.status::text,
-            ',' order by pattern.id
-          ),
-          ''
-        ) as "patternScope"
+    ), pattern_scope as (
+      select pattern.id, pattern.status
       from subtree
       join patterns pattern
         on pattern.owner_id = ${ownerId}
@@ -290,6 +283,46 @@ export async function getFolderDeleteImpactRow(
        and pattern.folder_id = subtree.id
        and pattern.status <> 'deleted'::pattern_status
       where subtree.owner_id = ${ownerId}
+    ), pattern_impact as (
+      select
+        count(target.id) as "patternCount",
+        count(target.id) filter (
+          where target.status = 'trashed'::pattern_status
+        ) as "alreadyTrashedPatternCount",
+        coalesce(
+          bool_or(target.status = 'deleting'::pattern_status),
+          false
+        ) as "hasDeletingPatterns",
+        coalesce(
+          string_agg(
+            target.id::text || ':' || target.status::text,
+            ',' order by target.id
+          ),
+          ''
+        ) as "patternScope"
+      from pattern_scope target
+    ), authorization_impact as (
+      select
+        count(auth.id) filter (
+          where auth.status = 'active'::authorization_status
+        ) as "activeAuthorizationCount",
+        coalesce(
+          sum(auth.price_fen) filter (
+            where auth.status = 'active'::authorization_status
+          ),
+          0
+        )::text as "activeRevenueFen",
+        count(auth.id) as "totalAuthorizationCount"
+      from pattern_scope target
+      left join authorizations auth
+        on auth.owner_id = ${ownerId}
+       and auth.pattern_id = target.id
+    ), asset_impact as (
+      select count(asset.id) as "assetCount"
+      from pattern_scope target
+      left join assets asset
+        on asset.owner_id = ${ownerId}
+       and asset.pattern_id = target.id
     )
     select
       folder_impact."folderCount",
@@ -298,12 +331,18 @@ export async function getFolderDeleteImpactRow(
       pattern_impact."alreadyTrashedPatternCount",
       folder_impact."folderScope",
       pattern_impact."patternScope",
+      authorization_impact."activeAuthorizationCount",
+      authorization_impact."activeRevenueFen",
+      authorization_impact."totalAuthorizationCount",
+      asset_impact."assetCount",
       (
         folder_impact."hasDeletingFolders"
         or pattern_impact."hasDeletingPatterns"
       ) as "hasDeletingEntities"
     from folder_impact
     cross join pattern_impact
+    cross join authorization_impact
+    cross join asset_impact
     where folder_impact."folderCount" > 0
   `);
 
@@ -314,6 +353,10 @@ export async function getFolderDeleteImpactRow(
     alreadyTrashedFolderCount: Number(row.alreadyTrashedFolderCount),
     alreadyTrashedPatternCount: Number(row.alreadyTrashedPatternCount),
     hasDeletingEntities: row.hasDeletingEntities,
+    activeAuthorizationCount: Number(row.activeAuthorizationCount),
+    activeRevenueFen: row.activeRevenueFen,
+    totalAuthorizationCount: Number(row.totalAuthorizationCount),
+    assetCount: Number(row.assetCount),
     scopeFingerprint: folderDeleteScopeFingerprintFromParts(
       row.folderScope,
       row.patternScope,

@@ -30,6 +30,7 @@ import {
   renameFolderRow,
   type FolderCountRow,
 } from "./folder-repository";
+import { estimateTrashPurgeOn } from "@/features/trash/retention";
 
 export type CreateFolderInput = {
   ownerId: string;
@@ -167,7 +168,7 @@ export async function getFolderDeleteImpact(input: {
     identity.folderId,
   );
   if (!impact) folderNotFound();
-  return impact;
+  return { ...impact, purgeOn: estimateTrashPurgeOn() };
 }
 
 export async function createFolder(input: CreateFolderInput) {

@@ -4,6 +4,12 @@ const uuid = z.uuid();
 const count = z.number().int().nonnegative();
 const date = z.string().datetime();
 const state = z.enum(["trashed", "deleting"]);
+const commercialImpactFields = {
+  activeAuthorizationCount: count,
+  activeRevenueFen: z.string().regex(/^(0|[1-9]\d*)$/),
+  totalAuthorizationCount: count,
+  assetCount: count,
+};
 const batchFields = {
   trashBatchId: uuid,
   state,
@@ -11,6 +17,7 @@ const batchFields = {
   purgeOperationId: uuid.nullable(),
   trashedAt: date,
   expiresAt: date,
+  ...commercialImpactFields,
 };
 export const trashPatternSchema = z
   .object({
@@ -33,8 +40,14 @@ export const trashPatternSchema = z
     version: count,
     lastErrorCode: z.string().nullable(),
     trashedAt: date,
+    ...commercialImpactFields,
   })
-  .strict();
+  .strict()
+  .refine(
+    (pattern) =>
+      pattern.activeAuthorizationCount <= pattern.totalAuthorizationCount,
+    { message: "有效授权数量不能超过授权记录总数" },
+  );
 const folderBatchSchema = z
   .object({
     ...batchFields,
@@ -72,6 +85,35 @@ export const trashListSchema = z
         batch.patterns.some((pattern) => pattern.status === "deleting")
       )
         ctx.addIssue({ code: "custom", message: "图案批次状态无效" });
+    for (const batch of batches)
+      if (batch.activeAuthorizationCount > batch.totalAuthorizationCount)
+        ctx.addIssue({ code: "custom", message: "商业数据汇总无效" });
+    for (const batch of data.patternBatches) {
+      const sums = batch.patterns.reduce(
+        (value, pattern) => ({
+          activeAuthorizationCount:
+            value.activeAuthorizationCount + pattern.activeAuthorizationCount,
+          activeRevenueFen:
+            value.activeRevenueFen + BigInt(pattern.activeRevenueFen),
+          totalAuthorizationCount:
+            value.totalAuthorizationCount + pattern.totalAuthorizationCount,
+          assetCount: value.assetCount + pattern.assetCount,
+        }),
+        {
+          activeAuthorizationCount: 0,
+          activeRevenueFen: 0n,
+          totalAuthorizationCount: 0,
+          assetCount: 0,
+        },
+      );
+      if (
+        batch.activeAuthorizationCount !== sums.activeAuthorizationCount ||
+        BigInt(batch.activeRevenueFen) !== sums.activeRevenueFen ||
+        batch.totalAuthorizationCount !== sums.totalAuthorizationCount ||
+        batch.assetCount !== sums.assetCount
+      )
+        ctx.addIssue({ code: "custom", message: "图案批次商业数据汇总无效" });
+    }
   });
 export const restoredPatternsSchema = z
   .object({

@@ -18,6 +18,11 @@ import {
   folderTrashMutationSchema,
 } from "./contracts";
 import { buildFolderDeleteImpact } from "./folder-delete-scope";
+import {
+  listPatternCommercialDeletionImpacts,
+  sumCommercialDeletionImpacts,
+} from "@/features/trash/commercial-impact";
+import { estimateTrashPurgeOn } from "@/features/trash/retention";
 import { lockFolderHierarchy } from "./folder-repository";
 import {
   lockFolderTree,
@@ -98,7 +103,11 @@ function impactsMatch(
     expected.alreadyTrashedPatternCount ===
       actual.alreadyTrashedPatternCount &&
     expected.hasDeletingEntities === actual.hasDeletingEntities &&
-    expected.scopeFingerprint === actual.scopeFingerprint
+    expected.scopeFingerprint === actual.scopeFingerprint &&
+    expected.activeAuthorizationCount === actual.activeAuthorizationCount &&
+    expected.activeRevenueFen === actual.activeRevenueFen &&
+    expected.totalAuthorizationCount === actual.totalAuthorizationCount &&
+    expected.assetCount === actual.assetCount
   );
 }
 
@@ -182,7 +191,19 @@ export async function trashFolderTree(
     const root = tree.folders.find((folder) => folder.id === identity.folderId);
     if (!root) folderNotFound();
     if (operation.state === "mismatch") operationIdReused();
-    const actualImpact = buildFolderDeleteImpact(tree.folders, tree.patterns);
+    const now = new Date();
+    const commercialImpact = sumCommercialDeletionImpacts(
+      await listPatternCommercialDeletionImpacts(
+        input.ownerId,
+        tree.patterns.map((pattern) => pattern.id),
+        tx,
+      ),
+    );
+    const actualImpact: FolderDeleteImpact = {
+      ...buildFolderDeleteImpact(tree.folders, tree.patterns),
+      ...commercialImpact,
+      purgeOn: estimateTrashPurgeOn(now),
+    };
     if (!impactsMatch(mutation.expectedImpact, actualImpact))
       folderDeleteScopeChanged(actualImpact);
     if (actualImpact.hasDeletingEntities) trashPurgeInProgress();
@@ -192,7 +213,6 @@ export async function trashFolderTree(
     const folderIds = tree.folders.map((folder) => folder.id);
     const patternIds = tree.patterns.map((pattern) => pattern.id);
     const seq = await nextChangeSeq(tx, input.ownerId);
-    const now = new Date();
     const updatedFolders = await trashFolderRows(input.ownerId, tx, {
       ids: folderIds,
       trashBatchId: mutation.operationId,
