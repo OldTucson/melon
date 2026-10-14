@@ -252,11 +252,13 @@ export function LibraryToolbar({
           : `已载入 ${resultCount} 项`}
       </div>
       <div className="toolbar-view-controls">
+        <span className="inspector-toggle-slot">
         {inspectorHidden && selectedCount > 0 ? (
           <IconButton label="显示检查器" onClick={onShowInspector}>
             <PanelRightOpen aria-hidden="true" />
           </IconButton>
         ) : null}
+        </span>
         <div className="segmented-icons" aria-label="显示方式">
           <IconButton
             label="网格视图"

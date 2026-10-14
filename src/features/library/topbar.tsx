@@ -58,11 +58,12 @@ export function Topbar({
           type="button"
           onClick={upload.openFilePicker}
           title="上传图案"
+          aria-label="上传图案"
         >
           <Upload aria-hidden="true" />
           <span>上传</span>
         </button>
-        <Link className="account-link" href="/settings" aria-label="打开账户设置">
+        <Link className="account-link" href="/settings" aria-label="打开账户设置" title="打开账户设置">
           <UserRound aria-hidden="true" />
           <span className="account-copy">
             <strong>{user.displayName}</strong>

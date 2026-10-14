@@ -408,17 +408,17 @@ describe("Mac-first workspace", () => {
       "utf8",
     );
     expect(css).toMatch(
-      /\.workspace\s*\{[^}]*grid-template-columns:\s*220px minmax\(0,\s*1fr\) auto/s,
+      /\.workspace\s*\{[^}]*grid-template-columns:\s*220px minmax\(0,\s*1fr\);/s,
     );
-    expect(css).toMatch(/\.library-inspector\s*\{[^}]*width:\s*340px/s);
+    expect(css).toMatch(/\.library-inspector\s*\{[^}]*width:\s*292px/s);
     expect(css).toMatch(
-      /@media\s*\(max-width:\s*1100px\)[\s\S]*grid-template-columns:\s*56px minmax\(0,\s*1fr\) auto/,
-    );
-    expect(css).toMatch(
-      /@media\s*\(max-width:\s*1200px\)[\s\S]*?\.library-layout\[data-inspector="open"\]\s*\{[^}]*grid-template-columns:\s*minmax\(280px,\s*1fr\) 340px/,
+      /@media\s*\(max-width:\s*1100px\)[\s\S]*grid-template-columns:\s*56px minmax\(0,\s*1fr\);/,
     );
     expect(css).toMatch(
-      /@media\s*\(max-width:\s*1200px\)[\s\S]*?\.library-inspector\s*\{[^}]*position:\s*static/,
+      /@media\s*\(max-width:\s*1100px\)[\s\S]*?\.library-layout\[data-inspector="open"\]\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,
+    );
+    expect(css).toMatch(
+      /@media\s*\(max-width:\s*1100px\)[\s\S]*?\.library-inspector\[role="dialog"\]\s*\{[^}]*position:\s*fixed/,
     );
     expect(css).toMatch(
       /\.toolbar-toggle\s*\{[^}]*flex:\s*0 0 auto[^}]*white-space:\s*nowrap/,
@@ -437,10 +437,10 @@ describe("Mac-first workspace", () => {
       /@media\s*\(max-width:\s*720px\)[\s\S]*?\.sidebar-folders\s*\{[^}]*display:\s*none/,
     );
     expect(css).toMatch(
-      /@media\s*\(max-width:\s*720px\)[\s\S]*?\.workspace-sidebar\s+\.sidebar-folders\s*\{[^}]*flex:\s*0 0 42px/,
+      /@media\s*\(max-width:\s*720px\)[\s\S]*?\.workspace-sidebar\s+\.sidebar-folders\s*\{[^}]*flex:\s*0 0 44px/,
     );
     expect(css).toMatch(
-      /@media\s*\(max-width:\s*720px\)[\s\S]*?\.sidebar-folders\[data-rail-open="true"\]\s+\.folder-tree-content\s*\{[^}]*left:\s*8px[^}]*right:\s*8px[^}]*bottom:\s*60px[^}]*width:\s*auto/,
+      /@media\s*\(max-width:\s*720px\)[\s\S]*?\.folder-tree-content\[role="dialog"\]\s*\{[^}]*left:\s*8px[^}]*right:\s*8px[^}]*bottom:\s*60px[^}]*width:\s*auto/,
     );
   });
 
@@ -927,7 +927,7 @@ describe("Mac-first workspace", () => {
     );
   });
 
-  it("opens preview on double click and allows the 340 px inspector to collapse", async () => {
+  it("opens preview on double click and allows the inspector to collapse", async () => {
     const user = userEvent.setup();
     renderLibrary([makePattern(1)]);
 

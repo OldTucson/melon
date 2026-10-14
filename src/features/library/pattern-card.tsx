@@ -83,6 +83,7 @@ export function PatternCard({
     >
       <Checkbox.Root
         aria-label={`选择 ${item.name}`}
+        title={`选择 ${item.name}`}
         checked={selected}
         className="pattern-select-checkbox"
         onClick={(event) => event.stopPropagation()}

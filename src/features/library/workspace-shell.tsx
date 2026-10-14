@@ -43,6 +43,7 @@ function WorkspaceContent({
   return (
     <div
       className="workspace"
+      aria-label="图案工作区"
       onDragEnter={(event) => {
         if (!event.dataTransfer.types.includes("Files")) return;
         event.preventDefault();

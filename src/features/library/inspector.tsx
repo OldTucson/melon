@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  ChevronRight,
+  X,
   FolderInput,
   Heart,
   HeartOff,
@@ -9,6 +9,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { ResponsivePanel } from "@/components/responsive-panel";
 
 import type { PatternQuery } from "@/features/patterns/contracts";
 import { TagPicker } from "@/features/tags/tag-picker";
@@ -142,14 +143,14 @@ export function Inspector({
   };
 
   return (
-    <aside className="library-inspector" aria-label="图案检查器">
+    <InspectorPanel onCollapse={onCollapse}>
       <header className="inspector-header">
         <div>
           <span>基本信息</span>
           <strong title={pattern.name}>{pattern.name}</strong>
         </div>
         <IconButton label="收起检查器" onClick={onCollapse}>
-          <ChevronRight aria-hidden="true" />
+          <X aria-hidden="true" />
         </IconButton>
       </header>
       <div className="inspector-scroll">
@@ -236,7 +237,7 @@ export function Inspector({
           <p>商业授权记录将在下一阶段接入。</p>
         </section>
       </div>
-    </aside>
+    </InspectorPanel>
   );
 }
 
@@ -250,14 +251,14 @@ export function MultiSelectionInspector({
   onCollapse: () => void;
 }) {
   return (
-    <aside className="library-inspector" aria-label="图案检查器">
+    <InspectorPanel onCollapse={onCollapse}>
       <header className="inspector-header">
         <div>
           <span>多项选择</span>
           <strong>已选择 {patterns.length} 个图案</strong>
         </div>
         <IconButton label="收起检查器" onClick={onCollapse}>
-          <ChevronRight aria-hidden="true" />
+          <X aria-hidden="true" />
         </IconButton>
       </header>
       <div className="inspector-scroll">
@@ -270,8 +271,19 @@ export function MultiSelectionInspector({
           patterns={patterns}
         />
       </div>
-    </aside>
+    </InspectorPanel>
   );
+}
+
+function InspectorPanel({ children, onCollapse }: { children: React.ReactNode; onCollapse: () => void }) {
+  return <ResponsivePanel
+    as="aside"
+    className="library-inspector"
+    label="图案检查器"
+    open
+    onClose={onCollapse}
+    returnFocus={() => document.querySelector<HTMLButtonElement>('[aria-label="显示检查器"]')}
+  >{children}</ResponsivePanel>;
 }
 
 function SelectionActions({

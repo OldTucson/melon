@@ -152,7 +152,7 @@ export function LibraryView({ initialQuery }: { initialQuery: PatternQuery }) {
         <header className="library-heading">
           <div>
             <p>私人图案库</p>
-            <h1 id="library-title">
+            <h1 id="library-title" title={initialQuery.unfiled ? "未分类" : (activeFolder?.name ?? "全部图案")}>
               {initialQuery.unfiled
                 ? "未分类"
                 : (activeFolder?.name ?? "全部图案")}

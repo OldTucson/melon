@@ -11,10 +11,12 @@ import {
   MoreHorizontal,
   Pencil,
   Trash2,
+  X,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useId, useRef, useState } from "react";
+import { ResponsivePanel } from "@/components/responsive-panel";
 import { useSelectionStore } from "@/features/library/selection-store";
 import { ApiResponseError } from "@/lib/query/client";
 import { queryKeys } from "@/lib/query/keys";
@@ -288,6 +290,7 @@ export function FolderTree() {
               className="folder-icon-button"
               type="button"
               aria-label={`${open ? "收起" : "展开"}${folder.name}`}
+              title={`${open ? "收起" : "展开"}${folder.name}`}
               aria-expanded={open}
               onClick={() => setOpen(folder.id, !open)}
             >
@@ -342,6 +345,7 @@ export function FolderTree() {
                 type="button"
                 className="folder-icon-button"
                 aria-label={`${folder.name}的操作`}
+                title={`${folder.name}的操作`}
                 disabled={
                   Boolean(folder.optimisticCreate) || pending || impactPending
                 }
@@ -434,13 +438,30 @@ export function FolderTree() {
       >
         <Folder aria-hidden="true" />
       </button>
-      <div className="folder-tree-content" id={panelId}>
+      <ResponsivePanel
+        className="folder-tree-content"
+        id={panelId}
+        label="文件夹"
+        open={railOpen}
+        onClose={() => setRailOpen(false)}
+        returnFocus={() => railTrigger.current}
+      >
         <div className="folder-section-heading">
           <p className="sidebar-section-label">文件夹</p>
+          <button
+            className="folder-icon-button folder-panel-close"
+            type="button"
+            aria-label="关闭文件夹"
+            title="关闭文件夹"
+            onClick={() => setRailOpen(false)}
+          >
+            <X aria-hidden="true" />
+          </button>
           <button
             className="folder-icon-button"
             type="button"
             aria-label="新建文件夹"
+            title="新建文件夹"
             disabled={pending}
             onClick={() =>
               startDraft({ kind: "create", parentId: null, name: "" })
@@ -497,7 +518,7 @@ export function FolderTree() {
             onConfirm={() => void confirmDelete()}
           />
         )}
-      </div>
+      </ResponsivePanel>
     </section>
   );
 }

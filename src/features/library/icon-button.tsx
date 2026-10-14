@@ -24,6 +24,7 @@ export function IconButton({
       type={type}
       className={`icon-button ${className}`.trim()}
       aria-label={label}
+      title={label}
       aria-pressed={pressed}
       disabled={disabled}
       onClick={onClick}
