@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import integrationConfig from "../../vitest.integration.config";
 import nextConfig from "../../next.config";
+import playwrightConfig from "../../playwright.config";
 
 describe("database infrastructure configuration", () => {
   it("serializes integration test files that share the test database", () => {
@@ -22,6 +23,10 @@ describe("database infrastructure configuration", () => {
 
   it("keeps the Node-only OSS SDK outside the Turbopack server bundle", () => {
     expect(nextConfig.serverExternalPackages).toContain("ali-oss");
+  });
+
+  it("does not retain browser traces that can contain signed OSS URLs", () => {
+    expect(playwrightConfig.use?.trace).toBe("off");
   });
 
   it("keeps account commands executable in a production-only install", async () => {
@@ -50,11 +55,19 @@ describe("database infrastructure configuration", () => {
     );
 
     expect(css).toMatch(
-      /:root\s*{[^}]*--primary: #3b5da8;[^}]*--on-primary: #fff;/s,
+      /:root\s*{[^}]*--accent: #4f5bd5;[^}]*--primary: var\(--accent\);[^}]*--on-primary: #fff;/s,
     );
     expect(css).toMatch(
-      /\[data-theme="dark"\]\s*{[^}]*--primary: #7893dc;[^}]*--on-primary: #090b0f;/s,
+      /\[data-theme="dark"\]\s*{[^}]*--on-primary: #fff;/s,
     );
-    expect(css.match(/color: var\(--on-primary\);/g)).toHaveLength(2);
+    expect(css).toMatch(
+      /\.primary-button\s*{[^}]*color: var\(--on-primary\);[^}]*background: var\(--primary\);/s,
+    );
+    expect(css).toMatch(
+      /\.topbar-upload-button\s*{[^}]*color: var\(--on-primary\);[^}]*background: var\(--primary\);/s,
+    );
+    expect(css).toMatch(
+      /\.theme-options label:has\(input:checked\)\s*{[^}]*color: var\(--on-primary\);[^}]*background: var\(--primary\);/s,
+    );
   });
 });

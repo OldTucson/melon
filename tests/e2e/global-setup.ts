@@ -3,23 +3,23 @@ import path from "node:path";
 import { config as loadDotEnv } from "dotenv";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
-import OSS from "ali-oss";
 import postgres from "postgres";
 
-import {
-  createAlibabaCredential,
-} from "../../src/features/storage/alibaba-credential";
 import { hashPassword } from "../../src/features/auth/password";
 import {
   E2E_DATABASE_URL,
   E2E_PASSWORD,
   E2E_USERS,
 } from "./environment";
+import { createE2eOssClient } from "./oss-client";
+import {
+  assertE2eAssetRows,
+  type E2eAssetRow,
+  listE2eOssObjectKeys,
+} from "./oss-safety";
 
-type AssetKeyRow = { object_key: string };
-
-function e2eDatabaseName() {
-  const name = decodeURIComponent(new URL(E2E_DATABASE_URL).pathname.slice(1));
+function e2eDatabaseName(databaseUrl: string) {
+  const name = decodeURIComponent(new URL(databaseUrl).pathname.slice(1));
   if (!/^[a-z0-9_]+_e2e$/.test(name)) {
     throw new Error("E2E_DATABASE_NAME_UNSAFE");
   }
@@ -27,7 +27,7 @@ function e2eDatabaseName() {
 }
 
 async function ensureDatabaseExists() {
-  const databaseName = e2eDatabaseName();
+  const databaseName = e2eDatabaseName(E2E_DATABASE_URL);
   const adminUrl = new URL(E2E_DATABASE_URL);
   adminUrl.pathname = "/postgres";
   const admin = postgres(adminUrl.toString(), { max: 1 });
@@ -46,50 +46,27 @@ async function ensureDatabaseExists() {
   }
 }
 
-function requiredEnv(name: string) {
-  const value = process.env[name]?.trim();
-  if (!value) throw new Error(`E2E_ENV_MISSING:${name}`);
-  return value;
-}
-
-async function cleanupOssObjects(objectKeys: string[]) {
-  const keys = [...new Set(objectKeys)];
-  if (keys.length === 0) return;
-
-  const credential = createAlibabaCredential();
-  const resolved = await credential.getCredential();
-  if (
-    typeof resolved.accessKeyId !== "string" ||
-    typeof resolved.accessKeySecret !== "string"
-  ) {
-    throw new Error("E2E_OSS_CREDENTIALS_INVALID");
-  }
-
-  const endpoint = requiredEnv("ALIYUN_OSS_ENDPOINT");
-  const client = new OSS({
-    accessKeyId: resolved.accessKeyId,
-    accessKeySecret: resolved.accessKeySecret,
-    ...(typeof resolved.securityToken === "string"
-      ? { stsToken: resolved.securityToken }
-      : {}),
-    region: requiredEnv("ALIYUN_OSS_REGION"),
-    bucket: requiredEnv("ALIYUN_OSS_BUCKET"),
-    endpoint,
-    cname: process.env.ALIYUN_OSS_CNAME === "true",
-    secure: new URL(endpoint).protocol === "https:",
-    authorizationV4: true,
-  });
+async function cleanupOssObjects(rows: E2eAssetRow[]) {
+  assertE2eAssetRows(rows);
+  const client = await createE2eOssClient();
+  const keys = await listE2eOssObjectKeys(client);
 
   for (let start = 0; start < keys.length; start += 1000) {
     await client.deleteMulti(keys.slice(start, start + 1000), { quiet: true });
   }
 }
 
-async function assetKeys(client: postgres.Sql) {
-  const rows = await client<AssetKeyRow[]>`
-    select object_key from assets order by object_key
+async function assetRows(client: postgres.Sql) {
+  return client<E2eAssetRow[]>`
+    select
+      id as "assetId",
+      owner_id as "ownerId",
+      pattern_id as "patternId",
+      role::text,
+      object_key as "objectKey"
+    from assets
+    order by object_key
   `;
-  return rows.map((row) => row.object_key);
 }
 
 async function truncateE2eData(client: postgres.Sql) {
@@ -137,7 +114,7 @@ export async function resetAndSeed() {
     await migrate(database, {
       migrationsFolder: path.join(process.cwd(), "drizzle"),
     });
-    await cleanupOssObjects(await assetKeys(client));
+    await cleanupOssObjects(await assetRows(client));
     await truncateE2eData(client);
     await seedUsers(client);
   } finally {
@@ -145,10 +122,13 @@ export async function resetAndSeed() {
   }
 }
 
-async function cleanup() {
-  const client = postgres(E2E_DATABASE_URL, { max: 1 });
+export async function cleanupE2eResources(
+  databaseUrl: string = E2E_DATABASE_URL,
+) {
+  e2eDatabaseName(databaseUrl);
+  const client = postgres(databaseUrl, { max: 1 });
   try {
-    await cleanupOssObjects(await assetKeys(client));
+    await cleanupOssObjects(await assetRows(client));
     await truncateE2eData(client);
   } finally {
     await client.end();
@@ -157,5 +137,5 @@ async function cleanup() {
 
 export default async function globalSetup() {
   loadDotEnv({ path: path.join(process.cwd(), ".env.local") });
-  return cleanup;
+  return () => cleanupE2eResources();
 }

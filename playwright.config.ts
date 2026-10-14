@@ -13,7 +13,7 @@ export default defineConfig({
   use: {
     baseURL: E2E_BASE_URL,
     screenshot: "only-on-failure",
-    trace: "retain-on-failure",
+    trace: "off",
   },
   projects: [
     {
