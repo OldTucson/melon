@@ -40,7 +40,7 @@ tests/e2e/dashboard.spec.ts
 - Test: `src/lib/db/schema/authorizations.integration.test.ts`
 - Generate: authorization migration and system-field seed under `drizzle/`
 
-- [ ] **Step 1: Write failing schema tests**
+- [x] **Step 1: Write failing schema tests**
 
 Assert the important database invariants directly:
 
@@ -54,7 +54,7 @@ await expect(insertDuplicateOperation(ownerId, operationId)).rejects.toThrow();
 
 Also prove two ordinary active authorizations may share one pattern/field, archived fields remain referentially valid, and `priceFen=0n` is valid while `-1n` is rejected. Run and expect missing-table failure.
 
-- [ ] **Step 2: Define exact enums, rows, and indexes**
+- [x] **Step 2: Define exact enums, rows, and indexes**
 
 ```ts
 export const authorizationScopes = ["system", "custom"] as const;
@@ -94,7 +94,7 @@ export const authorizations = pgTable("authorizations", {
 
 Use a composite `(ownerId, patternId)` foreign key so an authorization can never pair one owner with another owner's pattern. Add a check tying global buyout to null field and other kinds to non-null field, `priceFen >= 0`, `(ownerId, operationId)` uniqueness, the four approved query indexes, one active buyout per pattern, and one active field-exclusive row per pattern/field. The pattern foreign key remains intact because deleted patterns survive as sync tombstones; the permanent-deletion service explicitly removes authorization rows. Ordinary UI operations never hard-delete one authorization.
 
-- [ ] **Step 3: Seed the twelve immutable system fields**
+- [x] **Step 3: Seed the twelve immutable system fields**
 
 Define this exact ordered list in code and use deterministic UUID constants in a reviewed data migration:
 
@@ -107,7 +107,7 @@ export const SYSTEM_AUTHORIZATION_FIELDS = [
 
 The migration uses `insert ... on conflict do nothing`; it never renames or deletes existing field rows during application startup.
 
-- [ ] **Step 4: Generate, inspect, migrate, and commit**
+- [x] **Step 4: Generate, inspect, migrate, and commit**
 
 ```bash
 npm run db:generate

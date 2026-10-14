@@ -2,7 +2,9 @@ import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 
+import { SYSTEM_AUTHORIZATION_FIELD_SEED } from "@/features/authorizations/system-fields";
 import { getServerEnv } from "@/lib/env/server";
+import { authorizationFields } from "@/lib/db/schema/authorizations";
 
 export const assertTestDatabaseUrl = (databaseUrl: string) => {
   const { pathname } = new URL(databaseUrl);
@@ -28,6 +30,8 @@ export const resetDatabase = async (
         TRUNCATE TABLE
           "change_log",
           "operations",
+          "authorizations",
+          "authorization_fields",
           "upload_sessions",
           "pattern_tags",
           "assets",
@@ -38,6 +42,10 @@ export const resetDatabase = async (
         RESTART IDENTITY CASCADE
       `),
     );
+    await database
+      .insert(authorizationFields)
+      .values(SYSTEM_AUTHORIZATION_FIELD_SEED)
+      .onConflictDoNothing();
   } finally {
     await queryClient.end();
   }

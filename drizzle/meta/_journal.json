@@ -29,6 +29,13 @@
       "when": 1791862737147,
       "tag": "0003_strange_bloodscream",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791950850356,
+      "tag": "0004_safe_solo",
+      "breakpoints": true
     }
   ]
 }
