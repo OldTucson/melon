@@ -506,7 +506,7 @@ Expected: a 50-card page uses one list query, cursor pagination remains stable, 
 - Test: `src/features/analytics/dashboard-service.integration.test.ts`
 - Test: `src/app/api/dashboard/authorizations/route.test.ts`
 
-- [ ] **Step 1: Write failing date-range and aggregate tests**
+- [x] **Step 1: Write failing date-range and aggregate tests**
 
 Freeze today at `2026-10-08` and assert:
 
@@ -518,7 +518,7 @@ expect(resolveTrendGranularity({ start: "2026-09-01", end: "2026-10-08" })).toBe
 
 Seed data across boundaries and assert income, count including zero-price records, distinct patterns, average, prior-period delta, trend buckets, field ranking, current state buckets and top patterns. Void rows are excluded; trashed patterns remain in period metrics/rankings but not current status; permanently deleted rows are absent.
 
-- [ ] **Step 2: Define an integer-safe response contract**
+- [x] **Step 2: Define an integer-safe response contract**
 
 ```ts
 export type DashboardDto = {
@@ -533,7 +533,7 @@ export type DashboardDto = {
 
 All money fields are decimal strings. Average rounds half-up to the nearest fen with bigint arithmetic, then the UI formats two decimals; comparison percentage uses a decimal string and is null when no comparison or zero base.
 
-- [ ] **Step 3: Implement range and trend rules exactly**
+- [x] **Step 3: Implement range and trend rules exactly**
 
 Current year compares year-to-date with the same dates last year. Last 12 months compares the immediately preceding 12 months. Custom compares the immediately preceding equal number of inclusive days. All-time has no comparison. Custom ≤62 days groups by day, ≤2 years by month, and longer by year; current-year/last-12-month group by month; all-time uses month up to two years and year beyond it.
 
@@ -545,7 +545,7 @@ export function resolveTrendGranularity(range: DateRange, preset: DashboardPrese
 }
 ```
 
-- [ ] **Step 4: Implement PostgreSQL aggregate queries**
+- [x] **Step 4: Implement PostgreSQL aggregate queries**
 
 Use separate focused queries inside one read transaction: period metrics/comparison, trend, current states, field ranking and top patterns. Every query begins with owner scope and active authorization status. Apply optional kind/field filters to period metrics, trend and rankings, but never to current-state buckets. Return archived field snapshot names. Limit both rankings to 10 with stable ties by revenue, latest authorized date and name.
 
@@ -559,7 +559,7 @@ return db.transaction(async (tx) => ({
 }));
 ```
 
-- [ ] **Step 5: Verify plans and commit**
+- [x] **Step 5: Verify plans and commit**
 
 ```bash
 npm test -- src/features/analytics/date-ranges.test.ts src/app/api/dashboard/authorizations/route.test.ts
