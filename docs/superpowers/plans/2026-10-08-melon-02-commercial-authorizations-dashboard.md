@@ -129,7 +129,7 @@ Expected: all database constraints pass and the database contains exactly twelve
 - Test: `src/features/authorizations/money.test.ts`, `dates.test.ts`, `commercial-state.test.ts`
 - Test: `src/features/authorizations/field-service.integration.test.ts`
 
-- [ ] **Step 1: Write failing pure-rule tests**
+- [x] **Step 1: Write failing pure-rule tests**
 
 ```ts
 expect(parseRmbToFen("0")).toBe(0n);
@@ -143,7 +143,7 @@ expect(resolveCommercialState(["standard", "global_buyout"])).toBe("global_buyou
 
 Date tests use an injected server date and reject future `authorizedOn`. Field tests prove trimmed, case-insensitive uniqueness against both custom and system names and prove archive is idempotent.
 
-- [ ] **Step 2: Implement integer-only RMB parsing**
+- [x] **Step 2: Implement integer-only RMB parsing**
 
 ```ts
 export function parseRmbToFen(input: string): bigint {
@@ -162,7 +162,7 @@ export function formatFen(value: bigint): string {
 
 Never convert `priceFen` through JavaScript `number`; API DTOs serialize it as a decimal string.
 
-- [ ] **Step 3: Implement field normalization and archive service**
+- [x] **Step 3: Implement field normalization and archive service**
 
 Custom names trim to 1–32 characters and normalize with Unicode NFKC plus locale-independent lowercase. Create checks active and archived custom rows plus system rows before insert. Archive accepts only an owned custom row, sets status/archived time, appends a change event, and leaves historical authorizations untouched.
 
@@ -174,7 +174,7 @@ export function normalizeAuthorizationFieldName(input: string): { name: string; 
 }
 ```
 
-- [ ] **Step 4: Implement commercial-state priority**
+- [x] **Step 4: Implement commercial-state priority**
 
 ```ts
 export type CommercialState = "unlicensed" | "standard" | "field_exclusive" | "global_buyout";
@@ -188,7 +188,7 @@ export function resolveCommercialState(kinds: AuthorizationKind[]): CommercialSt
 
 Only active authorizations feed this function.
 
-- [ ] **Step 5: Verify and commit the rule layer**
+- [x] **Step 5: Verify and commit the rule layer**
 
 ```bash
 npm test -- src/features/authorizations/money.test.ts src/features/authorizations/dates.test.ts src/features/authorizations/commercial-state.test.ts
