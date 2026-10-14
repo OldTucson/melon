@@ -4,6 +4,12 @@ import type { patterns } from "@/lib/db/schema";
 
 type PatternStatus = (typeof patterns.$inferSelect)["status"];
 
+export type PatternCommercialSummary = {
+  state: "unlicensed" | "standard" | "field_exclusive" | "global_buyout";
+  activeCount: number;
+  revenueFen: string;
+};
+
 export type PatternItem = {
   id: string;
   ownerId: string;
@@ -24,6 +30,7 @@ export type PatternItem = {
   isFavorite: boolean;
   version: number;
   commercialVersion: number;
+  commercialSummary?: PatternCommercialSummary;
   lastErrorCode: string | null;
   trashedAt: string | null;
   deletedAt: string | null;

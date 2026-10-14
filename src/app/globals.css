@@ -1093,7 +1093,7 @@ textarea:focus-visible,
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-rows: auto 56px;
+  grid-template-rows: auto 48px 26px;
   min-width: 0;
   height: 100%;
   overflow: hidden;
@@ -1122,7 +1122,7 @@ textarea:focus-visible,
 
 .pattern-card[data-mode="list"] {
   grid-template-columns: 64px minmax(0, 1fr) auto;
-  grid-template-rows: 64px;
+  grid-template-rows: 38px 26px;
   align-items: center;
   height: 76px;
   padding: 6px;
@@ -1154,6 +1154,7 @@ textarea:focus-visible,
 
 .pattern-card[data-mode="list"] .pattern-media {
   grid-column: 1;
+  grid-row: 1 / -1;
   width: 64px;
   height: 64px;
   border: 0;
@@ -1196,6 +1197,8 @@ textarea:focus-visible,
 
 .pattern-card-copy {
   display: grid;
+  grid-column: 1;
+  grid-row: 2;
   align-content: center;
   min-width: 0;
   gap: 4px;
@@ -1207,6 +1210,52 @@ textarea:focus-visible,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.pattern-commercial-summary {
+  display: flex;
+  grid-column: 1 / -1;
+  grid-row: 3;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  gap: 7px;
+  padding: 0 10px 8px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pattern-commercial-summary > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pattern-commercial-state {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  gap: 3px;
+}
+
+.pattern-commercial-state svg {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+}
+
+.pattern-commercial-summary[data-state="standard"] .pattern-commercial-state {
+  color: var(--status-standard);
+}
+
+.pattern-commercial-summary[data-state="field_exclusive"] .pattern-commercial-state {
+  color: var(--status-exclusive);
+}
+
+.pattern-commercial-summary[data-state="global_buyout"] .pattern-commercial-state {
+  color: var(--status-buyout);
 }
 
 .pattern-card-copy strong {
@@ -1221,8 +1270,28 @@ textarea:focus-visible,
 
 .pattern-card-actions {
   display: flex;
+  grid-column: 2;
+  grid-row: 2;
   align-items: center;
   padding-right: 4px;
+}
+
+.pattern-card[data-mode="list"] .pattern-card-copy {
+  grid-column: 2;
+  grid-row: 1;
+  padding-bottom: 2px;
+}
+
+.pattern-card[data-mode="list"] .pattern-commercial-summary {
+  grid-column: 2;
+  grid-row: 2;
+  justify-content: flex-start;
+  padding: 0 10px 6px;
+}
+
+.pattern-card[data-mode="list"] .pattern-card-actions {
+  grid-column: 3;
+  grid-row: 1 / -1;
 }
 
 .pattern-card-actions .icon-button {

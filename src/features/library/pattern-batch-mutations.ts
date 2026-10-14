@@ -464,6 +464,15 @@ function rollbackOptimisticIntent(
   }
 }
 
+function mergeCommercialSummary(
+  current: PatternItem | undefined,
+  next: PatternItem,
+) {
+  return current?.commercialSummary && !next.commercialSummary
+    ? { ...next, commercialSummary: current.commercialSummary }
+    : next;
+}
+
 function applyServerPatterns(
   queryClient: QueryClient,
   ownerId: string,
@@ -480,12 +489,16 @@ function applyServerPatterns(
         updatePages(data, (item) => {
           const next = updated.get(item.id);
           if (!next) return item;
-          return knownQueryExcludes(query, next) ? null : next;
+          const merged = mergeCommercialSummary(item, next);
+          return knownQueryExcludes(query, merged) ? null : merged;
         }),
     );
   }
   for (const pattern of patterns) {
-    queryClient.setQueryData(queryKeys.pattern(ownerId, pattern.id), pattern);
+    queryClient.setQueryData<PatternItem>(
+      queryKeys.pattern(ownerId, pattern.id),
+      (current) => mergeCommercialSummary(current, pattern),
+    );
   }
 }
 

@@ -6,6 +6,7 @@ import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 
 import { hashPassword } from "../../src/features/auth/password";
+import { SYSTEM_AUTHORIZATION_FIELD_SEED } from "../../src/features/authorizations/system-fields";
 import {
   E2E_DATABASE_URL,
   E2E_PASSWORD,
@@ -105,6 +106,20 @@ async function seedUsers(client: postgres.Sql) {
   }
 }
 
+async function seedSystemAuthorizationFields(client: postgres.Sql) {
+  for (const field of SYSTEM_AUTHORIZATION_FIELD_SEED) {
+    await client`
+      insert into authorization_fields (
+        id, owner_id, scope, name, normalized_name, status
+      ) values (
+        ${field.id}, null, ${field.scope}, ${field.name},
+        ${field.normalizedName}, ${field.status}
+      )
+      on conflict do nothing
+    `;
+  }
+}
+
 export async function resetAndSeed() {
   await ensureDatabaseExists();
   const client = postgres(E2E_DATABASE_URL, { max: 1 });
@@ -117,6 +132,7 @@ export async function resetAndSeed() {
     await cleanupOssObjects(await assetRows(client));
     await truncateE2eData(client);
     await seedUsers(client);
+    await seedSystemAuthorizationFields(client);
   } finally {
     await client.end();
   }

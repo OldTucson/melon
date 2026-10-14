@@ -21,7 +21,13 @@ import {
 import { alias } from "drizzle-orm/pg-core";
 
 import { db, type DbTransaction } from "@/lib/db/client";
-import { assets, folders, patterns, patternTags } from "@/lib/db/schema";
+import {
+  assets,
+  authorizations,
+  folders,
+  patterns,
+  patternTags,
+} from "@/lib/db/schema";
 
 import type { PatternPatch, PatternQuery } from "./contracts";
 import type { PatternCursor } from "./pattern-cursor";
@@ -103,6 +109,37 @@ export async function listPatternRows(
   query: PatternQuery,
   cursor: PatternCursor | undefined,
 ) {
+  const commercialSummary = db
+    .select({
+      ownerId: authorizations.ownerId,
+      patternId: authorizations.patternId,
+      activeCount: sql<number>`count(*)::integer`.as("active_count"),
+      revenueFen:
+        sql<string>`coalesce(sum(${authorizations.priceFen}), 0)::text`.as(
+          "revenue_fen",
+        ),
+      hasBuyout:
+        sql<boolean>`bool_or(${authorizations.kind} = 'global_buyout')`.as(
+          "has_buyout",
+        ),
+      hasExclusive:
+        sql<boolean>`bool_or(${authorizations.kind} = 'field_exclusive')`.as(
+          "has_exclusive",
+        ),
+      fieldIds:
+        sql<string[]>`coalesce(array_agg(distinct ${authorizations.fieldId}) filter (where ${authorizations.fieldId} is not null), '{}'::uuid[])`.as(
+          "field_ids",
+        ),
+    })
+    .from(authorizations)
+    .where(
+      and(
+        eq(authorizations.ownerId, ownerId),
+        eq(authorizations.status, "active"),
+      ),
+    )
+    .groupBy(authorizations.ownerId, authorizations.patternId)
+    .as("commercial_summary");
   const folderStatuses =
     query.scope === "trash" ? trashFolderStatuses : libraryFolderStatuses;
   const predicates: SQL[] = [
@@ -176,6 +213,31 @@ export async function listPatternRows(
   if (query.previewStatus) {
     predicates.push(eq(patterns.previewStatus, query.previewStatus));
   }
+  if (query.commercialState === "unlicensed") {
+    predicates.push(isNull(commercialSummary.patternId));
+  } else if (query.commercialState === "standard") {
+    predicates.push(
+      and(
+        eq(commercialSummary.hasBuyout, false),
+        eq(commercialSummary.hasExclusive, false),
+        gt(commercialSummary.activeCount, 0),
+      )!,
+    );
+  } else if (query.commercialState === "field_exclusive") {
+    predicates.push(
+      and(
+        eq(commercialSummary.hasBuyout, false),
+        eq(commercialSummary.hasExclusive, true),
+      )!,
+    );
+  } else if (query.commercialState === "global_buyout") {
+    predicates.push(eq(commercialSummary.hasBuyout, true));
+  }
+  if (query.authorizationField) {
+    predicates.push(
+      sql`${query.authorizationField}::uuid = any(${commercialSummary.fieldIds})`,
+    );
+  }
   if (query.untagged) {
     predicates.push(
       notExists(
@@ -229,6 +291,10 @@ export async function listPatternRows(
       previewAssetId: previewAssets.id,
       thumbnailAssetId: thumbnailAssets.id,
       sourceAssetId: sourceAssets.id,
+      authorizationCount: sql<number>`coalesce(${commercialSummary.activeCount}, 0)`,
+      authorizationRevenueFen: sql<string>`coalesce(${commercialSummary.revenueFen}, '0')`,
+      hasActiveBuyout: sql<boolean>`coalesce(${commercialSummary.hasBuyout}, false)`,
+      hasActiveExclusive: sql<boolean>`coalesce(${commercialSummary.hasExclusive}, false)`,
       updatedCursorValue: sql<string>`to_char(${patterns.updatedAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
       createdCursorValue: sql<string>`to_char(${patterns.createdAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
     })
@@ -255,6 +321,13 @@ export async function listPatternRows(
         eq(sourceAssets.ownerId, ownerId),
         eq(sourceAssets.patternId, patterns.id),
         eq(sourceAssets.role, "source"),
+      ),
+    )
+    .leftJoin(
+      commercialSummary,
+      and(
+        eq(commercialSummary.ownerId, ownerId),
+        eq(commercialSummary.patternId, patterns.id),
       ),
     )
     .where(and(...predicates))

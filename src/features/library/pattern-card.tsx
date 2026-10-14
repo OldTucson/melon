@@ -3,13 +3,28 @@
 /* eslint-disable @next/next/no-img-element */
 
 import * as Checkbox from "@radix-ui/react-checkbox";
-import { Check, Download, Eye, FileImage, Heart } from "lucide-react";
+import {
+  Check,
+  CircleDollarSign,
+  Download,
+  Eye,
+  FileImage,
+  Heart,
+} from "lucide-react";
 import { useState } from "react";
 
 import type { PatternItem } from "./library-types";
 import { IconButton } from "./icon-button";
 import type { LibraryViewMode } from "./library-toolbar";
 import type { SelectionModifiers } from "./selection-store";
+import { formatFenForDisplay } from "@/features/authorizations/api";
+
+const commercialStateLabels = {
+  unlicensed: "未授权",
+  standard: "普通授权",
+  field_exclusive: "领域独占",
+  global_buyout: "全局买断",
+} as const;
 
 export function FormatPlaceholder({
   extension,
@@ -49,6 +64,11 @@ export function PatternCard({
 }) {
   const [imageFailed, setImageFailed] = useState(false);
   const imageAssetId = item.thumbnailAssetId ?? item.previewAssetId;
+  const commercialSummary = item.commercialSummary ?? {
+    state: "unlicensed" as const,
+    activeCount: 0,
+    revenueFen: "0",
+  };
   return (
     <div
       className="pattern-card"
@@ -113,6 +133,20 @@ export function PatternCard({
         <strong title={item.name}>{item.name}</strong>
         <span>
           {item.extension.toUpperCase()} · {formatBytes(item.sizeBytes)}
+        </span>
+      </div>
+      <div
+        className="pattern-commercial-summary"
+        data-state={commercialSummary.state}
+        aria-label="商业授权摘要"
+      >
+        <span className="pattern-commercial-state">
+          <CircleDollarSign aria-hidden="true" />
+          {commercialStateLabels[commercialSummary.state]}
+        </span>
+        <span>
+          {commercialSummary.activeCount} 笔 ·{" "}
+          {formatFenForDisplay(commercialSummary.revenueFen)}
         </span>
       </div>
       <div className="pattern-card-actions">

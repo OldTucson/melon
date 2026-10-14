@@ -14,10 +14,16 @@ import {
 import { useRef, useState } from "react";
 
 import {
+  commercialStates,
   patternFormats,
   patternSorts,
   type PatternQuery,
 } from "@/features/patterns/contracts";
+import {
+  fetchAuthorizationFields,
+  type AuthorizationFieldDto,
+} from "@/features/authorizations/api";
+import { authorizationKeys } from "@/features/authorizations/query-keys";
 import { readApiResponse } from "@/lib/query/client";
 import { queryKeys } from "@/lib/query/keys";
 import { useQueryOwnerId } from "@/lib/query/provider";
@@ -30,6 +36,16 @@ const sortLabels: Record<(typeof patternSorts)[number], string> = {
   created_desc: "最近创建",
   name_asc: "名称 A-Z",
   size_desc: "文件最大",
+};
+
+const commercialStateLabels: Record<
+  (typeof commercialStates)[number],
+  string
+> = {
+  unlicensed: "未授权",
+  standard: "普通授权",
+  field_exclusive: "领域独占",
+  global_buyout: "全局买断",
 };
 
 export type LibraryViewMode = "grid" | "list";
@@ -61,6 +77,10 @@ export function LibraryToolbar({
   const tagsQuery = useQuery({
     queryKey: queryKeys.tags(ownerId),
     queryFn: loadTags,
+  });
+  const fieldsQuery = useQuery<AuthorizationFieldDto[]>({
+    queryKey: authorizationKeys.fields(ownerId, true),
+    queryFn: () => fetchAuthorizationFields(true),
   });
   const [pendingQuery, setPendingQuery] = useState(query);
   const pendingQueryRef = useRef(query);
@@ -125,6 +145,54 @@ export function LibraryToolbar({
           <Heart aria-hidden="true" />
           收藏
         </button>
+        <label className="compact-field">
+          <span>授权</span>
+          <select
+            aria-label="按商业状态筛选"
+            value={pendingQuery.commercialState ?? ""}
+            onChange={(event) =>
+              patchQuery({
+                commercialState: event.target.value
+                  ? (event.target.value as PatternQuery["commercialState"])
+                  : undefined,
+              })
+            }
+          >
+            <option value="">全部状态</option>
+            {commercialStates.map((state) => (
+              <option key={state} value={state}>
+                {commercialStateLabels[state]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="compact-field">
+          <span>领域</span>
+          <select
+            aria-label="按授权领域筛选"
+            disabled={fieldsQuery.isPending || fieldsQuery.isError}
+            value={pendingQuery.authorizationField ?? ""}
+            onChange={(event) =>
+              patchQuery({
+                authorizationField: event.target.value || undefined,
+              })
+            }
+          >
+            <option value="">
+              {fieldsQuery.isPending
+                ? "读取领域中"
+                : fieldsQuery.isError
+                  ? "领域不可用"
+                  : "全部领域"}
+            </option>
+            {fieldsQuery.data?.map((field) => (
+              <option key={field.id} value={field.id}>
+                {field.name}
+                {field.status === "archived" ? "（已归档）" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
         <DropdownMenu.Root>
           <DropdownMenu.Trigger asChild>
             <button
@@ -235,11 +303,19 @@ export function LibraryToolbar({
         </label>
         {(pendingQuery.formats.length > 0 ||
           pendingQuery.tagIds.length > 0 ||
-          pendingQuery.favorite !== undefined) && (
+          pendingQuery.favorite !== undefined ||
+          pendingQuery.commercialState !== undefined ||
+          pendingQuery.authorizationField !== undefined) && (
           <IconButton
             label="清除筛选"
             onClick={() => {
-              patchQuery({ formats: [], tagIds: [], favorite: undefined });
+              patchQuery({
+                formats: [],
+                tagIds: [],
+                favorite: undefined,
+                commercialState: undefined,
+                authorizationField: undefined,
+              });
             }}
           >
             <RotateCcw aria-hidden="true" />

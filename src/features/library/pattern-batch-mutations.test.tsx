@@ -508,6 +508,43 @@ describe("pattern batch mutation", () => {
     }
   });
 
+  it("preserves the commercial summary when a batch response omits it", async () => {
+    const commercialSummary = {
+      state: "field_exclusive" as const,
+      activeCount: 2,
+      revenueFen: "128000",
+    };
+    const item = { ...pattern(1), commercialSummary };
+    const client = clientWith([item]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input, init) => {
+        const intent = JSON.parse(String(init?.body)) as PatternBatchRequest;
+        const [serverPattern] = validBatchPatterns([item], intent);
+        const responsePattern = { ...serverPattern! };
+        delete responsePattern.commercialSummary;
+        return Response.json({ patterns: [responsePattern] });
+      }),
+    );
+    useSelectionStore.getState().selectAll([item.id]);
+    renderHarness(client, [item]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Favorite" }));
+
+    await waitFor(() =>
+      expect(useSelectionStore.getState().selectedIds).toEqual([]),
+    );
+    expect(
+      client.getQueryData<PatternItem>(queryKeys.pattern(ownerId, item.id))
+        ?.commercialSummary,
+    ).toEqual(commercialSummary);
+    expect(
+      client.getQueryData<InfiniteData<PatternPage>>(
+        queryKeys.patterns(ownerId, query),
+      )?.pages[0]?.items[0]?.commercialSummary,
+    ).toEqual(commercialSummary);
+  });
+
   it("keeps trashed rows until success and clears only the requested IDs", async () => {
     const items = [pattern(1), pattern(2), pattern(3)];
     const client = clientWith(items);

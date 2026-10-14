@@ -62,7 +62,9 @@ export function PatternGrid({
   }, [mode, width]);
   const rowCount = Math.ceil(items.length / columns);
   const rowHeight =
-    mode === "list" ? 88 : Math.max(196, (width - (columns - 1) * 12) / columns) + 68;
+    mode === "list"
+      ? 88
+      : Math.max(196, (width - (columns - 1) * 12) / columns) + 86;
 
   return (
     <div

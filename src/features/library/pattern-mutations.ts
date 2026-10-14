@@ -45,6 +45,14 @@ const applyPatch = (pattern: PatternItem, patch: PatternPatch) => ({
   ...(patch.isFavorite === undefined ? {} : { isFavorite: patch.isFavorite }),
 });
 
+const mergeServerPattern = (
+  current: PatternItem | undefined,
+  updated: PatternItem,
+) =>
+  current?.commercialSummary && !updated.commercialSummary
+    ? { ...updated, commercialSummary: current.commercialSummary }
+    : updated;
+
 const updatePatternInPages = (
   data: InfiniteData<PatternPage, string | null> | undefined,
   patternId: string,
@@ -116,13 +124,16 @@ export function usePatternPatchMutation(activeQuery: PatternQuery) {
       }
     },
     onSuccess: (updated, intent) => {
-      queryClient.setQueryData(
+      queryClient.setQueryData<PatternItem>(
         queryKeys.pattern(ownerId, intent.patternId),
-        updated,
+        (current) => mergeServerPattern(current, updated),
       );
       queryClient.setQueryData<InfiniteData<PatternPage, string | null>>(
         listKey,
-        (value) => updatePatternInPages(value, intent.patternId, () => updated),
+        (value) =>
+          updatePatternInPages(value, intent.patternId, (current) =>
+            mergeServerPattern(current, updated),
+          ),
       );
     },
     onSettled: (_data, _error, intent) => {

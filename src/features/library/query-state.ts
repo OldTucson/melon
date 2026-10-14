@@ -14,6 +14,8 @@ export type LibrarySearchState = {
   untagged?: string | boolean;
   favorite?: string | boolean;
   previewStatus?: string;
+  commercialState?: string;
+  authorizationField?: string;
   folderId?: string;
   unfiled?: string | boolean;
   includeDescendants: string | boolean;
@@ -45,6 +47,8 @@ export function parseLibrarySearchParams(
     untagged: scalar("untagged"),
     favorite: scalar("favorite"),
     previewStatus: scalar("previewStatus"),
+    commercialState: scalar("commercialState"),
+    authorizationField: scalar("authorizationField"),
     ...(unfiled === "true" ? {} : { folderId: scalar("folderId") }),
     unfiled,
     includeDescendants: scalar("includeDescendants") ?? true,
@@ -78,6 +82,12 @@ export function serializeLibrarySearchParams(
     result.set("favorite", String(state.favorite));
   }
   if (state.previewStatus) result.set("previewStatus", state.previewStatus);
+  if (state.commercialState) {
+    result.set("commercialState", state.commercialState);
+  }
+  if (state.authorizationField) {
+    result.set("authorizationField", state.authorizationField);
+  }
   if (state.unfiled !== true && state.unfiled !== "true" && state.folderId) {
     result.set("folderId", state.folderId);
   }

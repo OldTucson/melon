@@ -445,7 +445,7 @@ Expected: all operations work by keyboard, form errors focus their fields, and c
 - Test: `src/features/patterns/commercial-summary.integration.test.ts`
 - Test: `src/features/library/commercial-filters.test.tsx`
 
-- [ ] **Step 1: Write failing summary and filter tests**
+- [x] **Step 1: Write failing summary and filter tests**
 
 Seed unlicensed, standard, exclusive and bought-out patterns plus void rows. Assert one summary per pattern with priority `buyout > exclusive > standard > unlicensed`, effective count, and integer-string revenue. Filter by one commercial state and one field ID; void rows must not match.
 
@@ -455,7 +455,7 @@ The component test round-trips this URL:
 /library?commercialState=field_exclusive&authorizationField=00000000-0000-4000-8000-000000000003
 ```
 
-- [ ] **Step 2: Extend the list query without N+1 requests**
+- [x] **Step 2: Extend the list query without N+1 requests**
 
 Join one grouped authorization subquery by `(ownerId, patternId)` that computes active count, total `priceFen`, flags for each kind, and distinct active field IDs. Keep `ownerId` as the first index/predicate. Commercial field filtering uses active authorization rows; card summaries never trigger per-card API calls.
 
@@ -470,7 +470,7 @@ where owner_id = $1 and status = 'active'
 group by pattern_id
 ```
 
-- [ ] **Step 3: Render restrained status and metrics**
+- [x] **Step 3: Render restrained status and metrics**
 
 Pattern cards display at most one status icon/text plus effective count and formatted income. Use neutral gray for unlicensed and the semantic standard/exclusive/buyout tokens. Do not cover or tint the artwork. Add select-menu filters for commercial state and field, using system/custom field names rather than free text.
 
@@ -483,7 +483,7 @@ const statusPresentation = {
 } satisfies Record<CommercialState, { label: string; color: string }>;
 ```
 
-- [ ] **Step 4: Verify pagination stability and commit**
+- [x] **Step 4: Verify pagination stability and commit**
 
 ```bash
 npm run test:integration -- src/features/patterns/commercial-summary.integration.test.ts

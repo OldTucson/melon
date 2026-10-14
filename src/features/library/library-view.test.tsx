@@ -28,6 +28,7 @@ import type {
 } from "@/features/library/library-types";
 import { queryKeys } from "@/lib/query/keys";
 import { QueryOwnerProvider } from "@/lib/query/provider";
+import { authorizationKeys } from "@/features/authorizations/query-keys";
 
 import { LibraryView } from "./library-view";
 import { usePatternPatchMutation } from "./pattern-mutations";
@@ -111,6 +112,7 @@ function createClient(items: PatternItem[]) {
     client.setQueryData(queryKeys.patternTags(ownerId, item.id), { items: [] });
   }
   client.setQueryData(queryKeys.tags(ownerId), []);
+  client.setQueryData(authorizationKeys.fields(ownerId, true), []);
   return client;
 }
 
@@ -655,7 +657,7 @@ describe("Mac-first workspace", () => {
       expect(row!.style.gridTemplateColumns).toBe("repeat(4, minmax(0, 1fr))");
       return row!;
     });
-    expect(initialRow.style.height).toBe("284px");
+    expect(initialRow.style.height).toBe("302px");
 
     act(() => {
       for (const { callback, observer } of resizeObservers) {
@@ -674,11 +676,11 @@ describe("Mac-first workspace", () => {
     await waitFor(() => {
       const row = document.querySelector<HTMLElement>(".virtual-pattern-row");
       expect(row?.style.gridTemplateColumns).toBe("repeat(4, minmax(0, 1fr))");
-      expect(row?.style.height).toBe("294px");
+      expect(row?.style.height).toBe("312px");
       expect(
         document.querySelector<HTMLElement>(".virtual-pattern-canvas")?.style
           .height,
-      ).toBe("882px");
+      ).toBe("936px");
     });
   });
 

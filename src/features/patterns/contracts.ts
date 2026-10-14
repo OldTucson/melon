@@ -20,6 +20,13 @@ export const patternSorts = [
   "size_desc",
 ] as const;
 
+export const commercialStates = [
+  "unlicensed",
+  "standard",
+  "field_exclusive",
+  "global_buyout",
+] as const;
+
 const patternFormatOrder = new Map<string, number>(
   patternFormats.map((format, index) => [format, index]),
 );
@@ -51,6 +58,8 @@ export const patternQuerySchema = z
     previewStatus: z
       .enum(["pending", "ready", "unsupported", "failed", "manual"])
       .optional(),
+    commercialState: z.enum(commercialStates).optional(),
+    authorizationField: normalizedUuidSchema.optional(),
     folderId: normalizedUuidSchema.optional(),
     unfiled: queryBoolean.optional(),
     includeDescendants: queryBoolean.default(true),
@@ -115,6 +124,8 @@ export function parsePatternSearchParams(searchParams: URLSearchParams) {
     untagged: scalar("untagged"),
     favorite: scalar("favorite"),
     previewStatus: scalar("previewStatus"),
+    commercialState: scalar("commercialState"),
+    authorizationField: scalar("authorizationField"),
     folderId: scalar("folderId"),
     unfiled: scalar("unfiled"),
     includeDescendants: scalar("includeDescendants"),
