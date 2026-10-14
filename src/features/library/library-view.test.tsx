@@ -16,6 +16,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -123,12 +124,12 @@ function createClient(items: PatternItem[]) {
   return client;
 }
 
-function libraryTree(client: QueryClient, initialQuery = query) {
+function libraryTree(client: QueryClient, initialQuery = query, initialSelectedId?: string) {
   return (
     <QueryClientProvider client={client}>
       <QueryOwnerProvider ownerId={ownerId}>
         <Tooltip.Provider>
-          <LibraryView initialQuery={initialQuery} />
+          <LibraryView initialQuery={initialQuery} initialSelectedId={initialSelectedId} />
         </Tooltip.Provider>
       </QueryOwnerProvider>
     </QueryClientProvider>
@@ -146,6 +147,26 @@ function renderLibrary(
 }
 
 describe("Mac-first workspace", () => {
+  it("preserves a selected deep link through StrictMode effect replay", () => {
+    const item = makePattern(1);
+    const client = createClient([item]);
+    render(<StrictMode>{libraryTree(client, query, item.id)}</StrictMode>);
+    expect(screen.getByRole("tab", { name: "商业授权" })).toBeVisible();
+    expect(screen.getByRole("checkbox", { name: "选择 Pattern 1" })).toBeChecked();
+  });
+
+  it("updates deep links and clears selection on navigation without selected", () => {
+    const first = makePattern(1);
+    const second = makePattern(2);
+    const client = createClient([first, second]);
+    const view = render(libraryTree(client, query, first.id));
+    view.rerender(libraryTree(client, query, second.id));
+    expect(screen.getByRole("checkbox", { name: "选择 Pattern 2" })).toBeChecked();
+    view.rerender(libraryTree(client, query));
+    expect(screen.getByRole("checkbox", { name: "选择 Pattern 2" })).not.toBeChecked();
+    expect(screen.queryByRole("tab", { name: "商业授权" })).not.toBeInTheDocument();
+  });
+
   it("resets destination, old errors and confirmation when the multi-selection changes", async () => {
     const items = [1, 2, 3, 4].map(makePattern);
     const client = createClient(items);

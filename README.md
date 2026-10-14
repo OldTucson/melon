@@ -2,7 +2,9 @@
 
 面向图案设计师的私有 Web 图案资料库。应用使用 Next.js、PostgreSQL 和私有阿里云 OSS，管理 PSD、AI、JPG、PNG 与 Procreate 原文件。
 
-当前已完成第一阶段资料库 MVP：私有账号登录、浏览器分片直传、JPG/PNG 预览与缩略图、原文件下载、嵌套文件夹、批量整理、回收站、重命名、收藏、标签、组合筛选、排序、明暗主题和租户隔离。商业授权与数据看板是下一阶段。
+当前已实现资料库与商业授权：私有账号登录、浏览器分片直传、JPG/PNG 预览与缩略图、原文件下载、嵌套文件夹、批量整理、回收站、重命名、收藏、标签、组合筛选、排序、明暗主题和租户隔离；商业授权支持普通授权、领域独占、全局买断及收入看板。
+
+在图案检查器的“商业授权”页记录客户、价格与日期。同一领域可重复普通授权；独占和买断要求核对已有历史，并限制之后的授权。记录可以编辑、作废、恢复，自定义领域可以创建和归档。看板按日期、领域及类型统计有效收入，提供收入趋势、当前商业状态、领域与图案排行及下钻链接。回收站保留授权历史与过去收入，永久删除会同时删除授权历史并重算看板。
 
 ## 环境要求
 
@@ -84,12 +86,34 @@ npm run build
 
 数据库集成测试使用 `postgres://melon:melon@localhost:55432/melon_test`。`compose.yaml` 提供相同的本地端口和账号。
 
-浏览器 E2E 使用独立的 `melon_e2e` 数据库，并在真实 OSS 中创建随机 UUID 隔离对象；测试结束后会按数据库记录清理对象。先确保 `.env.local` 已配置、服务端 RAM 身份拥有文档要求的 Bucket 级 `oss:ListObjects`、Bucket CORS 允许 `http://127.0.0.1:3210`，再执行。若预检返回 `E2E_OSS_LIST_PERMISSION_MISSING`，请按[服务端运行身份](docs/operations/aliyun-oss.md#服务端运行身份)补齐权限，不要把列举权限加到浏览器上传角色。
+浏览器 E2E 使用独立的 `melon_e2e` 数据库，并在真实 OSS 中创建随机 UUID 隔离对象；测试结束后会按数据库记录清理对象。先确保 `.env.local` 已配置、服务端 RAM 身份拥有文档要求的 Bucket 级 `oss:ListObjects`、Bucket CORS 允许实际测试 Origin（默认 `http://127.0.0.1:3210`），再执行。若预检返回 `E2E_OSS_LIST_PERMISSION_MISSING`，请按[服务端运行身份](docs/operations/aliyun-oss.md#服务端运行身份)补齐权限，不要把列举权限加到浏览器上传角色。
 
 ```bash
 npx playwright install webkit
 npm run test:e2e
 ```
+
+商业授权与看板浏览器验证不访问 OSS，使用独立的 `melon_commercial_e2e` 数据库和 `http://127.0.0.1:3211`。它会拒绝任何资产记录，只生成元数据，并分别在 Chrome、桌面 WebKit、1024×1366 WebKit 上执行；看板覆盖浅色和夜间主题。永久删除的浏览器断言止于影响统计与危险确认，实际清除及收入重算由 fake-OSS 集成测试覆盖。
+
+```bash
+npm run test:e2e:commercial
+```
+
+两个浏览器命令都不会复用已有服务，使用专用 `.next-e2e` 构建目录；不要同时运行两套浏览器测试。可用 `E2E_PORT=3212` 覆盖端口、`E2E_DATABASE_URL` 覆盖测试库（名称必须以 `_e2e` 结尾）。传统 OSS E2E 改端口时还需配置对应 CORS origin。不要将测试库指向应用数据库。
+
+例如保留 3210 开发服务并在已加入 OSS CORS 的 3212 运行传统 E2E：
+
+```bash
+E2E_PORT=3212 E2E_DATABASE_URL=postgres://melon:melon@127.0.0.1:55432/melon_legacy_e2e npm run test:e2e
+```
+
+目标规模验证只写入显式指定、名称以 `_performance_test` 结尾的测试库，不读取 `.env.local`，也不创建 OSS 对象。它迁移测试库并重建专用测试所有者下的 10,000 个图案和 100,000 条授权，不清空其他所有者的数据；输出真实看板查询的 JSON 执行计划摘要。年度与领域查询必须命中预期索引；全时间及当前状态允许按所有者限定的全量扫描，未限定所有者的图案/授权扫描会失败。
+
+```bash
+PERFORMANCE_DATABASE_URL=postgres://melon:melon@127.0.0.1:55432/melon_performance_test npm run seed:performance
+```
+
+本次运行结果与外部依赖边界见[商业授权验证记录](docs/verification/2026-10-08-commercial-authorizations.md)。
 
 真实 OSS 适配器测试默认跳过。需要显式验证 STS、断点续传、HEAD/Range、签名下载和删除时执行：
 

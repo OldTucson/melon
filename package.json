@@ -16,6 +16,8 @@
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:e2e": "playwright test",
+    "test:e2e:commercial": "E2E_METADATA_ONLY=1 E2E_PORT=${E2E_PORT:-3211} E2E_DATABASE_URL=${E2E_DATABASE_URL:-postgres://melon:melon@127.0.0.1:55432/melon_commercial_e2e} playwright test",
+    "seed:performance": "node --conditions=react-server --import tsx scripts/seed-performance.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "user:create": "node --conditions=react-server --import tsx scripts/create-user.ts",

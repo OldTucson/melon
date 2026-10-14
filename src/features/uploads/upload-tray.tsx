@@ -1,6 +1,7 @@
 "use client";
 
-import { Pause, RefreshCw, Trash2, UploadCloud } from "lucide-react";
+import { ChevronDown, ChevronUp, Pause, RefreshCw, Trash2, UploadCloud } from "lucide-react";
+import { useState } from "react";
 
 import type { UploadTaskStatus } from "./upload-runner";
 
@@ -36,72 +37,92 @@ export function UploadTray({
   onReselect: (id: string) => void;
   onAbandon: (id: string) => void;
 }) {
+  const [collapsed, setCollapsed] = useState(false);
   if (tasks.length === 0) return null;
 
   return (
-    <aside className="upload-tray" aria-label="上传队列">
+    <aside
+      className={`upload-tray${collapsed ? " upload-tray-collapsed" : ""}`}
+      aria-label="上传队列"
+    >
       <header>
         <UploadCloud aria-hidden="true" />
         <strong>上传</strong>
         <span>{tasks.length} 个文件</span>
+        <button
+          type="button"
+          className="upload-tray-toggle"
+          aria-label={collapsed ? "展开上传队列" : "收起上传队列"}
+          aria-expanded={!collapsed}
+          title={collapsed ? "展开上传队列" : "收起上传队列"}
+          onClick={() => setCollapsed(!collapsed)}
+        >
+          {collapsed ? (
+            <ChevronUp aria-hidden="true" />
+          ) : (
+            <ChevronDown aria-hidden="true" />
+          )}
+        </button>
       </header>
-      <div className="upload-tray-list">
-        {tasks.map((task) => {
-          const active = ["hashing", "uploading"].includes(task.status);
-          return (
-            <div className="upload-tray-row" key={task.localTaskId}>
-              <div className="upload-tray-copy">
-                <strong title={task.filename}>{task.filename}</strong>
-                <span>{task.error ?? statusLabels[task.status]}</span>
+      {!collapsed ? (
+        <div className="upload-tray-list">
+          {tasks.map((task) => {
+            const active = ["hashing", "uploading"].includes(task.status);
+            return (
+              <div className="upload-tray-row" key={task.localTaskId}>
+                <div className="upload-tray-copy">
+                  <strong title={task.filename}>{task.filename}</strong>
+                  <span>{task.error ?? statusLabels[task.status]}</span>
+                </div>
+                <div className="upload-progress" aria-label={`${task.filename} 上传进度`}>
+                  <span style={{ width: `${Math.max(0, Math.min(100, task.progress))}%` }} />
+                </div>
+                <output>{Math.round(task.progress)}%</output>
+                <div className="upload-tray-actions">
+                  {active ? (
+                    <button
+                      type="button"
+                      aria-label={`暂停 ${task.filename}`}
+                      title="暂停"
+                      onClick={() => onPause(task.localTaskId)}
+                    >
+                      <Pause aria-hidden="true" />
+                    </button>
+                  ) : null}
+                  {task.needsReselect ? (
+                    <button
+                      type="button"
+                      aria-label={`重新选择 ${task.filename}`}
+                      onClick={() => onReselect(task.localTaskId)}
+                    >
+                      重新选择
+                    </button>
+                  ) : task.status === "failed" || task.status === "paused" ? (
+                    <button
+                      type="button"
+                      aria-label={`重试 ${task.filename}`}
+                      title="重试"
+                      onClick={() => onRetry(task.localTaskId)}
+                    >
+                      <RefreshCw aria-hidden="true" />
+                    </button>
+                  ) : null}
+                  {task.status !== "ready" ? (
+                    <button
+                      type="button"
+                      aria-label={`放弃 ${task.filename}`}
+                      title="放弃上传"
+                      onClick={() => onAbandon(task.localTaskId)}
+                    >
+                      <Trash2 aria-hidden="true" />
+                    </button>
+                  ) : null}
+                </div>
               </div>
-              <div className="upload-progress" aria-label={`${task.filename} 上传进度`}>
-                <span style={{ width: `${Math.max(0, Math.min(100, task.progress))}%` }} />
-              </div>
-              <output>{Math.round(task.progress)}%</output>
-              <div className="upload-tray-actions">
-                {active ? (
-                  <button
-                    type="button"
-                    aria-label={`暂停 ${task.filename}`}
-                    title="暂停"
-                    onClick={() => onPause(task.localTaskId)}
-                  >
-                    <Pause aria-hidden="true" />
-                  </button>
-                ) : null}
-                {task.needsReselect ? (
-                  <button
-                    type="button"
-                    aria-label={`重新选择 ${task.filename}`}
-                    onClick={() => onReselect(task.localTaskId)}
-                  >
-                    重新选择
-                  </button>
-                ) : task.status === "failed" || task.status === "paused" ? (
-                  <button
-                    type="button"
-                    aria-label={`重试 ${task.filename}`}
-                    title="重试"
-                    onClick={() => onRetry(task.localTaskId)}
-                  >
-                    <RefreshCw aria-hidden="true" />
-                  </button>
-                ) : null}
-                {task.status !== "ready" ? (
-                  <button
-                    type="button"
-                    aria-label={`放弃 ${task.filename}`}
-                    title="放弃上传"
-                    onClick={() => onAbandon(task.localTaskId)}
-                  >
-                    <Trash2 aria-hidden="true" />
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      ) : null}
     </aside>
   );
 }

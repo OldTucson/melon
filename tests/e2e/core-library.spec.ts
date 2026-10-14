@@ -34,11 +34,23 @@ test("uploads, tags, filters, previews, favorites, and downloads", async ({
     .toBe(true);
   const inspectorIsModal = await inspectorDialog.isVisible();
   if (!inspectorIsModal) await expect(card).toBeVisible();
+  if (!inspectorIsModal) {
+    await page.getByRole("button", { name: "收起上传队列" }).click();
+    await expect(page.getByRole("button", { name: "展开上传队列" })).toHaveAttribute("aria-expanded", "false");
+  }
 
   const nameInput = page.getByLabel("图案名称");
   await expect(nameInput).toBeVisible();
   await nameInput.fill(patternName);
-  await nameInput.press("Tab");
+  await Promise.all([
+    page.waitForResponse((response) =>
+      response.request().method() === "PATCH" &&
+      new URL(response.url()).pathname.startsWith("/api/patterns/") &&
+      response.ok(),
+    ),
+    nameInput.press("Tab"),
+  ]);
+  await expect(nameInput).toHaveValue(patternName);
   card = page.getByRole("listitem", { name: new RegExp(patternName, "i") });
   if (!inspectorIsModal) await expect(card).toBeVisible();
 
@@ -52,6 +64,8 @@ test("uploads, tags, filters, previews, favorites, and downloads", async ({
   if (inspectorIsModal) {
     await inspectorDialog.getByRole("button", { name: "收起检查器" }).click();
     await expect(inspectorDialog).toBeHidden();
+    await page.getByRole("button", { name: "收起上传队列" }).click();
+    await expect(page.getByRole("button", { name: "展开上传队列" })).toHaveAttribute("aria-expanded", "false");
   }
   await expect(card).toBeVisible();
 

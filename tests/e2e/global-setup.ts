@@ -11,6 +11,9 @@ import {
   E2E_DATABASE_URL,
   E2E_PASSWORD,
   E2E_USERS,
+  E2E_METADATA_ONLY,
+  assertMetadataOnlyRows,
+  e2eDatabaseName,
 } from "./environment";
 import { createE2eOssClient } from "./oss-client";
 import {
@@ -18,14 +21,6 @@ import {
   type E2eAssetRow,
   listE2eOssObjectKeys,
 } from "./oss-safety";
-
-function e2eDatabaseName(databaseUrl: string) {
-  const name = decodeURIComponent(new URL(databaseUrl).pathname.slice(1));
-  if (!/^[a-z0-9_]+_e2e$/.test(name)) {
-    throw new Error("E2E_DATABASE_NAME_UNSAFE");
-  }
-  return name;
-}
 
 async function ensureDatabaseExists() {
   const databaseName = e2eDatabaseName(E2E_DATABASE_URL);
@@ -48,6 +43,10 @@ async function ensureDatabaseExists() {
 }
 
 async function cleanupOssObjects(rows: E2eAssetRow[]) {
+  if (E2E_METADATA_ONLY) {
+    assertMetadataOnlyRows(rows);
+    return;
+  }
   assertE2eAssetRows(rows);
   const client = await createE2eOssClient();
   const keys = await listE2eOssObjectKeys(client);
@@ -68,6 +67,12 @@ async function assetRows(client: postgres.Sql) {
     from assets
     order by object_key
   `;
+}
+
+async function assertMetadataOnlyDatabase(client: postgres.Sql) {
+  if (!E2E_METADATA_ONLY) return;
+  const uploads = await client`select source_object_key from upload_sessions`;
+  assertMetadataOnlyRows(await assetRows(client), uploads);
 }
 
 async function truncateE2eData(client: postgres.Sql) {
@@ -129,10 +134,12 @@ export async function resetAndSeed() {
     await migrate(database, {
       migrationsFolder: path.join(process.cwd(), "drizzle"),
     });
+    await assertMetadataOnlyDatabase(client);
     await cleanupOssObjects(await assetRows(client));
     await truncateE2eData(client);
     await seedUsers(client);
     await seedSystemAuthorizationFields(client);
+    await assertMetadataOnlyDatabase(client);
   } finally {
     await client.end();
   }
@@ -144,8 +151,10 @@ export async function cleanupE2eResources(
   e2eDatabaseName(databaseUrl);
   const client = postgres(databaseUrl, { max: 1 });
   try {
+    await assertMetadataOnlyDatabase(client);
     await cleanupOssObjects(await assetRows(client));
     await truncateE2eData(client);
+    await assertMetadataOnlyDatabase(client);
   } finally {
     await client.end();
   }

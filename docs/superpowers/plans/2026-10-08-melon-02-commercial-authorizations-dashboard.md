@@ -720,7 +720,7 @@ Expected: 30-day recovery preserves records, permanent deletion removes them, an
 - Create: `docs/verification/2026-10-08-commercial-authorizations.md`
 - Modify: `README.md`, `package.json`
 
-- [ ] **Step 1: Write end-to-end commercial journeys**
+- [x] **Step 1: Write end-to-end commercial journeys**
 
 Cover repeated ordinary licensing in one field, field-exclusive confirmation and blocking, other-field allowance, global-buyout confirmation and blocking, edit, void, restore conflict, custom field creation/archive, stale-version refresh, trash read-only behavior, restore, and permanent-delete impact. A second user cannot read or mutate any IDs from the first.
 
@@ -733,7 +733,7 @@ test("enforces exclusive and buyout history", async ({ page }) => {
 });
 ```
 
-- [ ] **Step 2: Add deterministic dashboard journeys**
+- [x] **Step 2: Add deterministic dashboard journeys**
 
 Seed known dates/prices, select each date preset and field/kind filter, and assert KPI text, trend accessible table, current-state counts, rankings and drill-down URLs. Run every dashboard journey in light and dark mode at 1440×900 and a smoke pass at 1024×1366.
 
@@ -746,7 +746,7 @@ for (const theme of ["light", "dark"] as const) {
 }
 ```
 
-- [ ] **Step 3: Seed and inspect target-scale queries**
+- [x] **Step 3: Seed and inspect target-scale queries**
 
 Generate 10,000 patterns and 100,000 authorization rows for one test owner without network or OSS objects. Run `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` for period metrics, trend, current state, field ranking and top patterns. Store summarized plans in the verification document and fail the script when a large table uses an unexpected unbounded sequential scan.
 
@@ -756,7 +756,9 @@ Add the executable script before running it:
 { "scripts": { "seed:performance": "tsx scripts/seed-performance.ts" } }
 ```
 
-- [ ] **Step 4: Run the phase gate**
+- [x] **Step 4: Run the phase gate**
+
+Completed on 2026-10-14: unit, integration, typecheck, lint, isolated production build, the legacy real-OSS suite on its separately allowed 3212 origin, all 18 commercial browser journeys and target-scale query checks passed. See [the complete evidence and limitations](../../verification/2026-10-08-commercial-authorizations.md).
 
 ```bash
 npm test
@@ -770,7 +772,7 @@ npm run seed:performance
 
 Expected: every command exits 0, commercial browser journeys pass in Chromium/WebKit, and query plans use the intended owner/date/status indexes.
 
-- [ ] **Step 5: Record evidence and commit**
+- [x] **Step 5: Record evidence and commit**
 
 ```bash
 git add scripts/seed-performance.ts src/test/fixtures tests/e2e docs/verification/2026-10-08-commercial-authorizations.md README.md package.json package-lock.json

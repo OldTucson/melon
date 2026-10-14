@@ -3,13 +3,13 @@ import path from "node:path";
 import { config as loadDotEnv } from "dotenv";
 import postgres from "postgres";
 
-import { E2E_DATABASE_URL, E2E_USERS } from "./environment";
+import { E2E_DATABASE_URL, E2E_METADATA_ONLY, E2E_USERS } from "./environment";
 import { E2E_PATTERN_SEEDS } from "./fixtures";
 import { resetAndSeed } from "./global-setup";
 import { assertE2eOssListAccess } from "./oss-client";
 
 loadDotEnv({ path: path.join(process.cwd(), ".env.local") });
-await assertE2eOssListAccess();
+if (!E2E_METADATA_ONLY) await assertE2eOssListAccess();
 await resetAndSeed();
 
 const client = postgres(E2E_DATABASE_URL, { max: 1 });

@@ -1,12 +1,44 @@
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { UploadDropzone } from "./upload-dropzone";
 import { UploadTray } from "./upload-tray";
 
+afterEach(cleanup);
+
 describe("upload UI", () => {
+  it("collapses the upload queue without discarding tasks and expands it again", async () => {
+    const user = userEvent.setup();
+    const onAbandon = vi.fn();
+    const onPause = vi.fn();
+    render(
+      <UploadTray
+        tasks={[
+          {
+            localTaskId: "one",
+            filename: "leaf.png",
+            status: "uploading",
+            progress: 42,
+          },
+        ]}
+        onAbandon={onAbandon}
+        onPause={onPause}
+        onRetry={vi.fn()}
+        onReselect={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "收起上传队列" }));
+    expect(screen.queryByText("leaf.png")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "展开上传队列" })).toHaveAttribute("aria-expanded", "false");
+    expect(onAbandon).not.toHaveBeenCalled();
+    expect(onPause).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "展开上传队列" }));
+    expect(screen.getByText("42%")).toBeVisible();
+    expect(screen.getByRole("button", { name: "收起上传队列" })).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("accepts supported files from an accessible dropzone", async () => {
     const user = userEvent.setup();
     const onFiles = vi.fn();

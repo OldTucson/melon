@@ -155,7 +155,10 @@ export function LibraryView({
   useEffect(() => {
     clearSelection();
     closePreview();
-  }, [clearSelection, closePreview, querySignature]);
+    // Clearing a route's selection also invalidates its applied deep link.
+    // StrictMode replays this setup before replaying the selection effect.
+    appliedInitialSelectedId.current = null;
+  }, [clearSelection, closePreview, initialSelectedId, querySignature]);
 
   useEffect(() => {
     reconcileSelection(availableIds);
@@ -175,7 +178,7 @@ export function LibraryView({
     select(initialSelectedId, availableIds, {});
     setCollapsedSelectionKey(null);
     appliedInitialSelectedId.current = initialSelectedId;
-  }, [availableIds, deepLinkedPattern, initialSelectedId, select]);
+  }, [availableIds, deepLinkedPattern, initialSelectedId, querySignature, select]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
