@@ -3,7 +3,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQueryClient } from "@tanstack/react-query";
 import { Folder, RotateCcw, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   useTrashMutation,
   useTrashQuery,
@@ -19,7 +19,17 @@ import { useQueryOwnerId } from "@/lib/query/provider";
 import { ApiResponseError } from "@/lib/query/client";
 
 type Confirmation = { intent: TrashIntent; summary: string; names: string[] };
-export function TrashView() {
+export type TrashDeepLinkTarget = {
+  id: string;
+  name: string;
+  trashBatchId: string;
+};
+
+export function TrashView({
+  initialTarget,
+}: {
+  initialTarget?: TrashDeepLinkTarget;
+}) {
   const client = useQueryClient();
   const ownerId = useQueryOwnerId();
   const query = useTrashQuery();
@@ -27,6 +37,38 @@ export function TrashView() {
   const [selected, setSelected] = useState<string[]>([]);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const appliedTargetId = useRef<string | null>(null);
+  const ordinaryTarget = query.data?.patternBatches
+    .flatMap((batch) => batch.patterns)
+    .find((pattern) => pattern.id === initialTarget?.id);
+  const targetedFolderBatchId =
+    initialTarget && query.data && !ordinaryTarget
+      ? initialTarget.trashBatchId
+      : null;
+
+  useEffect(() => {
+    if (!initialTarget) {
+      appliedTargetId.current = null;
+      return;
+    }
+    if (
+      !ordinaryTarget ||
+      appliedTargetId.current === initialTarget.id
+    ) {
+      return;
+    }
+    appliedTargetId.current = initialTarget.id;
+    setSelected([initialTarget.id]);
+  }, [initialTarget, ordinaryTarget]);
+
+  useEffect(() => {
+    if (!initialTarget || !selected.includes(initialTarget.id)) return;
+    const checkbox = document.querySelector<HTMLInputElement>(
+      `[data-trash-pattern-id="${initialTarget.id}"]`,
+    );
+    checkbox?.scrollIntoView?.({ block: "center" });
+    checkbox?.focus();
+  }, [initialTarget, selected]);
   const run = async (intent: TrashIntent) => {
     if (mutation.isPending) return;
     const current = client.getQueryData<TrashList>(queryKeys.trash(ownerId));
@@ -152,6 +194,11 @@ export function TrashView() {
               <section
                 className="trash-folder-row"
                 aria-label={batch.rootFolderName}
+                data-targeted={
+                  targetedFolderBatchId === batch.trashBatchId
+                    ? "true"
+                    : undefined
+                }
                 key={batch.trashBatchId}
               >
                 <Folder aria-hidden="true" />
@@ -161,6 +208,11 @@ export function TrashView() {
                     {batch.folderCount} 个文件夹 · {batch.patternCount} 个图案
                   </p>
                   <Expiry value={batch.expiresAt} />
+                  {targetedFolderBatchId === batch.trashBatchId ? (
+                    <p className="trash-target-note" role="status">
+                      包含目标图案：{initialTarget?.name}
+                    </p>
+                  ) : null}
                   {rowPending(batch.trashBatchId) ? (
                     <p role="status">
                       {mutation.variables?.action === "purge"
@@ -282,6 +334,7 @@ export function TrashView() {
                       type="checkbox"
                       aria-label={`选择${pattern.name}`}
                       checked={selected.includes(pattern.id)}
+                      data-trash-pattern-id={pattern.id}
                       disabled={pending || deleting}
                       onChange={(event) =>
                         setSelected((ids) =>

@@ -113,14 +113,16 @@ export function Sidebar() {
       </div>
 
       <div className="sidebar-section sidebar-secondary">
-        <span
-          className="sidebar-link sidebar-link-disabled"
-          aria-disabled="true"
-          title="数据看板将在商业授权阶段开放"
+        <Link
+          aria-current={activeView === "dashboard" ? "page" : undefined}
+          className="sidebar-link"
+          data-active={activeView === "dashboard" ? "true" : undefined}
+          href="/dashboard"
+          title="数据看板"
         >
           <BarChart3 aria-hidden="true" />
           <span>数据看板</span>
-        </span>
+        </Link>
         <Link
           className="sidebar-link"
           href="/trash"
@@ -147,6 +149,7 @@ export function Sidebar() {
 }
 
 function getActiveView(pathname: string, searchParams: URLSearchParams) {
+  if (pathname === "/dashboard") return "dashboard";
   if (pathname === "/trash") return "trash";
   if (pathname === "/settings") return "settings";
   if (pathname !== "/library") return null;

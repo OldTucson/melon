@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import * as Tooltip from "@radix-ui/react-tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -57,6 +58,36 @@ function renderWorkspace(compact = true) {
   </QueryOwnerProvider></QueryClientProvider>);
 }
 
+function renderDeepLinkedPattern() {
+  vi.stubGlobal("matchMedia", vi.fn(() => ({
+    matches: false,
+    media: "(max-width: 1100px)",
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  })));
+  const query = toPatternQuery(parseLibrarySearchParams(new URLSearchParams()));
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  });
+  client.setQueryData(queryKeys.folders(ownerId), [folder]);
+  client.setQueryData(queryKeys.tags(ownerId), []);
+  client.setQueryData(queryKeys.patternTags(ownerId, pattern.id), { items: [] });
+  client.setQueryData(queryKeys.pattern(ownerId, pattern.id), pattern);
+  client.setQueryData(queryKeys.patterns(ownerId, query), {
+    pages: [{ items: [], nextCursor: null }],
+    pageParams: [null],
+  });
+  return render(
+    <QueryClientProvider client={client}>
+      <QueryOwnerProvider ownerId={ownerId}>
+        <Tooltip.Provider>
+          <LibraryView initialQuery={query} initialSelectedId={pattern.id} />
+        </Tooltip.Provider>
+      </QueryOwnerProvider>
+    </QueryClientProvider>,
+  );
+}
+
 beforeEach(() => {
   useSelectionStore.getState().clear();
   vi.stubGlobal("ResizeObserver", class {
@@ -68,6 +99,20 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("responsive workspace panels", () => {
+  it("opens a deep-linked pattern even when it is not in the loaded page", async () => {
+    renderDeepLinkedPattern();
+
+    await waitFor(() =>
+      expect(useSelectionStore.getState().selectedIds).toEqual([pattern.id]),
+    );
+    expect(
+      screen.getByRole("complementary", { name: "图案检查器" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "图案名称" })).toHaveValue(
+      pattern.name,
+    );
+  });
+
   it("opens a named folder dialog, traps focus and restores its trigger on Escape and close", async () => {
     const user = userEvent.setup();
     renderWorkspace();

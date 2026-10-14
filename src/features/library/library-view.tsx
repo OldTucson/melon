@@ -3,10 +3,14 @@
 /* eslint-disable @next/next/no-img-element */
 
 import * as Dialog from "@radix-ui/react-dialog";
-import { type InfiniteData, useInfiniteQuery } from "@tanstack/react-query";
+import {
+  type InfiniteData,
+  useInfiniteQuery,
+  useQuery,
+} from "@tanstack/react-query";
 import { Download, X } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   patternQuerySchema,
@@ -37,6 +41,21 @@ async function fetchPatternPage(query: PatternQuery, cursor: string | null) {
   );
 }
 
+async function fetchPattern(patternId: string) {
+  return readApiResponse<PatternPage["items"][number]>(
+    await fetch(`/api/patterns/${patternId}`),
+  );
+}
+
+const libraryStatuses = new Set([
+  "draft",
+  "hashing",
+  "uploading",
+  "processing",
+  "ready",
+  "failed",
+]);
+
 const blocksLibraryShortcut = (target: EventTarget | null) => {
   if (!(target instanceof Element)) return false;
   return Boolean(
@@ -46,7 +65,13 @@ const blocksLibraryShortcut = (target: EventTarget | null) => {
   );
 };
 
-export function LibraryView({ initialQuery }: { initialQuery: PatternQuery }) {
+export function LibraryView({
+  initialQuery,
+  initialSelectedId,
+}: {
+  initialQuery: PatternQuery;
+  initialSelectedId?: string;
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const ownerId = useQueryOwnerId();
@@ -71,6 +96,7 @@ export function LibraryView({ initialQuery }: { initialQuery: PatternQuery }) {
   const openPreview = useSelectionStore((state) => state.openPreview);
   const reconcileSelection = useSelectionStore((state) => state.reconcile);
   const togglePreview = useSelectionStore((state) => state.togglePreview);
+  const appliedInitialSelectedId = useRef<string | null>(null);
   const mutation = usePatternPatchMutation(initialQuery);
   const querySignature = serializeLibrarySearchParams(initialQuery).toString();
   const patternsQuery = useInfiniteQuery<
@@ -85,15 +111,41 @@ export function LibraryView({ initialQuery }: { initialQuery: PatternQuery }) {
     initialPageParam: initialQuery.cursor ?? null,
     getNextPageParam: (lastPage) => lastPage.nextCursor,
   });
+  const selectedPatternQuery = useQuery({
+    queryKey: queryKeys.pattern(ownerId, initialSelectedId ?? "none"),
+    queryFn: () => fetchPattern(initialSelectedId!),
+    enabled: Boolean(initialSelectedId),
+  });
   const items = useMemo(
     () => patternsQuery.data?.pages.flatMap((page) => page.items) ?? [],
     [patternsQuery.data],
   );
   const orderedIds = useMemo(() => items.map((item) => item.id), [items]);
+  const deepLinkedPattern =
+    selectedPatternQuery.data &&
+    libraryStatuses.has(selectedPatternQuery.data.status)
+      ? selectedPatternQuery.data
+      : null;
+  const availableIds = useMemo(
+    () =>
+      deepLinkedPattern && !orderedIds.includes(deepLinkedPattern.id)
+        ? [...orderedIds, deepLinkedPattern.id]
+        : orderedIds,
+    [deepLinkedPattern, orderedIds],
+  );
+  const patternsById = useMemo(() => {
+    const result = new Map(items.map((item) => [item.id, item]));
+    if (deepLinkedPattern) result.set(deepLinkedPattern.id, deepLinkedPattern);
+    return result;
+  }, [deepLinkedPattern, items]);
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const selectedPatterns = useMemo(
-    () => items.filter((item) => selectedSet.has(item.id)),
-    [items, selectedSet],
+    () =>
+      selectedIds.flatMap((id) => {
+        const pattern = patternsById.get(id);
+        return pattern ? [pattern] : [];
+      }),
+    [patternsById, selectedIds],
   );
   const previewPattern = items.find((item) => item.id === previewId) ?? null;
   const selectionKey = selectedIds.join("|");
@@ -106,8 +158,24 @@ export function LibraryView({ initialQuery }: { initialQuery: PatternQuery }) {
   }, [clearSelection, closePreview, querySignature]);
 
   useEffect(() => {
-    reconcileSelection(orderedIds);
-  }, [orderedIds, reconcileSelection]);
+    reconcileSelection(availableIds);
+  }, [availableIds, reconcileSelection]);
+
+  useEffect(() => {
+    if (!initialSelectedId) {
+      appliedInitialSelectedId.current = null;
+      return;
+    }
+    if (
+      !deepLinkedPattern ||
+      appliedInitialSelectedId.current === initialSelectedId
+    ) {
+      return;
+    }
+    select(initialSelectedId, availableIds, {});
+    setCollapsedSelectionKey(null);
+    appliedInitialSelectedId.current = initialSelectedId;
+  }, [availableIds, deepLinkedPattern, initialSelectedId, select]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

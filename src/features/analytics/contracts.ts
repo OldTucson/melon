@@ -83,3 +83,14 @@ export function parseDashboardSearchParams(searchParams: URLSearchParams) {
     kind: scalar("kind"),
   });
 }
+
+export function serializeDashboardQuery(query: DashboardQuery) {
+  const search = new URLSearchParams({ range: query.range });
+  if (query.range === "custom") {
+    if (query.start) search.set("start", query.start);
+    if (query.end) search.set("end", query.end);
+  }
+  if (query.fieldId) search.set("field", query.fieldId);
+  if (query.kind) search.set("kind", query.kind);
+  return search;
+}

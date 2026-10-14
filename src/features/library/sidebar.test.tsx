@@ -63,6 +63,14 @@ function renderSidebar(search = "", pathname = "/library") {
 afterEach(() => cleanup());
 
 describe("workspace sidebar", () => {
+  it("links and activates the commercial dashboard", () => {
+    renderSidebar("", "/dashboard");
+    const link = screen.getByRole("link", { name: "数据看板" });
+    expect(link).toHaveAttribute("href", "/dashboard");
+    expect(link).toHaveAttribute("aria-current", "page");
+    expect(link).toHaveAttribute("data-active", "true");
+  });
+
   it.each(["/trash", "/trash-other", "/library"])(
     "links the trash workspace with exact active route on %s",
     (pathname) => {

@@ -583,7 +583,7 @@ Expected: all boundary fixtures match exactly and the JSON response contains no 
 - Test: `src/features/analytics/dashboard-view.test.tsx`
 - Test: `src/features/analytics/revenue-trend.test.tsx`
 
-- [ ] **Step 1: Install the chart library and write failing UI tests**
+- [x] **Step 1: Install the chart library and write failing UI tests**
 
 ```bash
 npm install recharts
@@ -591,7 +591,7 @@ npm install recharts
 
 Test current-year default, all-time comparison omission, custom inclusive dates, filters, `¥0` empty state, no fabricated line when there is no data, visible value labels, keyboard-readable data table, trash labels and library/trash drill-down URLs.
 
-- [ ] **Step 2: Build the unframed dashboard layout**
+- [x] **Step 2: Build the unframed dashboard layout**
 
 Use one page band with compact heading/filter row, four KPI cells separated by borders, a wide trend region, a current-state region, then two ranking tables. Do not wrap page sections in cards. Use 6 px maximum radius only for genuine chart/tool frames. Keep headings between 15 and 22 px and preserve a hint of lower content without a hero block.
 
@@ -599,7 +599,7 @@ Use one page band with compact heading/filter row, four KPI cells separated by b
 return <main className="dashboard"><DashboardFilters /><KpiStrip /><section className="trend"><RevenueTrend /></section><section className="status"><CurrentStateChart /></section><section className="rankings"><FieldRanking /><PatternRanking /></section></main>;
 ```
 
-- [ ] **Step 3: Render charts with accessible fallbacks**
+- [x] **Step 3: Render charts with accessible fallbacks**
 
 Recharts receives formatted numeric values derived safely from integer strings within supported display range while raw strings remain authoritative. Trend uses indigo; current-state uses neutral/green/gold/red tokens. Every chart has a sibling semantic table or list with the same values, an accessible name, and focusable data points; tooltip hover is never the only reading method.
 
@@ -607,7 +607,7 @@ Recharts receives formatted numeric values derived safely from integer strings w
 return <figure aria-labelledby="revenue-trend-title"><ResponsiveContainer><LineChart data={chartData}><Line dataKey="revenueYuan" stroke="var(--primary)" /></LineChart></ResponsiveContainer><TrendDataTable rows={rows} /></figure>;
 ```
 
-- [ ] **Step 4: Implement URL-backed filters and drill-down**
+- [x] **Step 4: Implement URL-backed filters and drill-down**
 
 Persist preset/custom dates, field and kind in search params. Clicking a field navigates to `/library?authorizationField=<id>`. Clicking a live pattern navigates to `/library?selected=<id>`; a trashed pattern navigates to `/trash?selected=<id>`. Current-state chart filters only the library and does not alter the dashboard's fixed “截至今日” population.
 
@@ -616,7 +616,7 @@ export const patternDrilldownHref = (row: DashboardDto["topPatterns"][number]) =
 export const fieldDrilldownHref = (fieldId: string) => `/library?authorizationField=${encodeURIComponent(fieldId)}`;
 ```
 
-- [ ] **Step 5: Verify both themes and commit**
+- [x] **Step 5: Verify both themes and commit**
 
 ```bash
 npm test -- src/features/analytics/dashboard-view.test.tsx src/features/analytics/revenue-trend.test.tsx

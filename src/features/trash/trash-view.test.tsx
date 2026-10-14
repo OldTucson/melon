@@ -120,6 +120,40 @@ it("renders folder groups as one row and ordinary patterns as selectable rows", 
   expect(within(group).getByText(/到期/)).toHaveTextContent("2026/11/7");
   expect(screen.getAllByRole("checkbox")).toHaveLength(2);
 });
+it("selects and focuses an ordinary pattern from a dashboard deep link", async () => {
+  const { wrapper } = setup(data());
+  render(
+    <TrashView
+      initialTarget={{ id: id(2), name: "图案2", trashBatchId: id(20) }}
+    />,
+    { wrapper },
+  );
+
+  const checkbox = await screen.findByRole("checkbox", {
+    name: "选择图案2",
+  });
+  await waitFor(() => expect(checkbox).toBeChecked());
+  expect(checkbox).toHaveFocus();
+});
+it("locates a deep-linked pattern inside its trashed folder batch", async () => {
+  const { wrapper } = setup(data());
+  render(
+    <TrashView
+      initialTarget={{
+        id: id(30),
+        name: "文件夹内图案",
+        trashBatchId: id(10),
+      }}
+    />,
+    { wrapper },
+  );
+
+  const group = await screen.findByRole("region", { name: "夏日果园" });
+  expect(group).toHaveAttribute("data-targeted", "true");
+  expect(within(group).getByRole("status")).toHaveTextContent(
+    "包含目标图案：文件夹内图案",
+  );
+});
 it("restores only checked ordinary patterns and invalidates owner caches after confirmation", async () => {
   const { client, wrapper } = setup(data());
   const invalidate = vi.spyOn(client, "invalidateQueries");
