@@ -88,9 +88,11 @@ function relationErrorMessage(error: unknown) {
 
 export function TagPicker({
   activeQuery,
+  disabled = false,
   patternId,
 }: {
   activeQuery: PatternQuery;
+  disabled?: boolean;
   patternId: string;
 }) {
   const queryClient = useQueryClient();
@@ -114,7 +116,8 @@ export function TagPicker({
     queryFn: () => loadPatternTags(patternId),
   });
   const listKey = queryKeys.patterns(ownerId, activeQuery);
-  const canWrite = tagsQuery.isSuccess && relationsQuery.isSuccess;
+  const canWrite =
+    !disabled && tagsQuery.isSuccess && relationsQuery.isSuccess;
 
   const relationMutation = useMutation({
     mutationFn: async (intent: RelationIntent) => {
@@ -338,6 +341,7 @@ export function TagPicker({
             <span>标签名称</span>
             <input
               aria-label="标签名称"
+              disabled={!canWrite}
               maxLength={32}
               value={newName}
               onChange={(event) => setNewName(event.target.value)}
@@ -360,6 +364,7 @@ export function TagPicker({
                     value={token}
                     aria-label={tagColorNames[token]}
                     checked={newColor === token}
+                    disabled={!canWrite}
                     onChange={() => setNewColor(token)}
                   />
                   <span
@@ -391,7 +396,7 @@ export function TagPicker({
         <button
           className="secondary-button tag-association-retry"
           type="button"
-          disabled={createMutation.isPending}
+          disabled={!canWrite || createMutation.isPending}
           onClick={() => createMutation.mutate(pendingAssociation)}
         >
           重试添加标签
@@ -445,7 +450,7 @@ export function TagPicker({
                 type="checkbox"
                 aria-label={tag.name}
                 checked={activeIds.has(tag.id)}
-                disabled={relationMutation.isPending}
+                disabled={!canWrite || relationMutation.isPending}
                 onChange={(event) =>
                   relationMutation.mutate({
                     checked: event.target.checked,

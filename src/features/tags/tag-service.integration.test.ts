@@ -429,6 +429,41 @@ describe("tag service", () => {
     expect(relation?.isActive).toBe(false);
   });
 
+  it("rejects tag relation mutations while a pattern is processing", async () => {
+    const patternId = await seedPattern(ownerA);
+    const tag = await createTag({
+      ownerId: ownerA,
+      operationId: randomUUID(),
+      name: "Blocked while processing",
+      colorToken: "gray",
+    });
+    await db
+      .update(patterns)
+      .set({ status: "processing" })
+      .where(and(eq(patterns.ownerId, ownerA), eq(patterns.id, patternId)));
+
+    await expect(
+      addTagToPattern({
+        ownerId: ownerA,
+        patternId,
+        tagId: tag.id,
+        operationId: randomUUID(),
+      }),
+    ).rejects.toMatchObject({ code: "PATTERN_STATE_CHANGED", status: 409 });
+
+    expect(
+      await db
+        .select()
+        .from(patternTags)
+        .where(
+          and(
+            eq(patternTags.ownerId, ownerA),
+            eq(patternTags.patternId, patternId),
+          ),
+        ),
+    ).toHaveLength(0);
+  });
+
   it("accepts the twentieth active tag and rejects the twenty-first", async () => {
     const patternId = await seedPattern(ownerA);
     const created = await Promise.all(

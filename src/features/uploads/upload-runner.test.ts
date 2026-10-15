@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { BrowserOssCredentials } from "@/features/storage/contracts";
+import { ApiResponseError } from "@/lib/query/client";
 
 import {
   abandonUpload,
@@ -235,6 +236,7 @@ describe("upload runner", () => {
     );
     const harness = createHarness();
     const current = completionCheckpoint(task, harness.dependencies.ownerId);
+    const patches: Array<Record<string, unknown>> = [];
     const legacy: UploadCheckpointRow = { ...current };
     delete legacy.completionAssets;
     legacy.objectKeys = {
@@ -242,11 +244,100 @@ describe("upload runner", () => {
       preview: "users/u/patterns/p/preview/id.webp",
     };
     harness.dependencies.checkpoints.load = vi.fn(async () => legacy);
+    harness.dependencies.onUpdate = (patch) => patches.push(patch);
 
     await expect(
       recoverUploadCompletion(task, harness.dependencies),
     ).rejects.toThrow("UPLOAD_COMPLETION_NOT_RECOVERABLE");
     expect(harness.dependencies.api.complete).not.toHaveBeenCalled();
+    expect(patches.at(-1)).toMatchObject({
+      status: "failed",
+      canRecoverCompletion: false,
+      completionRecoveryTerminal: false,
+    });
+  });
+
+  it("marks a terminal completion conflict as requiring a fresh upload", async () => {
+    const task = createUploadTask(
+      new File(["png"], "leaf.png", { lastModified: 123 }),
+    );
+    const harness = createHarness();
+    const patches: Array<Record<string, unknown>> = [];
+    harness.dependencies.checkpoints.load = vi.fn(async () =>
+      completionCheckpoint(task, harness.dependencies.ownerId),
+    );
+    harness.dependencies.api.complete = vi.fn(async () => {
+      throw new ApiResponseError(
+        409,
+        "UPLOAD_SESSION_INVALID_STATE",
+        "Upload session is not active",
+      );
+    });
+    harness.dependencies.onUpdate = (patch) => patches.push(patch);
+
+    await expect(
+      recoverUploadCompletion(task, harness.dependencies),
+    ).rejects.toMatchObject({ code: "UPLOAD_SESSION_INVALID_STATE" });
+
+    expect(patches.at(-1)).toMatchObject({
+      status: "failed",
+      canRecoverCompletion: false,
+      completionRecoveryTerminal: true,
+      error: "恢复信息已失效，请放弃后重新上传",
+    });
+    expect(harness.dependencies.checkpoints.delete).not.toHaveBeenCalled();
+  });
+
+  it("keeps completion recovery available after a retryable network failure", async () => {
+    const task = createUploadTask(
+      new File(["png"], "leaf.png", { lastModified: 123 }),
+    );
+    const harness = createHarness();
+    const patches: Array<Record<string, unknown>> = [];
+    harness.dependencies.checkpoints.load = vi.fn(async () =>
+      completionCheckpoint(task, harness.dependencies.ownerId),
+    );
+    harness.dependencies.api.complete = vi.fn(async () => {
+      throw new Error("offline");
+    });
+    harness.dependencies.onUpdate = (patch) => patches.push(patch);
+
+    await expect(
+      recoverUploadCompletion(task, harness.dependencies),
+    ).rejects.toThrow("offline");
+
+    expect(patches.at(-1)).toMatchObject({
+      status: "failed",
+      canRecoverCompletion: true,
+      completionRecoveryTerminal: false,
+    });
+  });
+
+  it("does not delete recovery state when a superseded completion returns late", async () => {
+    const task = createUploadTask(
+      new File(["png"], "leaf.png", { lastModified: 123 }),
+    );
+    const harness = createHarness();
+    let current = true;
+    let resolveCompletion!: () => void;
+    harness.dependencies.checkpoints.load = vi.fn(async () =>
+      completionCheckpoint(task, harness.dependencies.ownerId),
+    );
+    harness.dependencies.api.complete = vi.fn(
+      () => new Promise<void>((resolve) => (resolveCompletion = resolve)),
+    );
+    harness.dependencies.isCurrent = () => current;
+
+    const pending = recoverUploadCompletion(task, harness.dependencies);
+    await vi.waitFor(() =>
+      expect(harness.dependencies.api.complete).toHaveBeenCalled(),
+    );
+    current = false;
+    resolveCompletion();
+    await pending;
+
+    expect(harness.dependencies.checkpoints.delete).not.toHaveBeenCalled();
+    expect(harness.transitions).not.toContain("ready");
   });
 
   it("verifies a reselected file before any OSS call", async () => {
@@ -297,7 +388,7 @@ describe("upload runner", () => {
     );
   });
 
-  it("deletes the local checkpoint even when server cancellation fails", async () => {
+  it("keeps the local checkpoint when server cancellation fails", async () => {
     const task = createUploadTask(
       new File(["png"], "leaf.png", { lastModified: 123 }),
     );
@@ -325,8 +416,6 @@ describe("upload runner", () => {
     });
 
     await expect(abandonUpload(task, harness.dependencies)).rejects.toThrow("offline");
-    expect(harness.dependencies.checkpoints.delete).toHaveBeenCalledWith(
-      task.localTaskId,
-    );
+    expect(harness.dependencies.checkpoints.delete).not.toHaveBeenCalled();
   });
 });

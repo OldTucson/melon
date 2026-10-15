@@ -38,6 +38,7 @@ import { usePatternPatchMutation } from "./pattern-mutations";
 import { WorkspaceShell } from "./workspace-shell";
 import { useSelectionStore } from "./selection-store";
 import type { FolderDto } from "@/features/folders/folder-client";
+import { useUploadStore } from "@/features/uploads/upload-store";
 
 const navigation = vi.hoisted(() => ({
   pathname: "/library",
@@ -373,6 +374,178 @@ describe("Mac-first workspace", () => {
     ).toBe(false);
   });
 
+  it("locks direct metadata mutations while the selected pattern is processing", () => {
+    const processing = { ...makePattern(1), status: "processing" as const };
+    renderLibrary([processing]);
+    act(() => useSelectionStore.getState().selectAll([processing.id]));
+
+    const inspector = within(
+      screen.getByRole("complementary", { name: "图案检查器" }),
+    );
+    expect(
+      inspector.getByRole("textbox", { name: "图案名称" }),
+    ).toBeDisabled();
+    expect(
+      inspector.getByRole("button", { name: "添加收藏" }),
+    ).toBeDisabled();
+    expect(
+      inspector.getByRole("button", { name: "创建标签" }),
+    ).toBeDisabled();
+    expect(
+      within(screen.getByRole("listitem", { name: /Pattern 1/ })).getByRole(
+        "button",
+        { name: "收藏" },
+      ),
+    ).toBeDisabled();
+  });
+
+  it("retries a failed first status request at the low-frequency interval", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-15T00:00:30.000Z"));
+    const processing = { ...makePattern(1), status: "processing" as const };
+    const client = createClient([processing]);
+    client.removeQueries({
+      queryKey: queryKeys.pattern(ownerId, processing.id),
+      exact: true,
+    });
+    const fetchMock = vi.fn(async () =>
+      Response.json(
+        { error: { code: "SERVICE_UNAVAILABLE", message: "offline" } },
+        { status: 503 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(libraryTree(client));
+    act(() => useSelectionStore.getState().selectAll([processing.id]));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await act(async () => vi.advanceTimersByTimeAsync(14_999));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears a stale selection after the detail endpoint returns 404", async () => {
+    const processing = { ...makePattern(1), status: "processing" as const };
+    vi.mocked(fetch).mockResolvedValue(
+      Response.json(
+        { error: { code: "NOT_FOUND", message: "missing" } },
+        { status: 404 },
+      ),
+    );
+    renderLibrary([processing]);
+    act(() => useSelectionStore.getState().selectAll([processing.id]));
+
+    fireEvent.click(screen.getByRole("button", { name: "重新检查" }));
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("complementary", { name: "图案检查器" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByRole("listitem", { name: /Pattern 1/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("clears a stale selection after the detail leaves the library", async () => {
+    const processing = { ...makePattern(1), status: "processing" as const };
+    vi.mocked(fetch).mockResolvedValue(
+      Response.json({ ...processing, status: "trashed" as const }),
+    );
+    renderLibrary([processing]);
+    act(() => useSelectionStore.getState().selectAll([processing.id]));
+
+    fireEvent.click(screen.getByRole("button", { name: "重新检查" }));
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("complementary", { name: "图案检查器" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByRole("listitem", { name: /Pattern 1/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not poll a transient pattern owned by an active local upload", async () => {
+    vi.useFakeTimers();
+    const processing = { ...makePattern(1), status: "processing" as const };
+    useUploadStore.setState({
+      tasks: [
+        {
+          localTaskId: "local-1",
+          patternId: processing.id,
+          sourceAssetId: "00000000-0000-4000-8000-000000000011",
+          previewAssetId: "00000000-0000-4000-8000-000000000012",
+          thumbnailAssetId: "00000000-0000-4000-8000-000000000013",
+          operationId: "00000000-0000-4000-8000-000000000014",
+          filename: "pattern-1.png",
+          extension: "png",
+          size: 1024,
+          lastModified: 1,
+          status: "processing",
+          progress: 99,
+          runPending: true,
+        },
+      ],
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    renderLibrary([processing]);
+    act(() => useSelectionStore.getState().selectAll([processing.id]));
+
+    await act(async () => vi.advanceTimersByTimeAsync(30_000));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    vi.mocked(fetch).mockResolvedValue(
+      Response.json({ ...processing, status: "ready" as const }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "重新检查" }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(fetchMock).toHaveBeenCalledWith(`/api/patterns/${processing.id}`);
+  });
+
+  it("polls a restored processing task that has no local attempt running", async () => {
+    vi.useFakeTimers();
+    const processing = { ...makePattern(1), status: "processing" as const };
+    useUploadStore.setState({
+      tasks: [
+        {
+          localTaskId: "restored-1",
+          patternId: processing.id,
+          sourceAssetId: "00000000-0000-4000-8000-000000000021",
+          previewAssetId: "00000000-0000-4000-8000-000000000022",
+          thumbnailAssetId: "00000000-0000-4000-8000-000000000023",
+          operationId: "00000000-0000-4000-8000-000000000024",
+          filename: "pattern-1.png",
+          extension: "png",
+          size: 1024,
+          lastModified: 1,
+          status: "processing",
+          progress: 99,
+          canRecoverCompletion: true,
+        },
+      ],
+    });
+    const fetchMock = vi.fn(async () => Response.json(processing));
+    vi.stubGlobal("fetch", fetchMock);
+    renderLibrary([processing]);
+    act(() => useSelectionStore.getState().selectAll([processing.id]));
+
+    await act(async () => vi.advanceTimersByTimeAsync(5_000));
+
+    expect(fetchMock).toHaveBeenCalledWith(`/api/patterns/${processing.id}`);
+  });
+
   it.each([
     ["offline", () => onlineManager.setOnline(false)],
     ["hidden", () => focusManager.setFocused(false)],
@@ -514,6 +687,7 @@ describe("Mac-first workspace", () => {
   });
 
   afterEach(() => {
+    useUploadStore.setState({ tasks: [] });
     focusManager.setFocused(true);
     onlineManager.setOnline(true);
     vi.useRealTimers();

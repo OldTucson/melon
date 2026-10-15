@@ -12,6 +12,10 @@ export type ManagedUploadTask = UploadTask & {
   file?: File;
   needsReselect?: boolean;
   recoveryPending?: boolean;
+  cancellationPending?: boolean;
+  cancellationFailed?: boolean;
+  runPending?: boolean;
+  discardLocalOnly?: boolean;
 };
 
 type UploadStore = {
@@ -57,6 +61,7 @@ export const useUploadStore = create<UploadStore>((set) => ({
               (canRecoverCompletion ? row.updatedAt : undefined),
             canRecoverCompletion,
             needsReselect: !canRecoverCompletion,
+            runPending: false,
           };
         });
       return recovered.length > 0

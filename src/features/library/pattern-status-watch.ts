@@ -11,12 +11,9 @@ export function isTransientPatternStatus(status: string | undefined) {
 
 export function patternStatusRefreshInterval(
   status: string | undefined,
-  updatedAt: string | undefined,
+  watchedAt: number,
   now = Date.now(),
 ) {
   if (!isTransientPatternStatus(status)) return false;
-  const changedAt = updatedAt ? Date.parse(updatedAt) : Number.NaN;
-  return Number.isFinite(changedAt) && now - changedAt < 30_000
-    ? 5_000
-    : 15_000;
+  return now - watchedAt < 30_000 ? 5_000 : 15_000;
 }

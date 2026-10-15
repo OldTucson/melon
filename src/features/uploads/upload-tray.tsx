@@ -15,6 +15,10 @@ export type UploadTrayTask = {
   completionStartedAt?: number;
   canRecoverCompletion?: boolean;
   recoveryPending?: boolean;
+  cancellationPending?: boolean;
+  cancellationFailed?: boolean;
+  discardLocalOnly?: boolean;
+  completionRecoveryTerminal?: boolean;
 };
 
 const statusLabels: Record<UploadTaskStatus, string> = {
@@ -111,7 +115,9 @@ export function UploadTray({
                 <div className="upload-tray-copy">
                   <strong title={task.filename}>{task.filename}</strong>
                   <span>
-                    {task.recoveryPending
+                    {task.cancellationPending
+                      ? "正在放弃"
+                      : task.recoveryPending
                       ? "正在恢复"
                       : (task.error ?? statusLabels[task.status])}
                   </span>
@@ -131,31 +137,41 @@ export function UploadTray({
                       <Pause aria-hidden="true" />
                     </button>
                   ) : null}
-                  {task.canRecoverCompletion ? (
+                  {!task.cancellationFailed && task.canRecoverCompletion ? (
                     recoveryAvailable ? (
                       <button
                         type="button"
                         aria-label={`恢复上传 ${task.filename}`}
-                        disabled={task.recoveryPending}
+                        disabled={
+                          task.recoveryPending || task.cancellationPending
+                        }
                         title="恢复上传"
                         onClick={() => onRecover(task.localTaskId)}
                       >
                         <RefreshCw aria-hidden="true" />
                       </button>
                     ) : null
-                  ) : task.needsReselect ? (
+                  ) : !task.cancellationFailed && task.needsReselect ? (
                     <button
                       type="button"
                       aria-label={`重新选择 ${task.filename}`}
+                      disabled={
+                        task.recoveryPending || task.cancellationPending
+                      }
                       onClick={() => onReselect(task.localTaskId)}
                     >
                       重新选择
                     </button>
-                  ) : task.status === "failed" || task.status === "paused" ? (
+                  ) : !task.cancellationFailed &&
+                    !task.completionRecoveryTerminal &&
+                    (task.status === "failed" || task.status === "paused") ? (
                     <button
                       type="button"
                       aria-label={`重试 ${task.filename}`}
                       title="重试"
+                      disabled={
+                        task.recoveryPending || task.cancellationPending
+                      }
                       onClick={() => onRetry(task.localTaskId)}
                     >
                       <RefreshCw aria-hidden="true" />
@@ -164,9 +180,19 @@ export function UploadTray({
                   {task.status !== "ready" ? (
                     <button
                       type="button"
-                      aria-label={`放弃 ${task.filename}`}
-                      disabled={task.recoveryPending}
-                      title="放弃上传"
+                      aria-label={
+                        task.completionRecoveryTerminal || task.discardLocalOnly
+                          ? `清除本地记录 ${task.filename}`
+                          : `放弃 ${task.filename}`
+                      }
+                      disabled={
+                        task.recoveryPending || task.cancellationPending
+                      }
+                      title={
+                        task.completionRecoveryTerminal || task.discardLocalOnly
+                          ? "清除本地记录"
+                          : "放弃上传"
+                      }
                       onClick={() => onAbandon(task.localTaskId)}
                     >
                       <Trash2 aria-hidden="true" />

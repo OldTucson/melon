@@ -13,6 +13,7 @@ import {
 
 import { generateRasterPreview } from "@/features/preview/raster-preview";
 import { useSelectionStore } from "@/features/library/selection-store";
+import { ApiResponseError } from "@/lib/query/client";
 import { useQueryOwnerId } from "@/lib/query/provider";
 
 import { alibabaBrowserMultipartClient } from "./oss-browser-client";
@@ -35,6 +36,10 @@ import {
 import { useUploadStore, type ManagedUploadTask } from "./upload-store";
 import { UPLOAD_ACCEPT } from "./upload-dropzone";
 import { UploadTray } from "./upload-tray";
+import {
+  UploadAttemptRegistry,
+  type UploadAttemptToken,
+} from "./upload-attempt-registry";
 
 type UploadManagerValue = {
   openFilePicker(): void;
@@ -69,6 +74,7 @@ export function UploadManagerProvider({ children }: { children: React.ReactNode 
   const reselectRef = useRef<HTMLInputElement>(null);
   const reselectId = useRef<string | null>(null);
   const controllers = useRef(new Map<string, AbortController>());
+  const attempts = useRef(new UploadAttemptRegistry());
   const database = useMemo(
     () => (typeof indexedDB === "undefined" ? null : new UploadDatabase()),
     [],
@@ -89,6 +95,7 @@ export function UploadManagerProvider({ children }: { children: React.ReactNode 
   const dependenciesFor = useCallback(
     (
       taskId: string,
+      attempt: UploadAttemptToken,
       signal?: AbortSignal,
     ): UploadRunnerDependencies => ({
       ownerId,
@@ -104,7 +111,11 @@ export function UploadManagerProvider({ children }: { children: React.ReactNode 
       },
       generatePreview: generateRasterPreview,
       hashFile: hashFileInChunks,
-      onUpdate: (patch) => updateTask(taskId, patch),
+      onUpdate: (patch) =>
+        attempts.current.runIfCurrent(taskId, attempt, () =>
+          updateTask(taskId, patch),
+        ),
+      isCurrent: () => attempts.current.isCurrent(taskId, attempt),
       signal,
     }),
     [database, ownerId, updateTask],
@@ -112,6 +123,7 @@ export function UploadManagerProvider({ children }: { children: React.ReactNode 
 
   const start = useCallback(
     async (task: ManagedUploadTask, file: File) => {
+      const attempt = attempts.current.begin(task.localTaskId);
       const previous = controllers.current.get(task.localTaskId);
       previous?.abort();
       const controller = new AbortController();
@@ -119,23 +131,34 @@ export function UploadManagerProvider({ children }: { children: React.ReactNode 
       updateTask(task.localTaskId, {
         file,
         needsReselect: false,
+        cancellationFailed: false,
+        discardLocalOnly: false,
+        runPending: true,
         error: undefined,
       });
       try {
         const result = await runUpload(
           task,
           file,
-          dependenciesFor(task.localTaskId, controller.signal),
+          dependenciesFor(task.localTaskId, attempt, controller.signal),
         );
-        if (result.status === "ready") {
+        if (
+          result.status === "ready" &&
+          attempts.current.isCurrent(task.localTaskId, attempt)
+        ) {
           await queryClient.invalidateQueries({
             queryKey: ["owner", ownerId, "patterns"],
           });
+          if (!attempts.current.isCurrent(task.localTaskId, attempt)) return;
           useSelectionStore.getState().select(result.patternId, [result.patternId], {});
         }
       } catch {
         // The runner records a user-safe task error.
       } finally {
+        attempts.current.runIfCurrent(task.localTaskId, attempt, () =>
+          updateTask(task.localTaskId, { runPending: false }),
+        );
+        attempts.current.finish(task.localTaskId, attempt);
         if (controllers.current.get(task.localTaskId) === controller) {
           controllers.current.delete(task.localTaskId);
         }
@@ -151,7 +174,7 @@ export function UploadManagerProvider({ children }: { children: React.ReactNode 
         try {
           const task = { ...createUploadTask(file), file };
           addTask(task);
-          void start(task, file);
+          void attempts.current.track(task.localTaskId, start(task, file));
         } catch (error) {
           setNotice(errorMessage(error));
         }
@@ -195,7 +218,9 @@ export function UploadManagerProvider({ children }: { children: React.ReactNode 
           const task = useUploadStore
             .getState()
             .tasks.find((entry) => entry.localTaskId === id);
-          if (task && file) void start(task, file);
+          if (id && task && file) {
+            void attempts.current.track(id, start(task, file));
+          }
           event.currentTarget.value = "";
           reselectId.current = null;
         }}
@@ -212,27 +237,67 @@ export function UploadManagerProvider({ children }: { children: React.ReactNode 
           const task = useUploadStore
             .getState()
             .tasks.find((entry) => entry.localTaskId === id);
-          if (!task || task.recoveryPending) return;
-          updateTask(id, { recoveryPending: true, error: undefined });
-          void recoverUploadCompletion(task, dependenciesFor(id))
-            .then(async (result) => {
+          if (!task || task.recoveryPending || task.cancellationPending) return;
+          const previous = controllers.current.get(id);
+          const previousRun = attempts.current.runningTask(id);
+          previous?.abort();
+          updateTask(id, {
+            recoveryPending: true,
+            cancellationPending: false,
+            cancellationFailed: false,
+            discardLocalOnly: false,
+            runPending: false,
+            error: undefined,
+          });
+          const recovery = (async () => {
+            await previousRun;
+            const latestTask = useUploadStore
+              .getState()
+              .tasks.find((entry) => entry.localTaskId === id);
+            if (!latestTask) return;
+            if (latestTask.status === "ready") {
+              updateTask(id, { recoveryPending: false });
+              return;
+            }
+            const attempt = attempts.current.begin(id);
+            const controller = new AbortController();
+            controllers.current.set(id, controller);
+            try {
+              const result = await recoverUploadCompletion(
+                latestTask,
+                dependenciesFor(id, attempt, controller.signal),
+              );
+              if (!attempts.current.isCurrent(id, attempt)) return;
               await queryClient.invalidateQueries({
                 queryKey: ["owner", ownerId, "patterns"],
               });
+              if (!attempts.current.isCurrent(id, attempt)) return;
               useSelectionStore
                 .getState()
                 .select(result.patternId, [result.patternId], {});
-            })
-            .catch(() => undefined)
-            .finally(() => updateTask(id, { recoveryPending: false }));
+            } catch {
+              // The runner records a user-safe task error.
+            } finally {
+              attempts.current.runIfCurrent(id, attempt, () =>
+                updateTask(id, { recoveryPending: false }),
+              );
+              attempts.current.finish(id, attempt);
+              if (controllers.current.get(id) === controller) {
+                controllers.current.delete(id);
+              }
+            }
+          })();
+          void attempts.current.track(id, recovery);
         }}
         onRetry={(id) => {
           const task = useUploadStore
             .getState()
             .tasks.find((entry) => entry.localTaskId === id);
           if (!task) return;
-          if (task.file) void start(task, task.file);
-          else updateTask(id, { needsReselect: true });
+          if (task.completionRecoveryTerminal) return;
+          if (task.file) {
+            void attempts.current.track(id, start(task, task.file));
+          } else updateTask(id, { needsReselect: true });
         }}
         onReselect={(id) => {
           reselectId.current = id;
@@ -242,11 +307,122 @@ export function UploadManagerProvider({ children }: { children: React.ReactNode 
           const task = useUploadStore
             .getState()
             .tasks.find((entry) => entry.localTaskId === id);
-          if (!task) return;
-          controllers.current.get(id)?.abort();
-          void abandonUpload(task, dependenciesFor(id))
-            .catch(() => undefined)
-            .finally(() => removeTask(id));
+          if (!task || task.recoveryPending || task.cancellationPending) return;
+          const previous = controllers.current.get(id);
+          const previousRun = attempts.current.runningTask(id);
+          previous?.abort();
+          if (controllers.current.get(id) === previous) {
+            controllers.current.delete(id);
+          }
+          updateTask(id, {
+            cancellationPending: true,
+            recoveryPending: false,
+            cancellationFailed: false,
+            runPending: false,
+            error: undefined,
+          });
+          if (task.completionRecoveryTerminal || task.discardLocalOnly) {
+            const attempt = attempts.current.begin(id);
+            const discard = (async () => {
+              try {
+                await previousRun;
+                if (!attempts.current.isCurrent(id, attempt)) return;
+                if (database) await deleteCheckpoint(database, id);
+                if (attempts.current.isCurrent(id, attempt)) removeTask(id);
+              } catch {
+                attempts.current.runIfCurrent(id, attempt, () =>
+                  updateTask(id, {
+                    status: "failed",
+                    cancellationPending: false,
+                    cancellationFailed: true,
+                    discardLocalOnly: true,
+                    error: "本地记录无法清除，请重试",
+                  }),
+                );
+              } finally {
+                attempts.current.finish(id, attempt);
+              }
+            })();
+            void attempts.current.track(id, discard);
+            return;
+          }
+          const cancellation = (async () => {
+            await previousRun;
+            const latestTask = useUploadStore
+              .getState()
+              .tasks.find((entry) => entry.localTaskId === id);
+            if (!latestTask) return;
+            if (latestTask.status === "ready") {
+              updateTask(id, { cancellationPending: false });
+              return;
+            }
+            const attempt = attempts.current.begin(id);
+            try {
+              await abandonUpload(latestTask, dependenciesFor(id, attempt));
+              if (attempts.current.isCurrent(id, attempt)) removeTask(id);
+            } catch (error) {
+              if (
+                error instanceof ApiResponseError &&
+                error.code === "UPLOAD_CANNOT_CANCEL_COMPLETED"
+              ) {
+                try {
+                  if (database) await deleteCheckpoint(database, id);
+                  attempts.current.runIfCurrent(id, attempt, () =>
+                    updateTask(id, {
+                      status: "ready",
+                      progress: 100,
+                      canRecoverCompletion: false,
+                      cancellationPending: false,
+                      cancellationFailed: false,
+                      discardLocalOnly: false,
+                      error: undefined,
+                    }),
+                  );
+                  await queryClient.invalidateQueries({
+                    queryKey: ["owner", ownerId, "patterns"],
+                  });
+                } catch {
+                  attempts.current.runIfCurrent(id, attempt, () =>
+                    updateTask(id, {
+                      status: "failed",
+                      cancellationPending: false,
+                      cancellationFailed: true,
+                      error: "放弃未确认，请重试放弃",
+                    }),
+                  );
+                }
+              } else if (
+                error instanceof ApiResponseError &&
+                error.status >= 400 &&
+                error.status < 500 &&
+                error.status !== 408 &&
+                error.status !== 429
+              ) {
+                attempts.current.runIfCurrent(id, attempt, () =>
+                  updateTask(id, {
+                    status: "failed",
+                    cancellationPending: false,
+                    cancellationFailed: true,
+                    discardLocalOnly: true,
+                    error: "上传已无法继续，请清除本地记录",
+                  }),
+                );
+              } else {
+                attempts.current.runIfCurrent(id, attempt, () =>
+                  updateTask(id, {
+                    status: "failed",
+                    cancellationPending: false,
+                    cancellationFailed: true,
+                    discardLocalOnly: false,
+                    error: "放弃未确认，请重试放弃",
+                  }),
+                );
+              }
+            } finally {
+              attempts.current.finish(id, attempt);
+            }
+          })();
+          void attempts.current.track(id, cancellation);
         }}
       />
     </UploadManagerContext.Provider>

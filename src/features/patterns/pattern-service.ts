@@ -41,6 +41,7 @@ const mutationIdentitySchema = z.object({
   patternId: normalizedUuidSchema,
   operationId: publicOperationIdSchema,
 });
+const editablePatternStatuses = new Set(["ready", "failed"] as const);
 
 const optionalNullableUuidSchema = normalizedUuidSchema
   .nullish()
@@ -235,7 +236,10 @@ export async function updatePattern(input: {
         "Operation ID was already used",
       );
     }
-    if (existing.version !== patch.version) {
+    if (
+      existing.version !== patch.version ||
+      !editablePatternStatuses.has(existing.status as "ready" | "failed")
+    ) {
       throw new AppError(
         "PATTERN_STATE_CHANGED",
         409,

@@ -10,35 +10,19 @@ describe("pattern status refresh interval", () => {
     const now = Date.parse("2026-10-15T00:00:30.000Z");
 
     expect(
-      patternStatusRefreshInterval(
-        "processing",
-        "2026-10-15T00:00:10.000Z",
-        now,
-      ),
+      patternStatusRefreshInterval("processing", now - 20_000, now),
     ).toBe(5_000);
     expect(
-      patternStatusRefreshInterval(
-        "processing",
-        "2026-10-14T23:59:00.000Z",
-        now,
-      ),
+      patternStatusRefreshInterval("processing", now - 90_000, now),
     ).toBe(15_000);
   });
 
   it("stops for terminal states and recognizes every upload transient state", () => {
     expect(
-      patternStatusRefreshInterval(
-        "ready",
-        "2026-10-15T00:00:00.000Z",
-        Date.now(),
-      ),
+      patternStatusRefreshInterval("ready", Date.now(), Date.now()),
     ).toBe(false);
     expect(
-      patternStatusRefreshInterval(
-        "failed",
-        "2026-10-15T00:00:00.000Z",
-        Date.now(),
-      ),
+      patternStatusRefreshInterval("failed", Date.now(), Date.now()),
     ).toBe(false);
     expect(
       ["draft", "hashing", "uploading", "processing"].every(

@@ -180,6 +180,100 @@ describe("upload UI", () => {
     expect(screen.getByText("正在恢复")).toBeVisible();
   });
 
+  it("disables task actions while cancellation is pending", () => {
+    render(
+      <UploadTray
+        tasks={[
+          {
+            localTaskId: "cancelling",
+            filename: "leaf.png",
+            status: "failed",
+            progress: 99,
+            canRecoverCompletion: true,
+            completionStartedAt: Date.now() - 31_000,
+            cancellationPending: true,
+          },
+        ]}
+        onAbandon={vi.fn()}
+        onPause={vi.fn()}
+        onRecover={vi.fn()}
+        onReselect={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("正在放弃")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "恢复上传 leaf.png" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "放弃 leaf.png" }),
+    ).toBeDisabled();
+  });
+
+  it("requires abandoning a terminal completion conflict instead of retrying it", () => {
+    render(
+      <UploadTray
+        tasks={[
+          {
+            localTaskId: "terminal",
+            filename: "leaf.png",
+            status: "failed",
+            progress: 99,
+            error: "恢复信息已失效，请放弃后重新上传",
+            completionRecoveryTerminal: true,
+          },
+        ]}
+        onAbandon={vi.fn()}
+        onPause={vi.fn()}
+        onRecover={vi.fn()}
+        onReselect={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "重试 leaf.png" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "清除本地记录 leaf.png" }),
+    ).toBeEnabled();
+  });
+
+  it("keeps only the abandon action after cancellation could not be confirmed", () => {
+    render(
+      <UploadTray
+        tasks={[
+          {
+            localTaskId: "cancel-failed",
+            filename: "leaf.png",
+            status: "failed",
+            progress: 42,
+            error: "放弃未确认，请重试放弃",
+            canRecoverCompletion: true,
+            completionStartedAt: Date.now() - 31_000,
+            cancellationFailed: true,
+          },
+        ]}
+        onAbandon={vi.fn()}
+        onPause={vi.fn()}
+        onRecover={vi.fn()}
+        onReselect={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "恢复上传 leaf.png" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "重试 leaf.png" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "放弃 leaf.png" }),
+    ).toBeEnabled();
+  });
+
   it("starts the recovery threshold from a task added to an old tray", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-15T00:00:00.000Z"));

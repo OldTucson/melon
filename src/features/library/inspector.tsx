@@ -19,7 +19,10 @@ import { AuthorizationTab } from "@/features/authorizations/authorization-tab";
 import { IconButton } from "./icon-button";
 import type { PatternItem } from "./library-types";
 import { usePatternPatchMutation } from "./pattern-mutations";
-import { selectionAvailability } from "./selection-availability";
+import {
+  isPatternEditable,
+  selectionAvailability,
+} from "./selection-availability";
 import {
   usePatternBatchMutation,
   type PatternBatchInput,
@@ -40,6 +43,7 @@ export function Inspector({
   statusCheck?: PatternStatusCheck;
 }) {
   const mutation = usePatternPatchMutation(activeQuery);
+  const editable = isPatternEditable(pattern.status);
   const [name, setName] = useState(pattern.name);
   const [saveError, setSaveError] = useState<"empty" | "save" | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -73,6 +77,7 @@ export function Inspector({
       clearTimeout(timer.current);
       timer.current = null;
     }
+    if (!isPatternEditable(latestPattern.current.status)) return;
     const nextName = candidate.trim();
     if (!nextName) {
       if (pendingSave.current) await pendingSave.current;
@@ -136,7 +141,10 @@ export function Inspector({
         clearTimeout(timer.current);
         timer.current = null;
       }
-      if (latestDraft.current.trim()) {
+      if (
+        isPatternEditable(latestPattern.current.status) &&
+        latestDraft.current.trim()
+      ) {
         void saveNameRef.current(latestDraft.current);
       }
     };
@@ -176,6 +184,7 @@ export function Inspector({
                 <span>图案名称</span>
                 <input
                   aria-label="图案名称"
+                  disabled={!editable}
                   maxLength={160}
                   value={name}
                   onBlur={() => void saveName(name)}
@@ -199,15 +208,17 @@ export function Inspector({
                 className="inspector-favorite"
                 type="button"
                 aria-pressed={pattern.isFavorite}
-                onClick={() =>
+                disabled={!editable}
+                onClick={() => {
+                  if (!editable) return;
                   mutation.mutatePattern({
                     patternId: pattern.id,
                     patch: {
                       version: pattern.version,
                       isFavorite: !pattern.isFavorite,
                     },
-                  })
-                }
+                  });
+                }}
               >
                 <Heart
                   aria-hidden="true"
@@ -240,7 +251,11 @@ export function Inspector({
                 </div>
               </dl>
             </section>
-            <TagPicker activeQuery={activeQuery} patternId={pattern.id} />
+            <TagPicker
+              activeQuery={activeQuery}
+              disabled={!editable}
+              patternId={pattern.id}
+            />
           </Tabs.Content>
           <Tabs.Content
             value="authorizations"

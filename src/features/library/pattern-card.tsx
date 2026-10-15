@@ -18,6 +18,7 @@ import { IconButton } from "./icon-button";
 import type { LibraryViewMode } from "./library-toolbar";
 import type { SelectionModifiers } from "./selection-store";
 import { formatFenForDisplay } from "@/features/authorizations/api";
+import { isPatternEditable } from "./selection-availability";
 
 const commercialStateLabels = {
   unlicensed: "未授权",
@@ -151,10 +152,12 @@ export function PatternCard({
       </div>
       <div className="pattern-card-actions">
         <IconButton
+          disabled={!isPatternEditable(item.status)}
           label={item.isFavorite ? "取消收藏" : "收藏"}
           pressed={item.isFavorite}
           onClick={(event) => {
             event.stopPropagation();
+            if (!isPatternEditable(item.status)) return;
             onFavorite(item);
           }}
         >

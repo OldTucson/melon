@@ -424,18 +424,18 @@ git commit -m "feat: add stalled upload recovery action"
 
 ### Task 5: Full verification and browser regression
 
-**Status:** In progress
+**Status:** Complete for automated verification; browser and database-backed checks are blocked by the unavailable local PostgreSQL service.
 
 **Files:**
 - Modify only if verification exposes a defect in the files above.
 
-- [ ] **Step 1: Run all unit tests**
+- [x] **Step 1: Run all unit tests**
 
 Run: `npm test`
 
 Expected: all Vitest suites pass.
 
-- [ ] **Step 2: Run static checks**
+- [x] **Step 2: Run static checks**
 
 Run: `npm run typecheck`
 
@@ -445,13 +445,15 @@ Run: `npm run lint`
 
 Expected: exit 0.
 
-- [ ] **Step 3: Run the production build**
+- [x] **Step 3: Run the production build**
 
 Run: `npm run build`
 
 Expected: Next.js build completes successfully.
 
 - [ ] **Step 4: Verify the browser behavior**
+
+Blocked on 2026-10-15: the local PostgreSQL service at `localhost:55432` is unavailable, Docker is not installed, and browser automation cannot authenticate in the current Codex environment. The targeted UI behavior is covered by Vitest regressions, but this manual step remains unverified.
 
 With the app and database available, select a `processing` card and verify:
 
@@ -462,7 +464,7 @@ With the app and database available, select a `processing` card and verify:
 - A terminal response updates the card and restores valid actions.
 - A recoverable task older than 30 seconds offers “恢复上传”; using it does not issue upload-init or OSS multipart requests.
 
-- [ ] **Step 5: Inspect the final diff and commit any verification fix**
+- [x] **Step 5: Inspect the final diff and commit any verification fix**
 
 Run: `git diff --check && git status --short`
 

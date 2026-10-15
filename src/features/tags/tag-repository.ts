@@ -202,7 +202,7 @@ export async function lockTaggablePattern(
   patternId: string,
 ) {
   const [row] = await tx
-    .select({ id: patterns.id })
+    .select({ id: patterns.id, status: patterns.status })
     .from(patterns)
     .where(
       and(

@@ -1010,6 +1010,29 @@ describe("pattern service", () => {
     expect(foreignRow).toEqual({ name: "Foreign", version: 0 });
   });
 
+  it("rejects metadata mutations while an upload is still transient", async () => {
+    const patternId = await seedPattern({ ownerId: ownerA, name: "Uploading" });
+    await db
+      .update(patterns)
+      .set({ status: "processing" })
+      .where(and(eq(patterns.ownerId, ownerA), eq(patterns.id, patternId)));
+
+    await expect(
+      updatePattern({
+        ownerId: ownerA,
+        patternId,
+        operationId: randomUUID(),
+        patch: { version: 0, name: "Too soon" },
+      }),
+    ).rejects.toMatchObject({ code: "PATTERN_STATE_CHANGED", status: 409 });
+
+    const [stored] = await db
+      .select({ name: patterns.name, version: patterns.version })
+      .from(patterns)
+      .where(and(eq(patterns.ownerId, ownerA), eq(patterns.id, patternId)));
+    expect(stored).toEqual({ name: "Uploading", version: 0 });
+  });
+
   it("normalizes uppercase pattern identities before idempotent replay", async () => {
     const patternId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     await seedPattern({ id: patternId, ownerId: ownerA, name: "Before" });

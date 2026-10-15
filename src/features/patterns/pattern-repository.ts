@@ -430,7 +430,7 @@ export async function updatePatternRow(
         eq(patterns.ownerId, ownerId),
         eq(patterns.id, input.patternId),
         eq(patterns.version, input.patch.version),
-        notInArray(patterns.status, ["deleting", "deleted"]),
+        inArray(patterns.status, ["ready", "failed"]),
       ),
     )
     .returning();

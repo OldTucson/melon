@@ -3,6 +3,7 @@ import { createSHA256 } from "hash-wasm";
 import type { RasterPreviewResult } from "@/features/preview/contracts";
 import type { BrowserOssCredentials } from "@/features/storage/contracts";
 import { storageObjectKey } from "@/features/storage/object-keys";
+import { ApiResponseError } from "@/lib/query/client";
 
 import {
   MAX_UPLOAD_SIZE_BYTES,
@@ -41,6 +42,7 @@ export type UploadTask = {
   progress: number;
   completionStartedAt?: number;
   canRecoverCompletion?: boolean;
+  completionRecoveryTerminal?: boolean;
   error?: string;
 };
 
@@ -72,6 +74,7 @@ export type UploadRunnerDependencies = {
     complete(
       sessionId: string,
       input: { operationId: string; assets: UploadCompletionAsset[] },
+      signal?: AbortSignal,
     ): Promise<unknown>;
     cancel(
       sessionId: string,
@@ -106,6 +109,7 @@ export type UploadRunnerDependencies = {
   generatePreview(file: File): Promise<RasterPreviewResult | null>;
   hashFile(file: File): Promise<string>;
   onUpdate(patch: Partial<UploadTask>): void;
+  isCurrent?(): boolean;
   signal?: AbortSignal;
 };
 
@@ -182,7 +186,10 @@ function isCredentialExpired(error: unknown) {
   );
 }
 
-function friendlyError(error: unknown) {
+function friendlyError(error: unknown, completionContext = false) {
+  if (completionContext && isTerminalUploadCompletionError(error)) {
+    return "恢复信息已失效，请放弃后重新上传";
+  }
   if (!(error instanceof Error)) return "上传失败，请重试";
   if (error.message === "UPLOAD_RESELECT_MISMATCH") return "重新选择的文件与原文件不一致";
   if (error.message === "UPLOAD_COMPLETION_NOT_RECOVERABLE") {
@@ -191,6 +198,24 @@ function friendlyError(error: unknown) {
   if (error.message === "UPLOAD_FILE_TOO_LARGE") return "文件不能超过 200 MB";
   if (error.message === "UPLOAD_EXTENSION_UNSUPPORTED") return "不支持此文件格式";
   return "上传失败，请检查网络后重试";
+}
+
+const terminalCompletionErrorCodes = new Set([
+  "NOT_FOUND",
+  "OPERATION_ID_REUSED",
+  "UPLOAD_ID_CONFLICT",
+  "UPLOAD_OBJECT_INVALID",
+  "UPLOAD_SESSION_EXPIRED",
+  "UPLOAD_SESSION_INVALID_STATE",
+  "UPLOAD_SIGNATURE_MISMATCH",
+  "VALIDATION_ERROR",
+]);
+
+export function isTerminalUploadCompletionError(error: unknown) {
+  return (
+    error instanceof ApiResponseError &&
+    terminalCompletionErrorCodes.has(error.code)
+  );
 }
 
 function contentTypeForSource(extension: UploadSourceExtension) {
@@ -275,6 +300,16 @@ export function canRecoverUploadCompletion(checkpoint: UploadCheckpointRow) {
   );
 }
 
+function requestCompletion(
+  dependencies: UploadRunnerDependencies,
+  sessionId: string,
+  input: { operationId: string; assets: UploadCompletionAsset[] },
+) {
+  return dependencies.signal
+    ? dependencies.api.complete(sessionId, input, dependencies.signal)
+    : dependencies.api.complete(sessionId, input);
+}
+
 async function completeFromCheckpoint(
   checkpoint: UploadCheckpointRow,
   dependencies: UploadRunnerDependencies,
@@ -289,17 +324,22 @@ async function completeFromCheckpoint(
     completionStartedAt:
       checkpoint.completionStartedAt ?? checkpoint.updatedAt,
     canRecoverCompletion: true,
+    completionRecoveryTerminal: false,
     error: undefined,
   });
-  await dependencies.api.complete(checkpoint.sessionId, {
+  await requestCompletion(dependencies, checkpoint.sessionId, {
     operationId: checkpoint.operationId,
     assets,
   });
+  if (dependencies.isCurrent && !dependencies.isCurrent()) {
+    return { status: "ready" as const, patternId: checkpoint.patternId };
+  }
   await dependencies.checkpoints.delete(checkpoint.localTaskId);
   dependencies.onUpdate({
     status: "ready",
     progress: 100,
     canRecoverCompletion: false,
+    completionRecoveryTerminal: false,
     error: undefined,
   });
   return { status: "ready" as const, patternId: checkpoint.patternId };
@@ -309,12 +349,22 @@ export async function recoverUploadCompletion(
   task: UploadTask,
   dependencies: UploadRunnerDependencies,
 ) {
+  let checkpoint: UploadCheckpointRow | undefined;
   try {
-    const checkpoint = await dependencies.checkpoints.load(task.localTaskId);
+    checkpoint = await dependencies.checkpoints.load(task.localTaskId);
     if (!checkpoint) throw new Error("UPLOAD_COMPLETION_NOT_RECOVERABLE");
     return await completeFromCheckpoint(checkpoint, dependencies);
   } catch (error) {
-    dependencies.onUpdate({ status: "failed", error: friendlyError(error) });
+    const terminal = isTerminalUploadCompletionError(error);
+    const recoverable = Boolean(
+      checkpoint && canRecoverUploadCompletion(checkpoint),
+    );
+    dependencies.onUpdate({
+      status: "failed",
+      canRecoverCompletion: recoverable && !terminal,
+      completionRecoveryTerminal: terminal,
+      error: friendlyError(error, true),
+    });
     throw error;
   }
 }
@@ -535,16 +585,21 @@ export async function runUpload(
       progress: 99,
       completionStartedAt,
       canRecoverCompletion: true,
+      completionRecoveryTerminal: false,
     });
-    await dependencies.api.complete(initialized.session.id, {
+    await requestCompletion(dependencies, initialized.session.id, {
       operationId: task.operationId,
       assets,
     });
+    if (dependencies.isCurrent && !dependencies.isCurrent()) {
+      return { status: "ready", patternId: task.patternId };
+    }
     await dependencies.checkpoints.delete(task.localTaskId);
     dependencies.onUpdate({
       status: "ready",
       progress: 100,
       canRecoverCompletion: false,
+      completionRecoveryTerminal: false,
     });
     return { status: "ready", patternId: task.patternId };
   } catch (error) {
@@ -552,7 +607,21 @@ export async function runUpload(
       dependencies.onUpdate({ status: "paused" });
       return { status: "paused", patternId: task.patternId };
     }
-    dependencies.onUpdate({ status: "failed", error: friendlyError(error) });
+    const recoverable = Boolean(
+      checkpoint && canRecoverUploadCompletion(checkpoint),
+    );
+    const terminal =
+      recoverable && isTerminalUploadCompletionError(error);
+    dependencies.onUpdate({
+      status: "failed",
+      ...(terminal || recoverable
+        ? {
+            canRecoverCompletion: recoverable && !terminal,
+            completionRecoveryTerminal: terminal,
+          }
+        : {}),
+      error: friendlyError(error, recoverable),
+    });
     throw error;
   }
 }
@@ -564,41 +633,38 @@ export async function abandonUpload(
   const checkpoint = await dependencies.checkpoints.load(task.localTaskId);
   let attempted = false;
   let succeeded = false;
-  try {
-    if (checkpoint?.sessionId) {
-      const multipartEntries = Object.entries(checkpoint.sdkCheckpoints).filter(
-        (entry): entry is [UploadAssetKind, SafeSdkCheckpoint] =>
-          Boolean(entry[1]) &&
-          entry[1].completed !== true &&
-          Boolean(checkpoint.objectKeys[entry[0] as UploadAssetKind]),
-      );
-      if (multipartEntries.length > 0) {
-        attempted = true;
-        try {
-          const { credentials } = await dependencies.api.refreshCredentials(
-            checkpoint.sessionId,
-            task.operationId,
-          );
-          const results = await Promise.all(
-            multipartEntries.map(([role, sdkCheckpoint]) =>
-              dependencies.multipart.abort({
-                credentials,
-                objectKey: checkpoint.objectKeys[role]!,
-                checkpoint: sdkCheckpoint,
-              }),
-            ),
-          );
-          succeeded = results.every(Boolean);
-        } catch {
-          succeeded = false;
-        }
+  if (checkpoint?.sessionId) {
+    const multipartEntries = Object.entries(checkpoint.sdkCheckpoints).filter(
+      (entry): entry is [UploadAssetKind, SafeSdkCheckpoint] =>
+        Boolean(entry[1]) &&
+        entry[1].completed !== true &&
+        Boolean(checkpoint.objectKeys[entry[0] as UploadAssetKind]),
+    );
+    if (multipartEntries.length > 0) {
+      attempted = true;
+      try {
+        const { credentials } = await dependencies.api.refreshCredentials(
+          checkpoint.sessionId,
+          task.operationId,
+        );
+        const results = await Promise.all(
+          multipartEntries.map(([role, sdkCheckpoint]) =>
+            dependencies.multipart.abort({
+              credentials,
+              objectKey: checkpoint.objectKeys[role]!,
+              checkpoint: sdkCheckpoint,
+            }),
+          ),
+        );
+        succeeded = results.every(Boolean);
+      } catch {
+        succeeded = false;
       }
-      await dependencies.api.cancel(checkpoint.sessionId, {
-        operationId: task.operationId,
-        ...(attempted ? { multipartAbort: { attempted, succeeded } } : {}),
-      });
     }
-  } finally {
-    await dependencies.checkpoints.delete(task.localTaskId);
+    await dependencies.api.cancel(checkpoint.sessionId, {
+      operationId: task.operationId,
+      ...(attempted ? { multipartAbort: { attempted, succeeded } } : {}),
+    });
   }
+  await dependencies.checkpoints.delete(task.localTaskId);
 }

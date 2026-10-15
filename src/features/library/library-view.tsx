@@ -17,13 +17,15 @@ import {
   patternQuerySchema,
   type PatternQuery,
 } from "@/features/patterns/contracts";
-import { readApiResponse } from "@/lib/query/client";
+import { useUploadStore } from "@/features/uploads/upload-store";
+import { ApiResponseError, readApiResponse } from "@/lib/query/client";
 import { queryKeys } from "@/lib/query/keys";
 import { useQueryOwnerId } from "@/lib/query/provider";
 
 import { IconButton } from "./icon-button";
 import { Inspector, MultiSelectionInspector } from "./inspector";
 import { BulkActionBar } from "./bulk-action-bar";
+import { isPatternEditable } from "./selection-availability";
 import type { PatternPage } from "./library-types";
 import { LibraryToolbar, type LibraryViewMode } from "./library-toolbar";
 import { FormatPlaceholder } from "./pattern-card";
@@ -94,6 +96,7 @@ export function LibraryView({
   const [collapsedSelectionKey, setCollapsedSelectionKey] = useState<
     string | null
   >(null);
+  const uploadTasks = useUploadStore((state) => state.tasks);
   const selectedIds = useSelectionStore((state) => state.selectedIds);
   const previewId = useSelectionStore((state) => state.previewId);
   const select = useSelectionStore((state) => state.select);
@@ -125,6 +128,20 @@ export function LibraryView({
   const soleSelectedPattern = soleSelectedId
     ? items.find((pattern) => pattern.id === soleSelectedId)
     : undefined;
+  const activeLocalPatternIds = useMemo(
+    () =>
+      new Set(
+        uploadTasks
+          .filter(
+            (task) =>
+              task.runPending ||
+              task.recoveryPending ||
+              task.cancellationPending,
+          )
+          .map((task) => task.patternId),
+      ),
+    [uploadTasks],
+  );
   const transientSelectedId = isTransientPatternStatus(
     soleSelectedPattern?.status,
   )
@@ -135,15 +152,44 @@ export function LibraryView({
     (selectedIds.length === 0 || soleSelectedId === initialSelectedId);
   const watchedPatternId =
     transientSelectedId ?? (deepLinkNeedsFetch ? initialSelectedId : undefined);
+  const locallyActiveWatch = activeLocalPatternIds.has(watchedPatternId ?? "");
+  const watch = useRef<{
+    patternId?: string;
+    startedAt?: number;
+  }>({});
   const selectedPatternQuery = useQuery({
     queryKey: queryKeys.pattern(ownerId, watchedPatternId ?? "none"),
     queryFn: () => fetchPattern(watchedPatternId!),
-    enabled: Boolean(watchedPatternId),
-    refetchInterval: (query) =>
-      patternStatusRefreshInterval(
-        query.state.data?.status,
-        query.state.data?.updatedAt,
-      ),
+    enabled: Boolean(watchedPatternId) && !locallyActiveWatch,
+    refetchInterval: (query) => {
+      if (locallyActiveWatch) return false;
+      const status = query.state.data?.status ?? soleSelectedPattern?.status;
+      if (query.state.error) {
+        return query.state.error instanceof ApiResponseError &&
+          query.state.error.status === 404
+          ? false
+          : isTransientPatternStatus(status)
+            ? 15_000
+            : false;
+      }
+      const currentTime = Date.now();
+      let startedAt = watch.current.startedAt;
+      if (
+        watch.current.patternId !== watchedPatternId ||
+        startedAt === undefined
+      ) {
+        startedAt = currentTime;
+        watch.current = {
+          patternId: watchedPatternId,
+          startedAt,
+        };
+      }
+      return patternStatusRefreshInterval(
+        status,
+        startedAt,
+        currentTime,
+      );
+    },
     refetchIntervalInBackground: false,
   });
   const selectedDetailPattern =
@@ -192,6 +238,13 @@ export function LibraryView({
   const selectionKey = selectedIds.join("|");
   const inspectorCollapsed =
     selectedIds.length > 0 && collapsedSelectionKey === selectionKey;
+  const watchedPatternUnavailable = Boolean(
+    watchedPatternId &&
+      ((selectedPatternQuery.error instanceof ApiResponseError &&
+        selectedPatternQuery.error.status === 404) ||
+        (selectedPatternQuery.data &&
+          !libraryStatuses.has(selectedPatternQuery.data.status))),
+  );
 
   useEffect(() => {
     clearSelection();
@@ -200,6 +253,37 @@ export function LibraryView({
     // StrictMode replays this setup before replaying the selection effect.
     appliedInitialSelectedId.current = null;
   }, [clearSelection, closePreview, initialSelectedId, querySignature]);
+
+  useEffect(() => {
+    if (!watchedPatternId || !watchedPatternUnavailable) return;
+    queryClient.setQueryData<InfiniteData<PatternPage, string | null>>(
+      queryKeys.patterns(ownerId, initialQuery),
+      (current) =>
+        current
+          ? {
+              ...current,
+              pages: current.pages.map((page) => ({
+                ...page,
+                items: page.items.filter(
+                  (item) => item.id !== watchedPatternId,
+                ),
+              })),
+            }
+          : current,
+    );
+    if (selectedIds.includes(watchedPatternId)) clearSelection();
+    if (previewId === watchedPatternId) closePreview();
+  }, [
+    clearSelection,
+    closePreview,
+    initialQuery,
+    ownerId,
+    previewId,
+    queryClient,
+    selectedIds,
+    watchedPatternId,
+    watchedPatternUnavailable,
+  ]);
 
   useEffect(() => {
     reconcileSelection(availableIds);
@@ -358,13 +442,15 @@ export function LibraryView({
             items={displayItems}
             mode={viewMode}
             onFavorite={(item) =>
-              mutation.mutatePattern({
-                patternId: item.id,
-                patch: {
-                  version: item.version,
-                  isFavorite: !item.isFavorite,
-                },
-              })
+              isPatternEditable(item.status)
+                ? mutation.mutatePattern({
+                    patternId: item.id,
+                    patch: {
+                      version: item.version,
+                      isFavorite: !item.isFavorite,
+                    },
+                  })
+                : undefined
             }
             onLoadMore={() => void patternsQuery.fetchNextPage()}
             onOpenPreview={openPreview}

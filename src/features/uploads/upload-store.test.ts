@@ -44,6 +44,7 @@ describe("upload store recovery", () => {
       completionStartedAt: 700,
       canRecoverCompletion: true,
       needsReselect: false,
+      runPending: false,
     });
   });
 

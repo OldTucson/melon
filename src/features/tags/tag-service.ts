@@ -360,6 +360,13 @@ async function assertOwnedRelationTargets(
   if (!pattern) {
     throw new AppError("NOT_FOUND", 404, "Pattern or tag not found");
   }
+  if (pattern.status !== "ready" && pattern.status !== "failed") {
+    throw new AppError(
+      "PATTERN_STATE_CHANGED",
+      409,
+      "Pattern state changed",
+    );
+  }
   const tag = await lockTagRow(ownerId, tx, tagId);
   if (!tag) {
     throw new AppError("NOT_FOUND", 404, "Pattern or tag not found");
