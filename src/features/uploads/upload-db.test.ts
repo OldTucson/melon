@@ -39,6 +39,16 @@ const row = (): UploadCheckpointRow => ({
       nested: new NodeBlob(["also secret"]),
     },
   },
+  completionAssets: [
+    {
+      assetId: "00000000-0000-4000-8000-000000000002",
+      role: "source",
+      objectKey: "users/u/patterns/p/source/id.png",
+      extension: "png",
+      sizeBytes: 123,
+    },
+  ],
+  completionStartedAt: 700,
   updatedAt: 789,
 });
 
@@ -62,6 +72,8 @@ describe("upload checkpoint database", () => {
       uploadId: "upload-1",
       doneParts: [{ number: 1, etag: "etag" }],
     });
+    expect(restored?.completionAssets).toEqual(row().completionAssets);
+    expect(restored?.completionStartedAt).toBe(700);
     expect(serialized).not.toMatch(
       /secret bytes|also secret|accessKeySecret|securityToken|must-not-persist|credentials|\"file\":/i,
     );

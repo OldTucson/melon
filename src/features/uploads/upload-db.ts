@@ -1,5 +1,7 @@
 import Dexie, { type Table } from "dexie";
 
+import type { UploadCompletionAsset } from "./contracts";
+
 export type SafeSdkCheckpoint = Record<string, unknown>;
 export type UploadAssetKind = "source" | "preview" | "thumbnail";
 
@@ -19,6 +21,8 @@ export type UploadCheckpointRow = {
   contentHash: string;
   objectKeys: Partial<Record<UploadAssetKind, string>>;
   sdkCheckpoints: Partial<Record<UploadAssetKind, SafeSdkCheckpoint>>;
+  completionAssets?: UploadCompletionAsset[];
+  completionStartedAt?: number;
   updatedAt: number;
 };
 

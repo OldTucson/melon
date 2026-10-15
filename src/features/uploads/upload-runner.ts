@@ -39,6 +39,8 @@ export type UploadTask = {
   sessionId?: string;
   status: UploadTaskStatus;
   progress: number;
+  completionStartedAt?: number;
+  canRecoverCompletion?: boolean;
   error?: string;
 };
 
@@ -183,6 +185,9 @@ function isCredentialExpired(error: unknown) {
 function friendlyError(error: unknown) {
   if (!(error instanceof Error)) return "上传失败，请重试";
   if (error.message === "UPLOAD_RESELECT_MISMATCH") return "重新选择的文件与原文件不一致";
+  if (error.message === "UPLOAD_COMPLETION_NOT_RECOVERABLE") {
+    return "需要重新选择原文件以恢复上传";
+  }
   if (error.message === "UPLOAD_FILE_TOO_LARGE") return "文件不能超过 200 MB";
   if (error.message === "UPLOAD_EXTENSION_UNSUPPORTED") return "不支持此文件格式";
   return "上传失败，请检查网络后重试";
@@ -242,6 +247,72 @@ function assertReselectedFile(
   }
 }
 
+function completionAssetsForCheckpoint(checkpoint: UploadCheckpointRow) {
+  if (checkpoint.completionAssets?.length) return checkpoint.completionAssets;
+  if (
+    checkpoint.objectKeys.source &&
+    checkpoint.sdkCheckpoints.source?.completed === true &&
+    !checkpoint.objectKeys.preview &&
+    !checkpoint.objectKeys.thumbnail &&
+    supportedExtensions.has(checkpoint.extension as UploadSourceExtension)
+  ) {
+    return [
+      {
+        assetId: checkpoint.sourceAssetId,
+        role: "source" as const,
+        objectKey: checkpoint.objectKeys.source,
+        extension: checkpoint.extension as UploadSourceExtension,
+        sizeBytes: checkpoint.size,
+      },
+    ];
+  }
+  return null;
+}
+
+async function completeFromCheckpoint(
+  checkpoint: UploadCheckpointRow,
+  dependencies: UploadRunnerDependencies,
+) {
+  const assets = completionAssetsForCheckpoint(checkpoint);
+  if (!checkpoint.sessionId || !assets) {
+    throw new Error("UPLOAD_COMPLETION_NOT_RECOVERABLE");
+  }
+  dependencies.onUpdate({
+    status: "processing",
+    progress: 99,
+    completionStartedAt:
+      checkpoint.completionStartedAt ?? checkpoint.updatedAt,
+    canRecoverCompletion: true,
+    error: undefined,
+  });
+  await dependencies.api.complete(checkpoint.sessionId, {
+    operationId: checkpoint.operationId,
+    assets,
+  });
+  await dependencies.checkpoints.delete(checkpoint.localTaskId);
+  dependencies.onUpdate({
+    status: "ready",
+    progress: 100,
+    canRecoverCompletion: false,
+    error: undefined,
+  });
+  return { status: "ready" as const, patternId: checkpoint.patternId };
+}
+
+export async function recoverUploadCompletion(
+  task: UploadTask,
+  dependencies: UploadRunnerDependencies,
+) {
+  try {
+    const checkpoint = await dependencies.checkpoints.load(task.localTaskId);
+    if (!checkpoint) throw new Error("UPLOAD_COMPLETION_NOT_RECOVERABLE");
+    return await completeFromCheckpoint(checkpoint, dependencies);
+  } catch (error) {
+    dependencies.onUpdate({ status: "failed", error: friendlyError(error) });
+    throw error;
+  }
+}
+
 export async function runUpload(
   task: UploadTask,
   file: File,
@@ -253,6 +324,12 @@ export async function runUpload(
     if (signal?.aborted) throw new DOMException("Paused", "AbortError");
   };
   try {
+    if (
+      checkpoint?.sessionId &&
+      completionAssetsForCheckpoint(checkpoint)
+    ) {
+      return await completeFromCheckpoint(checkpoint, dependencies);
+    }
     throwIfPaused();
     assertUploadFile(file);
     assertReselectedFile(task, file, checkpoint);
@@ -438,13 +515,31 @@ export async function runUpload(
       );
     }
 
-    dependencies.onUpdate({ status: "processing", progress: 99 });
+    const completionStartedAt = Date.now();
+    checkpoint = checkpointRow(
+      task,
+      dependencies.ownerId,
+      contentHash,
+      checkpoint,
+      { completionAssets: assets, completionStartedAt },
+    );
+    await dependencies.checkpoints.save(checkpoint);
+    dependencies.onUpdate({
+      status: "processing",
+      progress: 99,
+      completionStartedAt,
+      canRecoverCompletion: true,
+    });
     await dependencies.api.complete(initialized.session.id, {
       operationId: task.operationId,
       assets,
     });
     await dependencies.checkpoints.delete(task.localTaskId);
-    dependencies.onUpdate({ status: "ready", progress: 100 });
+    dependencies.onUpdate({
+      status: "ready",
+      progress: 100,
+      canRecoverCompletion: false,
+    });
     return { status: "ready", patternId: task.patternId };
   } catch (error) {
     if (signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) {

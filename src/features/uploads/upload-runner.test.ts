@@ -5,9 +5,11 @@ import type { BrowserOssCredentials } from "@/features/storage/contracts";
 import {
   abandonUpload,
   createUploadTask,
+  recoverUploadCompletion,
   runUpload,
   type UploadRunnerDependencies,
 } from "./upload-runner";
+import type { UploadCheckpointRow } from "./upload-db";
 
 const credentials: BrowserOssCredentials = {
   accessKeyId: "STS.id",
@@ -60,6 +62,41 @@ function createHarness() {
     },
   };
   return { dependencies, initialize, saved, transitions, upload };
+}
+
+function completionCheckpoint(
+  task: ReturnType<typeof createUploadTask>,
+  ownerId: string,
+): UploadCheckpointRow {
+  const objectKey = `users/${ownerId}/patterns/${task.patternId}/source/${task.sourceAssetId}.${task.extension}`;
+  return {
+    localTaskId: task.localTaskId,
+    ownerId,
+    patternId: task.patternId,
+    sourceAssetId: task.sourceAssetId,
+    previewAssetId: task.previewAssetId,
+    thumbnailAssetId: task.thumbnailAssetId,
+    operationId: task.operationId,
+    sessionId: "00000000-0000-4000-8000-000000000099",
+    filename: task.filename,
+    extension: task.extension,
+    size: task.size,
+    lastModified: task.lastModified,
+    contentHash: "a".repeat(64),
+    objectKeys: { source: objectKey },
+    sdkCheckpoints: { source: { completed: true } },
+    completionAssets: [
+      {
+        assetId: task.sourceAssetId,
+        role: "source",
+        objectKey,
+        extension: task.extension,
+        sizeBytes: task.size,
+      },
+    ],
+    completionStartedAt: 1,
+    updatedAt: 1,
+  };
 }
 
 describe("upload runner", () => {
@@ -136,6 +173,78 @@ describe("upload runner", () => {
       status: "ready",
     });
     expect(harness.upload).toHaveBeenCalledTimes(1);
+    expect(harness.initialize).toHaveBeenCalledTimes(1);
+    expect(harness.dependencies.hashFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("replays a persisted completion without hashing, initializing, or uploading", async () => {
+    const file = new File(["png"], "leaf.png", { lastModified: 123 });
+    const task = createUploadTask(file);
+    const harness = createHarness();
+    const checkpoint = completionCheckpoint(
+      task,
+      harness.dependencies.ownerId,
+    );
+    harness.dependencies.checkpoints.load = vi.fn(async () => checkpoint);
+
+    await expect(
+      recoverUploadCompletion(task, harness.dependencies),
+    ).resolves.toEqual({ status: "ready", patternId: task.patternId });
+
+    expect(harness.dependencies.api.complete).toHaveBeenCalledWith(
+      checkpoint.sessionId,
+      {
+        operationId: task.operationId,
+        assets: checkpoint.completionAssets,
+      },
+    );
+    expect(harness.initialize).not.toHaveBeenCalled();
+    expect(harness.upload).not.toHaveBeenCalled();
+    expect(harness.dependencies.hashFile).not.toHaveBeenCalled();
+    expect(harness.dependencies.checkpoints.delete).toHaveBeenCalledWith(
+      task.localTaskId,
+    );
+  });
+
+  it("recovers a legacy source-only completion checkpoint", async () => {
+    const task = createUploadTask(
+      new File(["png"], "leaf.png", { lastModified: 123 }),
+    );
+    const harness = createHarness();
+    const current = completionCheckpoint(task, harness.dependencies.ownerId);
+    const { completionAssets: _completionAssets, ...legacy } = current;
+    harness.dependencies.checkpoints.load = vi.fn(async () => legacy);
+
+    await expect(
+      recoverUploadCompletion(task, harness.dependencies),
+    ).resolves.toMatchObject({ status: "ready" });
+
+    expect(harness.dependencies.api.complete).toHaveBeenCalledWith(
+      current.sessionId,
+      {
+        operationId: task.operationId,
+        assets: current.completionAssets,
+      },
+    );
+  });
+
+  it("does not guess missing metadata for a legacy derived preview", async () => {
+    const task = createUploadTask(
+      new File(["png"], "leaf.png", { lastModified: 123 }),
+    );
+    const harness = createHarness();
+    const current = completionCheckpoint(task, harness.dependencies.ownerId);
+    const { completionAssets: _completionAssets, ...legacy } = current;
+    legacy.objectKeys = {
+      ...legacy.objectKeys,
+      preview: "users/u/patterns/p/preview/id.webp",
+    };
+    harness.dependencies.checkpoints.load = vi.fn(async () => legacy);
+
+    await expect(
+      recoverUploadCompletion(task, harness.dependencies),
+    ).rejects.toThrow("UPLOAD_COMPLETION_NOT_RECOVERABLE");
+    expect(harness.dependencies.api.complete).not.toHaveBeenCalled();
   });
 
   it("verifies a reselected file before any OSS call", async () => {
