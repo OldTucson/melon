@@ -319,9 +319,8 @@ describe("Mac-first workspace", () => {
     const inspector = within(
       screen.getByRole("complementary", { name: "图案检查器" }),
     );
-    expect(
-      inspector.getByText("选择已变化，请刷新后重新选择"),
-    ).toBeInTheDocument();
+    expect(inspector.getByText("图案正在完成上传")).toBeInTheDocument();
+    expect(inspector.queryByText(/选择.*变化/)).not.toBeInTheDocument();
     expect(inspector.getByRole("button", { name: "添加收藏" })).toBeDisabled();
     expect(
       within(screen.getByLabelText("批量操作")).getByRole("button", {

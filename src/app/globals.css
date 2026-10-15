@@ -662,6 +662,13 @@ textarea:focus-visible,
   margin-left: 4px;
 }
 
+.bulk-inline-status {
+  flex: 0 0 auto;
+  margin-left: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .bulk-notice,
 .bulk-error {
   display: flex;

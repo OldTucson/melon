@@ -18,6 +18,7 @@ import { AuthorizationTab } from "@/features/authorizations/authorization-tab";
 import { IconButton } from "./icon-button";
 import type { PatternItem } from "./library-types";
 import { usePatternPatchMutation } from "./pattern-mutations";
+import { selectionAvailability } from "./selection-availability";
 import {
   usePatternBatchMutation,
   type PatternBatchInput,
@@ -314,10 +315,12 @@ function SelectionActions({
   const [moveOpen, setMoveOpen] = useState(!compact);
   const [trashOpen, setTrashOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const invalid = patterns.some(
-    (pattern) => pattern.status !== "ready" && pattern.status !== "failed",
+  const availability = selectionAvailability(
+    patterns.map((pattern) => pattern.id),
+    patterns,
   );
-  const disabled = mutation.isPending || invalid || patterns.length > 100;
+  const disabled =
+    mutation.isPending || availability !== "editable" || patterns.length > 100;
   const run = async (input: PatternBatchInput) => {
     if (disabled) return;
     setMessage(null);
@@ -352,7 +355,11 @@ function SelectionActions({
           </button>
         </>
       ) : null}
-      {invalid ? <p role="alert">选择已变化，请刷新后重新选择</p> : null}
+      {availability === "transient" ? (
+        <p role="status">图案正在完成上传</p>
+      ) : availability === "missing" ? (
+        <p role="alert">选择内容已变化，请重新选择</p>
+      ) : null}
       {patterns.length > 100 ? (
         <p role="alert">每次最多处理 100 个图案</p>
       ) : null}

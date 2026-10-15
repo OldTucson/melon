@@ -20,6 +20,7 @@ import { useFoldersQuery } from "@/features/folders/folder-client";
 
 import type { PatternItem } from "./library-types";
 import { usePatternBatchMutation } from "./pattern-batch-mutations";
+import { selectionAvailability } from "./selection-availability";
 import { useSelectionStore } from "./selection-store";
 import { TrashPatternsDialog } from "./trash-patterns-dialog";
 
@@ -85,8 +86,9 @@ export function BulkActionBar({
   const allLoadedSelected =
     loadedPatterns.length > 0 && count === loadedPatterns.length;
   const tooMany = count > 100;
-  const invalid = count !== selectedIds.length || selected.some((pattern) => pattern.status !== "ready" && pattern.status !== "failed");
-  const disabled = mutation.isPending || tooMany || invalid;
+  const availability = selectionAvailability(selectedIds, selected);
+  const disabled =
+    mutation.isPending || tooMany || availability !== "editable";
 
   const run = async (
     input:
@@ -246,7 +248,15 @@ export function BulkActionBar({
               每次最多处理 100 个图案
             </span>
           ) : null}
-          {invalid ? <span className="bulk-inline-error" role="alert">选择已变化，请刷新后重新选择</span> : null}
+          {availability === "missing" ? (
+            <span className="bulk-inline-error" role="alert">
+              选择内容已变化，请重新选择
+            </span>
+          ) : availability === "transient" ? (
+            <span className="bulk-inline-status" role="status">
+              图案正在完成上传
+            </span>
+          ) : null}
         </div>
       ) : null}
 
