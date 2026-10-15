@@ -6,6 +6,7 @@ import {
   FolderInput,
   Heart,
   HeartOff,
+  RefreshCw,
   Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -31,10 +32,12 @@ export function Inspector({
   activeQuery,
   onCollapse,
   pattern,
+  statusCheck,
 }: {
   activeQuery: PatternQuery;
   onCollapse: () => void;
   pattern: PatternItem;
+  statusCheck?: PatternStatusCheck;
 }) {
   const mutation = usePatternPatchMutation(activeQuery);
   const [name, setName] = useState(pattern.name);
@@ -166,6 +169,7 @@ export function Inspector({
               activeQuery={activeQuery}
               patterns={[pattern]}
               compact
+              statusCheck={statusCheck}
             />
             <section className="inspector-section">
               <label className="inspector-field">
@@ -302,10 +306,12 @@ function SelectionActions({
   activeQuery,
   patterns,
   compact = false,
+  statusCheck,
 }: {
   activeQuery: PatternQuery;
   patterns: PatternItem[];
   compact?: boolean;
+  statusCheck?: PatternStatusCheck;
 }) {
   const folders = useFoldersQuery();
   const mutation = usePatternBatchMutation(activeQuery);
@@ -356,7 +362,24 @@ function SelectionActions({
         </>
       ) : null}
       {availability === "transient" ? (
-        <p role="status">图案正在完成上传</p>
+        <div className="inspector-status-row">
+          <p role={statusCheck?.isError ? "alert" : "status"}>
+            {statusCheck?.isError
+              ? "状态暂时无法更新"
+              : "图案正在完成上传"}
+          </p>
+          {statusCheck ? (
+            <button
+              className="bulk-action-button"
+              disabled={statusCheck.isFetching}
+              type="button"
+              onClick={statusCheck.refetch}
+            >
+              <RefreshCw aria-hidden="true" />
+              重新检查
+            </button>
+          ) : null}
+        </div>
       ) : availability === "missing" ? (
         <p role="alert">选择内容已变化，请重新选择</p>
       ) : null}
@@ -435,6 +458,12 @@ function SelectionActions({
     </section>
   );
 }
+
+type PatternStatusCheck = {
+  isError: boolean;
+  isFetching: boolean;
+  refetch(): void;
+};
 
 function previewLabel(status: PatternItem["previewStatus"]) {
   return {

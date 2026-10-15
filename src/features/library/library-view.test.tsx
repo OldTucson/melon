@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import {
+  focusManager,
+  onlineManager,
   QueryClient,
   QueryClientProvider,
   type InfiniteData,
@@ -330,6 +332,101 @@ describe("Mac-first workspace", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("refreshes only the selected transient pattern and stops at a terminal state", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-15T00:00:30.000Z"));
+    const processing = {
+      ...makePattern(1),
+      status: "processing" as const,
+      updatedAt: "2026-10-15T00:00:10.000Z",
+    };
+    const ready = {
+      ...processing,
+      status: "ready" as const,
+      updatedAt: "2026-10-15T00:00:31.000Z",
+    };
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      if (String(input) === `/api/patterns/${processing.id}`) {
+        return Promise.resolve(Response.json(ready));
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderLibrary([processing]);
+    act(() => useSelectionStore.getState().selectAll([processing.id]));
+
+    expect(screen.getAllByText("图案正在完成上传")).not.toHaveLength(0);
+    await act(async () => vi.advanceTimersByTimeAsync(4_999));
+    expect(fetchMock).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(`/api/patterns/${processing.id}`);
+    expect(screen.queryAllByText("图案正在完成上传")).toHaveLength(0);
+    await act(async () => vi.advanceTimersByTimeAsync(20_000));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).startsWith("/api/patterns?"),
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["offline", () => onlineManager.setOnline(false)],
+    ["hidden", () => focusManager.setFocused(false)],
+  ])(
+    "pauses transient status refresh while the page is %s",
+    async (_state, pause) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-10-15T00:00:30.000Z"));
+      const processing = {
+        ...makePattern(1),
+        status: "processing" as const,
+        updatedAt: "2026-10-15T00:00:10.000Z",
+      };
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      pause();
+      renderLibrary([processing]);
+      act(() => useSelectionStore.getState().selectAll([processing.id]));
+
+      await act(async () => vi.advanceTimersByTimeAsync(10_000));
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("shows a status error and allows an immediate manual recheck", async () => {
+    const processing = {
+      ...makePattern(1),
+      status: "processing" as const,
+    };
+    const ready = { ...processing, status: "ready" as const };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json(
+          { error: { code: "SERVICE_UNAVAILABLE", message: "offline" } },
+          { status: 503 },
+        ),
+      )
+      .mockResolvedValueOnce(Response.json(ready));
+    vi.stubGlobal("fetch", fetchMock);
+    renderLibrary([processing]);
+    act(() => useSelectionStore.getState().selectAll([processing.id]));
+
+    fireEvent.click(screen.getByRole("button", { name: "重新检查" }));
+    expect(await screen.findByText("状态暂时无法更新")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重新检查" }));
+
+    await waitFor(() =>
+      expect(screen.queryAllByText("图案正在完成上传")).toHaveLength(0),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects an entire inspector batch when a newer cached detail became uneditable", async () => {
     const items = [makePattern(1), makePattern(2)];
     const client = createClient(items);
@@ -417,6 +514,8 @@ describe("Mac-first workspace", () => {
   });
 
   afterEach(() => {
+    focusManager.setFocused(true);
+    onlineManager.setOnline(true);
     vi.useRealTimers();
     cleanup();
     vi.restoreAllMocks();

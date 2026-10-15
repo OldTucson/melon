@@ -7,6 +7,7 @@ import {
   type InfiniteData,
   useInfiniteQuery,
   useQuery,
+  useQueryClient,
 } from "@tanstack/react-query";
 import { Download, X } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
@@ -28,6 +29,10 @@ import { LibraryToolbar, type LibraryViewMode } from "./library-toolbar";
 import { FormatPlaceholder } from "./pattern-card";
 import { PatternGrid } from "./pattern-grid";
 import { usePatternPatchMutation } from "./pattern-mutations";
+import {
+  isTransientPatternStatus,
+  patternStatusRefreshInterval,
+} from "./pattern-status-watch";
 import { serializeLibrarySearchParams } from "./query-state";
 import { useSelectionStore } from "./selection-store";
 import { useFoldersQuery } from "@/features/folders/folder-client";
@@ -75,6 +80,7 @@ export function LibraryView({
   const router = useRouter();
   const pathname = usePathname();
   const ownerId = useQueryOwnerId();
+  const queryClient = useQueryClient();
   const folders = useFoldersQuery();
   const activeFolder = !initialQuery.unfiled
     ? folders.data?.find(
@@ -111,33 +117,67 @@ export function LibraryView({
     initialPageParam: initialQuery.cursor ?? null,
     getNextPageParam: (lastPage) => lastPage.nextCursor,
   });
-  const selectedPatternQuery = useQuery({
-    queryKey: queryKeys.pattern(ownerId, initialSelectedId ?? "none"),
-    queryFn: () => fetchPattern(initialSelectedId!),
-    enabled: Boolean(initialSelectedId),
-  });
   const items = useMemo(
     () => patternsQuery.data?.pages.flatMap((page) => page.items) ?? [],
     [patternsQuery.data],
   );
-  const orderedIds = useMemo(() => items.map((item) => item.id), [items]);
-  const deepLinkedPattern =
+  const soleSelectedId = selectedIds.length === 1 ? selectedIds[0] : undefined;
+  const soleSelectedPattern = soleSelectedId
+    ? items.find((pattern) => pattern.id === soleSelectedId)
+    : undefined;
+  const transientSelectedId = isTransientPatternStatus(
+    soleSelectedPattern?.status,
+  )
+    ? soleSelectedId
+    : undefined;
+  const deepLinkNeedsFetch =
+    Boolean(initialSelectedId) &&
+    (selectedIds.length === 0 || soleSelectedId === initialSelectedId);
+  const watchedPatternId =
+    transientSelectedId ?? (deepLinkNeedsFetch ? initialSelectedId : undefined);
+  const selectedPatternQuery = useQuery({
+    queryKey: queryKeys.pattern(ownerId, watchedPatternId ?? "none"),
+    queryFn: () => fetchPattern(watchedPatternId!),
+    enabled: Boolean(watchedPatternId),
+    refetchInterval: (query) =>
+      patternStatusRefreshInterval(
+        query.state.data?.status,
+        query.state.data?.updatedAt,
+      ),
+    refetchIntervalInBackground: false,
+  });
+  const selectedDetailPattern =
     selectedPatternQuery.data &&
     libraryStatuses.has(selectedPatternQuery.data.status)
       ? selectedPatternQuery.data
       : null;
+  const displayItems = useMemo(
+    () =>
+      selectedDetailPattern
+        ? items.map((item) =>
+            item.id === selectedDetailPattern.id ? selectedDetailPattern : item,
+          )
+        : items,
+    [items, selectedDetailPattern],
+  );
+  const orderedIds = useMemo(
+    () => displayItems.map((item) => item.id),
+    [displayItems],
+  );
   const availableIds = useMemo(
     () =>
-      deepLinkedPattern && !orderedIds.includes(deepLinkedPattern.id)
-        ? [...orderedIds, deepLinkedPattern.id]
+      selectedDetailPattern && !orderedIds.includes(selectedDetailPattern.id)
+        ? [...orderedIds, selectedDetailPattern.id]
         : orderedIds,
-    [deepLinkedPattern, orderedIds],
+    [selectedDetailPattern, orderedIds],
   );
   const patternsById = useMemo(() => {
-    const result = new Map(items.map((item) => [item.id, item]));
-    if (deepLinkedPattern) result.set(deepLinkedPattern.id, deepLinkedPattern);
+    const result = new Map(displayItems.map((item) => [item.id, item]));
+    if (selectedDetailPattern) {
+      result.set(selectedDetailPattern.id, selectedDetailPattern);
+    }
     return result;
-  }, [deepLinkedPattern, items]);
+  }, [displayItems, selectedDetailPattern]);
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const selectedPatterns = useMemo(
     () =>
@@ -147,7 +187,8 @@ export function LibraryView({
       }),
     [patternsById, selectedIds],
   );
-  const previewPattern = items.find((item) => item.id === previewId) ?? null;
+  const previewPattern =
+    displayItems.find((item) => item.id === previewId) ?? null;
   const selectionKey = selectedIds.join("|");
   const inspectorCollapsed =
     selectedIds.length > 0 && collapsedSelectionKey === selectionKey;
@@ -165,12 +206,33 @@ export function LibraryView({
   }, [availableIds, reconcileSelection]);
 
   useEffect(() => {
+    if (!selectedDetailPattern) return;
+    queryClient.setQueryData<InfiniteData<PatternPage, string | null>>(
+      queryKeys.patterns(ownerId, initialQuery),
+      (current) =>
+        current
+          ? {
+              ...current,
+              pages: current.pages.map((page) => ({
+                ...page,
+                items: page.items.map((item) =>
+                  item.id === selectedDetailPattern.id
+                    ? selectedDetailPattern
+                    : item,
+                ),
+              })),
+            }
+          : current,
+    );
+  }, [initialQuery, ownerId, queryClient, selectedDetailPattern]);
+
+  useEffect(() => {
     if (!initialSelectedId) {
       appliedInitialSelectedId.current = null;
       return;
     }
     if (
-      !deepLinkedPattern ||
+      !selectedDetailPattern ||
       appliedInitialSelectedId.current === initialSelectedId
     ) {
       return;
@@ -178,7 +240,7 @@ export function LibraryView({
     select(initialSelectedId, availableIds, {});
     setCollapsedSelectionKey(null);
     appliedInitialSelectedId.current = initialSelectedId;
-  }, [availableIds, deepLinkedPattern, initialSelectedId, querySignature, select]);
+  }, [availableIds, initialSelectedId, querySignature, select, selectedDetailPattern]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -262,7 +324,10 @@ export function LibraryView({
             selectedCount={selectedIds.length}
             viewMode={viewMode}
           />
-          <BulkActionBar activeQuery={initialQuery} loadedPatterns={items} />
+            <BulkActionBar
+              activeQuery={initialQuery}
+              loadedPatterns={displayItems}
+            />
         </div>
 
         {patternsQuery.isPending ? (
@@ -282,7 +347,7 @@ export function LibraryView({
               重试
             </button>
           </div>
-        ) : items.length === 0 ? (
+          ) : displayItems.length === 0 ? (
           <div className="library-state">
             <strong>这里还没有图案</strong>
           </div>
@@ -290,7 +355,7 @@ export function LibraryView({
           <PatternGrid
             hasNextPage={patternsQuery.hasNextPage}
             isFetchingNextPage={patternsQuery.isFetchingNextPage}
-            items={items}
+            items={displayItems}
             mode={viewMode}
             onFavorite={(item) =>
               mutation.mutatePattern({
@@ -315,6 +380,15 @@ export function LibraryView({
           activeQuery={initialQuery}
           onCollapse={() => setCollapsedSelectionKey(selectionKey)}
           pattern={selectedPatterns[0]!}
+          statusCheck={
+            isTransientPatternStatus(selectedPatterns[0]!.status)
+              ? {
+                  isError: selectedPatternQuery.isError,
+                  isFetching: selectedPatternQuery.isFetching,
+                  refetch: () => void selectedPatternQuery.refetch(),
+                }
+              : undefined
+          }
         />
       ) : null}
       {showInspector && selectedPatterns.length > 1 ? (
