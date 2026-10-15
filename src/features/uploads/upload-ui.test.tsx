@@ -174,6 +174,9 @@ describe("upload UI", () => {
     expect(
       screen.getByRole("button", { name: "恢复上传 leaf.png" }),
     ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "放弃 leaf.png" }),
+    ).toBeDisabled();
     expect(screen.getByText("正在恢复")).toBeVisible();
   });
 

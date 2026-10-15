@@ -12,6 +12,8 @@
 
 ### Task 1: Separate transient upload state from stale selection state
 
+**Status:** Complete
+
 **Files:**
 - Create: `src/features/library/selection-availability.ts`
 - Create: `src/features/library/selection-availability.test.ts`
@@ -106,6 +108,8 @@ git commit -m "fix: distinguish processing selections"
 ```
 
 ### Task 2: Add targeted adaptive status refresh
+
+**Status:** Complete
 
 **Files:**
 - Create: `src/features/library/pattern-status-watch.ts`
@@ -222,6 +226,8 @@ git commit -m "feat: refresh selected processing pattern"
 ```
 
 ### Task 3: Persist and replay the exact completion request
+
+**Status:** Complete
 
 **Files:**
 - Modify: `src/features/uploads/upload-db.ts:3-23,75-86`
@@ -363,6 +369,8 @@ git commit -m "feat: recover upload completion idempotently"
 
 ### Task 4: Expose safe recovery in the upload queue
 
+**Status:** Complete
+
 **Files:**
 - Modify: `src/features/uploads/upload-store.ts:8-50`
 - Modify: `src/features/uploads/upload-manager.tsx:27-233`
@@ -415,6 +423,8 @@ git commit -m "feat: add stalled upload recovery action"
 ```
 
 ### Task 5: Full verification and browser regression
+
+**Status:** In progress
 
 **Files:**
 - Modify only if verification exposes a defect in the files above.

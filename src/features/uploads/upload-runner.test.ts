@@ -212,7 +212,8 @@ describe("upload runner", () => {
     );
     const harness = createHarness();
     const current = completionCheckpoint(task, harness.dependencies.ownerId);
-    const { completionAssets: _completionAssets, ...legacy } = current;
+    const legacy: UploadCheckpointRow = { ...current };
+    delete legacy.completionAssets;
     harness.dependencies.checkpoints.load = vi.fn(async () => legacy);
 
     await expect(
@@ -234,7 +235,8 @@ describe("upload runner", () => {
     );
     const harness = createHarness();
     const current = completionCheckpoint(task, harness.dependencies.ownerId);
-    const { completionAssets: _completionAssets, ...legacy } = current;
+    const legacy: UploadCheckpointRow = { ...current };
+    delete legacy.completionAssets;
     legacy.objectKeys = {
       ...legacy.objectKeys,
       preview: "users/u/patterns/p/preview/id.webp",

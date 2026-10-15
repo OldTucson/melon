@@ -43,9 +43,10 @@ export function UploadTray({
   onAbandon: (id: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
-  const [clock, setClock] = useState(0);
-  const now = Date.now();
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
+    const currentTime = Date.now();
+    let needsImmediateSync = false;
     const nextDeadline = tasks.reduce<number | null>((nearest, task) => {
       if (
         !task.canRecoverCompletion ||
@@ -54,17 +55,22 @@ export function UploadTray({
       ) {
         return nearest;
       }
-      const remaining = task.completionStartedAt + 30_000 - now;
-      if (remaining <= 0) return nearest;
-      return nearest === null ? remaining : Math.min(nearest, remaining);
+      const deadline = task.completionStartedAt + 30_000;
+      if (deadline <= currentTime) {
+        if (deadline > now) needsImmediateSync = true;
+        return nearest;
+      }
+      return nearest === null ? deadline : Math.min(nearest, deadline);
     }, null);
-    if (nextDeadline === null) return;
-    const timer = window.setTimeout(
-      () => setClock((current) => current + 1),
-      nextDeadline,
-    );
+    const delay = needsImmediateSync
+      ? 0
+      : nextDeadline === null
+        ? null
+        : nextDeadline - currentTime;
+    if (delay === null) return;
+    const timer = window.setTimeout(() => setNow(Date.now()), delay);
     return () => window.clearTimeout(timer);
-  }, [clock, now, tasks]);
+  }, [now, tasks]);
   if (tasks.length === 0) return null;
 
   return (
@@ -159,6 +165,7 @@ export function UploadTray({
                     <button
                       type="button"
                       aria-label={`放弃 ${task.filename}`}
+                      disabled={task.recoveryPending}
                       title="放弃上传"
                       onClick={() => onAbandon(task.localTaskId)}
                     >
