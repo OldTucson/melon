@@ -1,12 +1,15 @@
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { UploadDropzone } from "./upload-dropzone";
 import { UploadTray } from "./upload-tray";
 
-afterEach(cleanup);
+afterEach(() => {
+  vi.useRealTimers();
+  cleanup();
+});
 
 describe("upload UI", () => {
   it("collapses the upload queue without discarding tasks and expands it again", async () => {
@@ -25,6 +28,7 @@ describe("upload UI", () => {
         ]}
         onAbandon={onAbandon}
         onPause={onPause}
+        onRecover={vi.fn()}
         onRetry={vi.fn()}
         onReselect={vi.fn()}
       />,
@@ -75,6 +79,7 @@ describe("upload UI", () => {
           ]}
           onAbandon={vi.fn()}
           onPause={vi.fn()}
+          onRecover={vi.fn()}
           onReselect={vi.fn()}
           onRetry={vi.fn()}
         />
@@ -85,5 +90,138 @@ describe("upload UI", () => {
     expect(screen.getByRole("button", { name: "暂停 leaf.png" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "重试 bad.ai" })).toBeEnabled();
     expect(screen.getByText("网络连接中断")).toBeVisible();
+  });
+
+  it("offers completion recovery only after a recoverable task is stalled", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-15T00:01:00.000Z"));
+    const onRecover = vi.fn();
+    render(
+      <UploadTray
+        tasks={[
+          {
+            localTaskId: "stalled",
+            filename: "stalled.png",
+            status: "processing",
+            progress: 99,
+            canRecoverCompletion: true,
+            completionStartedAt: Date.now() - 31_000,
+          },
+          {
+            localTaskId: "recent",
+            filename: "recent.png",
+            status: "processing",
+            progress: 99,
+            canRecoverCompletion: true,
+            completionStartedAt: Date.now() - 29_000,
+          },
+          {
+            localTaskId: "legacy",
+            filename: "legacy.png",
+            status: "paused",
+            progress: 99,
+          },
+        ]}
+        onAbandon={vi.fn()}
+        onPause={vi.fn()}
+        onRecover={onRecover}
+        onReselect={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "恢复上传 stalled.png" }),
+    );
+    expect(onRecover).toHaveBeenCalledWith("stalled");
+    expect(
+      screen.queryByRole("button", { name: "恢复上传 recent.png" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "恢复上传 legacy.png" }),
+    ).not.toBeInTheDocument();
+
+    await act(async () => vi.advanceTimersByTimeAsync(1_000));
+
+    expect(
+      screen.getByRole("button", { name: "恢复上传 recent.png" }),
+    ).toBeEnabled();
+  });
+
+  it("disables recovery while the replay is pending", () => {
+    vi.useFakeTimers();
+    render(
+      <UploadTray
+        tasks={[
+          {
+            localTaskId: "recovering",
+            filename: "leaf.png",
+            status: "processing",
+            progress: 99,
+            canRecoverCompletion: true,
+            completionStartedAt: Date.now() - 31_000,
+            recoveryPending: true,
+          },
+        ]}
+        onAbandon={vi.fn()}
+        onPause={vi.fn()}
+        onRecover={vi.fn()}
+        onReselect={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "恢复上传 leaf.png" }),
+    ).toBeDisabled();
+    expect(screen.getByText("正在恢复")).toBeVisible();
+  });
+
+  it("starts the recovery threshold from a task added to an old tray", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-15T00:00:00.000Z"));
+    const props = {
+      onAbandon: vi.fn(),
+      onPause: vi.fn(),
+      onRecover: vi.fn(),
+      onReselect: vi.fn(),
+      onRetry: vi.fn(),
+    };
+    const view = render(
+      <UploadTray
+        {...props}
+        tasks={[
+          {
+            localTaskId: "done",
+            filename: "done.png",
+            status: "ready",
+            progress: 100,
+          },
+        ]}
+      />,
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(60_000));
+    const completionStartedAt = Date.now() - 29_000;
+    view.rerender(
+      <UploadTray
+        {...props}
+        tasks={[
+          {
+            localTaskId: "recent",
+            filename: "recent.png",
+            status: "processing",
+            progress: 99,
+            canRecoverCompletion: true,
+            completionStartedAt,
+          },
+        ]}
+      />,
+    );
+
+    await act(async () => vi.advanceTimersByTimeAsync(1_000));
+
+    expect(
+      screen.getByRole("button", { name: "恢复上传 recent.png" }),
+    ).toBeEnabled();
   });
 });

@@ -3,11 +3,15 @@
 import { create } from "zustand";
 
 import type { UploadCheckpointRow } from "./upload-db";
-import type { UploadTask } from "./upload-runner";
+import {
+  canRecoverUploadCompletion,
+  type UploadTask,
+} from "./upload-runner";
 
 export type ManagedUploadTask = UploadTask & {
   file?: File;
   needsReselect?: boolean;
+  recoveryPending?: boolean;
 };
 
 type UploadStore = {
@@ -31,23 +35,30 @@ export const useUploadStore = create<UploadStore>((set) => ({
       const known = new Set(state.tasks.map((task) => task.localTaskId));
       const recovered: ManagedUploadTask[] = rows
         .filter((row) => !known.has(row.localTaskId))
-        .map((row) => ({
-          localTaskId: row.localTaskId,
-          patternId: row.patternId,
-          sourceAssetId: row.sourceAssetId,
-          previewAssetId: row.previewAssetId,
-          thumbnailAssetId: row.thumbnailAssetId,
-          operationId: row.operationId,
-          filename: row.filename,
-          extension: row.extension as ManagedUploadTask["extension"],
-          size: row.size,
-          lastModified: row.lastModified,
-          contentHash: row.contentHash,
-          sessionId: row.sessionId,
-          status: "paused",
-          progress: 0,
-          needsReselect: true,
-        }));
+        .map((row) => {
+          const canRecoverCompletion = canRecoverUploadCompletion(row);
+          return {
+            localTaskId: row.localTaskId,
+            patternId: row.patternId,
+            sourceAssetId: row.sourceAssetId,
+            previewAssetId: row.previewAssetId,
+            thumbnailAssetId: row.thumbnailAssetId,
+            operationId: row.operationId,
+            filename: row.filename,
+            extension: row.extension as ManagedUploadTask["extension"],
+            size: row.size,
+            lastModified: row.lastModified,
+            contentHash: row.contentHash,
+            sessionId: row.sessionId,
+            status: canRecoverCompletion ? "processing" : "paused",
+            progress: canRecoverCompletion ? 99 : 0,
+            completionStartedAt:
+              row.completionStartedAt ??
+              (canRecoverCompletion ? row.updatedAt : undefined),
+            canRecoverCompletion,
+            needsReselect: !canRecoverCompletion,
+          };
+        });
       return recovered.length > 0
         ? { tasks: [...state.tasks, ...recovered] }
         : state;

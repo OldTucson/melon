@@ -28,6 +28,7 @@ import {
   abandonUpload,
   createUploadTask,
   hashFileInChunks,
+  recoverUploadCompletion,
   runUpload,
   type UploadRunnerDependencies,
 } from "./upload-runner";
@@ -207,6 +208,24 @@ export function UploadManagerProvider({ children }: { children: React.ReactNode 
       <UploadTray
         tasks={tasks}
         onPause={(id) => controllers.current.get(id)?.abort()}
+        onRecover={(id) => {
+          const task = useUploadStore
+            .getState()
+            .tasks.find((entry) => entry.localTaskId === id);
+          if (!task || task.recoveryPending) return;
+          updateTask(id, { recoveryPending: true, error: undefined });
+          void recoverUploadCompletion(task, dependenciesFor(id))
+            .then(async (result) => {
+              await queryClient.invalidateQueries({
+                queryKey: ["owner", ownerId, "patterns"],
+              });
+              useSelectionStore
+                .getState()
+                .select(result.patternId, [result.patternId], {});
+            })
+            .catch(() => undefined)
+            .finally(() => updateTask(id, { recoveryPending: false }));
+        }}
         onRetry={(id) => {
           const task = useUploadStore
             .getState()

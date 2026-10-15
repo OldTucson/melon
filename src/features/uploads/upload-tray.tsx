@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronDown, ChevronUp, Pause, RefreshCw, Trash2, UploadCloud } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { UploadTaskStatus } from "./upload-runner";
 
@@ -12,6 +12,9 @@ export type UploadTrayTask = {
   progress: number;
   error?: string;
   needsReselect?: boolean;
+  completionStartedAt?: number;
+  canRecoverCompletion?: boolean;
+  recoveryPending?: boolean;
 };
 
 const statusLabels: Record<UploadTaskStatus, string> = {
@@ -27,17 +30,41 @@ const statusLabels: Record<UploadTaskStatus, string> = {
 export function UploadTray({
   tasks,
   onPause,
+  onRecover,
   onRetry,
   onReselect,
   onAbandon,
 }: {
   tasks: UploadTrayTask[];
   onPause: (id: string) => void;
+  onRecover: (id: string) => void;
   onRetry: (id: string) => void;
   onReselect: (id: string) => void;
   onAbandon: (id: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [clock, setClock] = useState(0);
+  const now = Date.now();
+  useEffect(() => {
+    const nextDeadline = tasks.reduce<number | null>((nearest, task) => {
+      if (
+        !task.canRecoverCompletion ||
+        task.completionStartedAt === undefined ||
+        task.status === "ready"
+      ) {
+        return nearest;
+      }
+      const remaining = task.completionStartedAt + 30_000 - now;
+      if (remaining <= 0) return nearest;
+      return nearest === null ? remaining : Math.min(nearest, remaining);
+    }, null);
+    if (nextDeadline === null) return;
+    const timer = window.setTimeout(
+      () => setClock((current) => current + 1),
+      nextDeadline,
+    );
+    return () => window.clearTimeout(timer);
+  }, [clock, now, tasks]);
   if (tasks.length === 0) return null;
 
   return (
@@ -68,11 +95,20 @@ export function UploadTray({
         <div className="upload-tray-list">
           {tasks.map((task) => {
             const active = ["hashing", "uploading"].includes(task.status);
+            const recoveryAvailable = Boolean(
+              task.canRecoverCompletion &&
+                task.completionStartedAt !== undefined &&
+                now - task.completionStartedAt >= 30_000,
+            );
             return (
               <div className="upload-tray-row" key={task.localTaskId}>
                 <div className="upload-tray-copy">
                   <strong title={task.filename}>{task.filename}</strong>
-                  <span>{task.error ?? statusLabels[task.status]}</span>
+                  <span>
+                    {task.recoveryPending
+                      ? "正在恢复"
+                      : (task.error ?? statusLabels[task.status])}
+                  </span>
                 </div>
                 <div className="upload-progress" aria-label={`${task.filename} 上传进度`}>
                   <span style={{ width: `${Math.max(0, Math.min(100, task.progress))}%` }} />
@@ -89,7 +125,19 @@ export function UploadTray({
                       <Pause aria-hidden="true" />
                     </button>
                   ) : null}
-                  {task.needsReselect ? (
+                  {task.canRecoverCompletion ? (
+                    recoveryAvailable ? (
+                      <button
+                        type="button"
+                        aria-label={`恢复上传 ${task.filename}`}
+                        disabled={task.recoveryPending}
+                        title="恢复上传"
+                        onClick={() => onRecover(task.localTaskId)}
+                      >
+                        <RefreshCw aria-hidden="true" />
+                      </button>
+                    ) : null
+                  ) : task.needsReselect ? (
                     <button
                       type="button"
                       aria-label={`重新选择 ${task.filename}`}

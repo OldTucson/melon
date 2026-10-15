@@ -269,6 +269,12 @@ function completionAssetsForCheckpoint(checkpoint: UploadCheckpointRow) {
   return null;
 }
 
+export function canRecoverUploadCompletion(checkpoint: UploadCheckpointRow) {
+  return Boolean(
+    checkpoint.sessionId && completionAssetsForCheckpoint(checkpoint),
+  );
+}
+
 async function completeFromCheckpoint(
   checkpoint: UploadCheckpointRow,
   dependencies: UploadRunnerDependencies,
