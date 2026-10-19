@@ -2,13 +2,25 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import integrationConfig from "../../vitest.integration.config";
+import integrationConfig, {
+  buildIntegrationTestEnv,
+} from "../../vitest.integration.config";
 import nextConfig from "../../next.config";
 import playwrightConfig from "../../playwright.config";
 
 describe("database infrastructure configuration", () => {
   it("serializes integration test files that share the test database", () => {
     expect(integrationConfig.test?.fileParallelism).toBe(false);
+  });
+
+  it("does not replace deployment OSS settings during real integration tests", () => {
+    const realIntegrationEnv = buildIntegrationTestEnv(true);
+
+    expect(realIntegrationEnv).not.toHaveProperty("ALIYUN_OSS_REGION");
+    expect(realIntegrationEnv).not.toHaveProperty("ALIYUN_OSS_BUCKET");
+    expect(realIntegrationEnv).not.toHaveProperty("ALIYUN_OSS_ENDPOINT");
+    expect(realIntegrationEnv).not.toHaveProperty("ALIYUN_OSS_CNAME");
+    expect(realIntegrationEnv).not.toHaveProperty("ALIYUN_STS_ROLE_ARN");
   });
 
   it("publishes PostgreSQL only on the IPv4 loopback interface", async () => {
