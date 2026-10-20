@@ -357,7 +357,7 @@ Expected: the tool prints the artifact SHA-256, writes a lock file, and the pari
 ```bash
 .venv-visual-search/bin/uv run --project services/visual-search pytest services/visual-search/tests/test_app.py -q
 .venv-visual-search/bin/uv run --project services/visual-search ruff check services/visual-search
-.venv-visual-search/bin/uv run --project services/visual-search mypy services/visual-search/src
+.venv-visual-search/bin/uv run --project services/visual-search mypy --no-incremental --config-file services/visual-search/pyproject.toml services/visual-search/src
 git add .gitignore services/visual-search
 git commit -m "feat: scaffold visual search service"
 ```
@@ -469,7 +469,7 @@ Expected: a ten-region batch returns finite `(10, 384)` normalized vectors and t
 ```bash
 .venv-visual-search/bin/uv run --project services/visual-search pytest services/visual-search/tests -q
 .venv-visual-search/bin/uv run --project services/visual-search ruff check services/visual-search
-.venv-visual-search/bin/uv run --project services/visual-search mypy services/visual-search/src
+.venv-visual-search/bin/uv run --project services/visual-search mypy --no-incremental --config-file services/visual-search/pyproject.toml services/visual-search/src
 git add services/visual-search
 git commit -m "feat: extract visual search features"
 ```
@@ -678,7 +678,7 @@ The cleanup command builds its keep-set from documents and live jobs, scans only
 ```bash
 VISUAL_SEARCH_DATABASE_URL=postgres://melon:melon@127.0.0.1:55432/melon_test .venv-visual-search/bin/uv run --project services/visual-search pytest services/visual-search/tests -q
 .venv-visual-search/bin/uv run --project services/visual-search ruff check services/visual-search
-.venv-visual-search/bin/uv run --project services/visual-search mypy services/visual-search/src
+.venv-visual-search/bin/uv run --project services/visual-search mypy --no-incremental --config-file services/visual-search/pyproject.toml services/visual-search/src
 git add services/visual-search
 git commit -m "feat: index previews for visual search"
 ```
@@ -749,7 +749,7 @@ Use `asyncio.timeout(11)` inside the service; always close the upload and remove
 ```bash
 VISUAL_SEARCH_DATABASE_URL=postgres://melon:melon@127.0.0.1:55432/melon_test .venv-visual-search/bin/uv run --project services/visual-search pytest services/visual-search/tests -q
 .venv-visual-search/bin/uv run --project services/visual-search ruff check services/visual-search
-.venv-visual-search/bin/uv run --project services/visual-search mypy services/visual-search/src
+.venv-visual-search/bin/uv run --project services/visual-search mypy --no-incremental --config-file services/visual-search/pyproject.toml services/visual-search/src
 git add services/visual-search
 git commit -m "feat: search indexed pattern images"
 ```
@@ -1186,7 +1186,7 @@ npx --yes --package=node@24 -c 'npm run lint'
 npx --yes --package=node@24 -c 'npm run build'
 .venv-visual-search/bin/uv run --project services/visual-search pytest services/visual-search/tests -q
 .venv-visual-search/bin/uv run --project services/visual-search ruff check services/visual-search
-.venv-visual-search/bin/uv run --project services/visual-search mypy services/visual-search/src
+.venv-visual-search/bin/uv run --project services/visual-search mypy --no-incremental --config-file services/visual-search/pyproject.toml services/visual-search/src
 docker build -f services/visual-search/Dockerfile -t melon-visual-search:test .
 docker compose -f deploy/compose.visual-search.yaml config --quiet
 npx --yes --package=node@24 -c 'npm run test:e2e -- tests/e2e/image-search.spec.ts'

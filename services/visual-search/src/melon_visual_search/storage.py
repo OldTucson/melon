@@ -312,7 +312,8 @@ class InMemoryStorage:
         )
 
 
-class _CredentialProvider(oss.CredentialsProvider):
+# OSS requires this base at runtime; its untyped SDK exposes the base as Any.
+class _CredentialProvider(oss.CredentialsProvider):  # type: ignore[misc]
     def __init__(self, client: Any) -> None:
         self._client = client
 

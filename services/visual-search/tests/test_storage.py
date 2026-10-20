@@ -4,6 +4,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 from uuid import UUID
 
+import alibabacloud_oss_v2 as oss
 import pytest
 from alibabacloud_oss_v2.exceptions import ServiceError
 from conftest import NOW
@@ -269,3 +270,44 @@ def test_production_oss_explicitly_uses_ecs_ram_role_credentials() -> None:
 
     assert len(credential_configs) == 1
     assert credential_configs[0].type == "ecs_ram_role"  # type: ignore[attr-defined]
+
+
+def test_oss_credential_provider_adapts_the_sdk_credential() -> None:
+    observed_credentials: list[tuple[str, str, str | None]] = []
+    source = SimpleNamespace(
+        access_key_id="test-access-key-id",
+        access_key_secret="test-access-key-secret",
+        security_token="test-security-token",
+    )
+
+    def client_factory(config: object) -> object:
+        provider = config.credentials_provider  # type: ignore[attr-defined]
+        assert isinstance(provider, oss.CredentialsProvider)
+        credentials = provider.get_credentials()
+        observed_credentials.append(
+            (
+                credentials.access_key_id,
+                credentials.access_key_secret,
+                credentials.security_token,
+            )
+        )
+        return SimpleNamespace(config=config)
+
+    AlibabaOssStorage(
+        region="cn-shanghai",
+        bucket="melon-private-assets",
+        endpoint="https://oss-cn-shanghai.aliyuncs.com",
+        environment="test",
+        credential_client_factory=lambda: SimpleNamespace(
+            get_credential=lambda: source
+        ),
+        client_factory=client_factory,
+    )
+
+    assert observed_credentials == [
+        (
+            "test-access-key-id",
+            "test-access-key-secret",
+            "test-security-token",
+        )
+    ]
