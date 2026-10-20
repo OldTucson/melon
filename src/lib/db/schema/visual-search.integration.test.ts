@@ -175,8 +175,10 @@ describe("visual search schema", () => {
   let ownerA: string;
   let ownerB: string;
   let patternA: string;
+  let patternASibling: string;
   let patternB: string;
   let previewA: string;
+  let previewASibling: string;
   let previewB: string;
 
   beforeEach(async () => {
@@ -185,8 +187,10 @@ describe("visual search schema", () => {
     ownerA = randomUUID();
     ownerB = randomUUID();
     patternA = randomUUID();
+    patternASibling = randomUUID();
     patternB = randomUUID();
     previewA = randomUUID();
+    previewASibling = randomUUID();
     previewB = randomUUID();
 
     await db.execute(sql`
@@ -207,6 +211,7 @@ describe("visual search schema", () => {
         preview_status
       ) values
         (${patternA}, ${ownerA}, 'Garden A', 'garden-a.psd', 'psd', 1024, 'ready', 'ready'),
+        (${patternASibling}, ${ownerA}, 'Garden A sibling', 'garden-a-sibling.psd', 'psd', 1024, 'ready', 'ready'),
         (${patternB}, ${ownerB}, 'Garden B', 'garden-b.psd', 'psd', 1024, 'ready', 'ready')
     `);
     await db.execute(sql`
@@ -231,6 +236,17 @@ describe("visual search schema", () => {
           'image/webp',
           512,
           ${"a".repeat(64)}
+        ),
+        (
+          ${previewASibling},
+          ${ownerA},
+          ${patternASibling},
+          'preview',
+          ${`users/${ownerA}/patterns/${patternASibling}/preview.webp`},
+          'garden-a-sibling.webp',
+          'image/webp',
+          512,
+          ${"c".repeat(64)}
         ),
         (
           ${previewB},
@@ -320,34 +336,146 @@ describe("visual search schema", () => {
     );
   });
 
-  it("rejects foreign preview references and embedding ownership", async () => {
+  it("rejects a document whose owner does not own its pattern", async () => {
+    await expect(
+      insertDocument({
+        ownerId: ownerB,
+        patternId: patternB,
+        previewAssetId: previewB,
+      }),
+    ).resolves.toBeDefined();
+
+    await expectDatabaseError(
+      insertDocument({
+        ownerId: ownerA,
+        patternId: patternB,
+        previewAssetId: previewB,
+      }),
+      {
+        code: "23503",
+        constraintName: "visual_search_documents_owner_pattern_fk",
+      },
+    );
+  });
+
+  it("rejects a document whose preview belongs to another pattern", async () => {
+    await expect(
+      insertDocument({
+        ownerId: ownerA,
+        patternId: patternASibling,
+        previewAssetId: previewASibling,
+      }),
+    ).resolves.toBeDefined();
+
     await expectDatabaseError(
       insertDocument({
         ownerId: ownerA,
         patternId: patternA,
-        previewAssetId: previewB,
+        previewAssetId: previewASibling,
       }),
       {
         code: "23503",
         constraintName: "visual_search_documents_preview_fk",
       },
     );
+  });
 
+  it("rejects an embedding whose owner differs from its document", async () => {
     const documentId = await insertDocument({
-      ownerId: ownerA,
-      patternId: patternA,
-      previewAssetId: previewA,
+      ownerId: ownerB,
+      patternId: patternB,
+      previewAssetId: previewB,
     });
-
-    await expectDatabaseError(
+    await expect(
       insertEmbedding({
         documentId,
         ownerId: ownerB,
         patternId: patternB,
       }),
+    ).resolves.toBeDefined();
+
+    await expectDatabaseError(
+      insertEmbedding({
+        documentId,
+        ownerId: ownerA,
+        patternId: patternB,
+        regionIndex: 1,
+      }),
       {
         code: "23503",
         constraintName: "visual_search_embeddings_document_owner_fk",
+      },
+    );
+  });
+
+  it("rejects an embedding whose pattern differs from its document", async () => {
+    const documentId = await insertDocument({
+      ownerId: ownerA,
+      patternId: patternASibling,
+      previewAssetId: previewASibling,
+    });
+    await expect(
+      insertEmbedding({
+        documentId,
+        ownerId: ownerA,
+        patternId: patternASibling,
+      }),
+    ).resolves.toBeDefined();
+
+    await expectDatabaseError(
+      insertEmbedding({
+        documentId,
+        ownerId: ownerA,
+        patternId: patternA,
+        regionIndex: 1,
+      }),
+      {
+        code: "23503",
+        constraintName: "visual_search_embeddings_document_owner_fk",
+      },
+    );
+  });
+
+  it("rejects a job whose owner does not own its pattern", async () => {
+    await expect(
+      insertJob({
+        ownerId: ownerB,
+        patternId: patternB,
+        previewAssetId: previewB,
+      }),
+    ).resolves.toBeDefined();
+
+    await expectDatabaseError(
+      insertJob({
+        ownerId: ownerA,
+        patternId: patternB,
+        previewAssetId: previewB,
+      }),
+      {
+        code: "23503",
+        constraintName: "visual_search_jobs_owner_pattern_fk",
+      },
+    );
+  });
+
+  it("rejects a job whose preview belongs to another pattern", async () => {
+    await expect(
+      insertJob({
+        ownerId: ownerA,
+        patternId: patternASibling,
+        previewAssetId: previewASibling,
+      }),
+    ).resolves.toBeDefined();
+
+    await expectDatabaseError(
+      insertJob({
+        ownerId: ownerA,
+        patternId: patternA,
+        previewAssetId: previewASibling,
+      }),
+      {
+        code: "23503",
+        constraintName: "visual_search_jobs_preview_fk",
       },
     );
   });
