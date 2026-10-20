@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import importlib.metadata
 import json
 import os
 import platform
 import re
+import shutil
 import tempfile
 import warnings
 from collections.abc import Mapping, Sequence
@@ -23,6 +25,7 @@ PARITY_RELATIVE_TOLERANCE = 1e-4
 _SOURCE_FIELDS = {"repoId", "revision", "license", "task", "inputSize", "dimensions"}
 _PINNED_REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_EXPORT_LOCK_ROOT = Path(tempfile.gettempdir()) / "melon-visual-search-export-locks"
 FailureStage = Literal["source-validation", "model-export", "manifest-validation"]
 _FAILURE_CODES: dict[FailureStage, str] = {
     "source-validation": "MODEL_SOURCE_INVALID",
@@ -139,23 +142,122 @@ def resolve_locked_artifact(
     return (lock_path.resolve().parent / relative_path).resolve()
 
 
-def _cleanup_abandoned_staging_files(output_path: Path, lock_path: Path) -> None:
-    staging_contracts = (
-        (output_path.parent, f".{output_path.stem}.", ".onnx.tmp"),
-        (lock_path.parent, f".{lock_path.name}.", ".tmp"),
-    )
-    for directory, prefix, suffix in staging_contracts:
-        if not directory.exists():
-            continue
-        for candidate in directory.iterdir():
-            if not candidate.name.startswith(prefix) or not candidate.name.endswith(suffix):
-                continue
-            if not candidate.is_file() and not candidate.is_symlink():
-                continue
-            try:
-                candidate.unlink()
-            except FileNotFoundError:
-                pass
+def _validate_distinct_paths(*roles: tuple[str, Path]) -> None:
+    resolved: dict[Path, str] = {}
+    for role, path in roles:
+        canonical = path.resolve()
+        previous_role = resolved.get(canonical)
+        if previous_role is not None:
+            raise ExportError(
+                f"{previous_role}, {role}, and all export destination paths must be distinct"
+            )
+        resolved[canonical] = role
+
+
+def _path_identity(path: Path) -> str:
+    return hashlib.sha256(os.fsencode(path.resolve())).hexdigest()
+
+
+def _staging_prefix(role: str, destination: Path) -> str:
+    return f".melon-visual-search-{role}-{_path_identity(destination)}-"
+
+
+def _release_locks(descriptors: list[int]) -> None:
+    for descriptor in reversed(descriptors):
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+    descriptors.clear()
+
+
+@dataclass
+class ExportStaging:
+    artifact_directory: Path
+    manifest_directory: Path
+    _lock_descriptors: list[int]
+    _closed: bool = False
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        cleanup_error: OSError | None = None
+        try:
+            for directory in (self.artifact_directory, self.manifest_directory):
+                try:
+                    shutil.rmtree(directory)
+                except FileNotFoundError:
+                    pass
+                except OSError as error:
+                    if cleanup_error is None:
+                        cleanup_error = error
+        finally:
+            _release_locks(self._lock_descriptors)
+        if cleanup_error is not None:
+            raise cleanup_error
+
+
+def _acquire_destination_locks(destinations: Sequence[Path]) -> list[int]:
+    _EXPORT_LOCK_ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
+    descriptors: list[int] = []
+    identities = sorted({_path_identity(destination) for destination in destinations})
+    try:
+        for identity in identities:
+            descriptor = os.open(
+                _EXPORT_LOCK_ROOT / f"{identity}.lock",
+                os.O_CREAT | os.O_RDWR,
+                0o600,
+            )
+            descriptors.append(descriptor)
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+    except BaseException:
+        _release_locks(descriptors)
+        raise
+    return descriptors
+
+
+def _remove_abandoned_staging_directories(parent: Path, prefix: str) -> None:
+    for candidate in parent.iterdir():
+        if (
+            candidate.name.startswith(prefix)
+            and candidate.is_dir()
+            and not candidate.is_symlink()
+        ):
+            shutil.rmtree(candidate)
+
+
+def _open_export_staging(output_path: Path, lock_path: Path) -> ExportStaging:
+    output_path = output_path.resolve()
+    lock_path = lock_path.resolve()
+    _validate_distinct_paths(("requested model output", output_path), ("model lock", lock_path))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_descriptors = _acquire_destination_locks((output_path, lock_path))
+    artifact_directory: Path | None = None
+    manifest_directory: Path | None = None
+    try:
+        artifact_prefix = _staging_prefix("artifact", output_path)
+        manifest_prefix = _staging_prefix("manifest", lock_path)
+        _remove_abandoned_staging_directories(output_path.parent, artifact_prefix)
+        _remove_abandoned_staging_directories(lock_path.parent, manifest_prefix)
+        artifact_directory = Path(
+            tempfile.mkdtemp(prefix=artifact_prefix, dir=output_path.parent)
+        )
+        manifest_directory = Path(
+            tempfile.mkdtemp(prefix=manifest_prefix, dir=lock_path.parent)
+        )
+        return ExportStaging(
+            artifact_directory=artifact_directory,
+            manifest_directory=manifest_directory,
+            _lock_descriptors=lock_descriptors,
+        )
+    except BaseException:
+        for directory in (artifact_directory, manifest_directory):
+            if directory is not None:
+                shutil.rmtree(directory, ignore_errors=True)
+        _release_locks(lock_descriptors)
+        raise
 
 
 def _package_version(distribution: str) -> str:
@@ -252,12 +354,17 @@ def _validate_tensor_shape(
         raise ExportError(f"{label} output contains non-finite values")
 
 
-def _write_json_temp(destination: Path, data: Mapping[str, object]) -> Path:
+def _write_json_temp(
+    destination: Path,
+    data: Mapping[str, object],
+    staging_directory: Path | None = None,
+) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary_directory = staging_directory or destination.parent
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.",
         suffix=".tmp",
-        dir=destination.parent,
+        dir=temporary_directory,
     )
     temporary_path = Path(temporary_name)
     try:
@@ -290,6 +397,7 @@ def _publish_model_generation(
     immutable_artifact: Path,
     lock_path: Path,
     lock_data: Mapping[str, object],
+    lock_staging_directory: Path | None = None,
 ) -> Path:
     temporary_artifact = temporary_artifact.resolve()
     immutable_artifact = immutable_artifact.resolve()
@@ -298,6 +406,10 @@ def _publish_model_generation(
     created_artifact = False
     manifest_committed = False
     try:
+        _validate_distinct_paths(
+            ("immutable model artifact", immutable_artifact),
+            ("model lock", lock_path),
+        )
         artifact = lock_data.get("artifact")
         if not isinstance(artifact, Mapping):
             raise ExportError("model lock is missing the artifact contract")
@@ -326,7 +438,11 @@ def _publish_model_generation(
         _fsync_directory(immutable_artifact.parent)
         temporary_artifact.unlink(missing_ok=True)
 
-        temporary_lock = _write_json_temp(lock_path, lock_data)
+        temporary_lock = _write_json_temp(
+            lock_path,
+            lock_data,
+            staging_directory=lock_staging_directory,
+        )
         os.replace(temporary_lock, lock_path)
         temporary_lock = None
         manifest_committed = True
@@ -355,11 +471,7 @@ def export_model(source: ModelSource, output_path: Path, lock_path: Path) -> dic
 
     output_path = output_path.resolve()
     lock_path = lock_path.resolve()
-    if output_path == lock_path:
-        raise ExportError("model output and lock paths must be different")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    _cleanup_abandoned_staging_files(output_path, lock_path)
+    _validate_distinct_paths(("requested model output", output_path), ("model lock", lock_path))
 
     torch.manual_seed(0)
     np.random.seed(0)
@@ -417,12 +529,17 @@ def export_model(source: ModelSource, output_path: Path, lock_path: Path) -> dic
         label="PyTorch",
     )
 
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{output_path.stem}.",
-        suffix=".onnx.tmp",
-        dir=output_path.parent,
-    )
-    os.close(descriptor)
+    staging = _open_export_staging(output_path, lock_path)
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix="model-",
+            suffix=".onnx.tmp",
+            dir=staging.artifact_directory,
+        )
+        os.close(descriptor)
+    except BaseException:
+        staging.close()
+        raise
     temporary_artifact = Path(temporary_name)
     try:
         with warnings.catch_warnings():
@@ -501,6 +618,11 @@ def export_model(source: ModelSource, output_path: Path, lock_path: Path) -> dic
             output_path,
             artifact_checksum,
         )
+        _validate_distinct_paths(
+            ("requested model output", output_path),
+            ("immutable model artifact", immutable_artifact),
+            ("model lock", lock_path),
+        )
         lock_data: dict[str, object] = {
             "schemaVersion": 2,
             "source": source.as_lock_data(),
@@ -559,10 +681,12 @@ def export_model(source: ModelSource, output_path: Path, lock_path: Path) -> dic
             immutable_artifact,
             lock_path,
             lock_data,
+            lock_staging_directory=staging.manifest_directory,
         )
         return lock_data
     finally:
         temporary_artifact.unlink(missing_ok=True)
+        staging.close()
 
 
 def _cli_failure_message(stage: FailureStage, error: BaseException) -> str:

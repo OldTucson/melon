@@ -519,26 +519,62 @@ def test_content_addressed_artifact_preserves_requested_location_and_basename(
     assert derived == requested.with_name(f"dinov2-small.{checksum}.onnx")
 
 
-def test_export_cleanup_removes_only_abandoned_staging_files(tmp_path: Path) -> None:
-    from tools.export_model import _cleanup_abandoned_staging_files
+def test_owned_staging_preserves_selected_paths_and_valid_generation(
+    tmp_path: Path,
+) -> None:
+    from tools import export_model as export_tool
 
     models_dir = tmp_path / "models"
     models_dir.mkdir()
     requested = models_dir / "dinov2-small.onnx"
-    lock_path = tmp_path / "model-lock.json"
-    abandoned_model = models_dir / ".dinov2-small.crashed.onnx.tmp"
-    abandoned_lock = tmp_path / ".model-lock.json.crashed.tmp"
-    unrelated = models_dir / ".unrelated.tmp"
-    immutable = models_dir / "dinov2-small.abc123.onnx"
-    for path in (abandoned_model, abandoned_lock, unrelated, immutable):
-        path.write_bytes(b"content")
+    requested.write_bytes(b"selected-output")
+    lock_path = models_dir / ".dinov2-small.active.onnx.tmp"
+    lock_path.write_bytes(b"selected-lock")
+    current_generation = models_dir / "dinov2-small.current.onnx"
+    current_generation.write_bytes(b"current-generation")
+    abandoned = models_dir / (
+        f"{export_tool._staging_prefix('artifact', requested)}crashed"
+    )
+    abandoned.mkdir()
+    (abandoned / "model.onnx.tmp").write_bytes(b"abandoned")
 
-    _cleanup_abandoned_staging_files(requested, lock_path)
+    staging = export_tool._open_export_staging(requested, lock_path)
+    artifact_staging = staging.artifact_directory
+    manifest_staging = staging.manifest_directory
+    try:
+        assert abandoned.exists() is False
+        assert requested.read_bytes() == b"selected-output"
+        assert lock_path.read_bytes() == b"selected-lock"
+        assert current_generation.read_bytes() == b"current-generation"
+    finally:
+        staging.close()
 
-    assert abandoned_model.exists() is False
-    assert abandoned_lock.exists() is False
-    assert unrelated.read_bytes() == b"content"
-    assert immutable.read_bytes() == b"content"
+    assert artifact_staging.exists() is False
+    assert manifest_staging.exists() is False
+    assert requested.read_bytes() == b"selected-output"
+    assert lock_path.read_bytes() == b"selected-lock"
+    assert current_generation.read_bytes() == b"current-generation"
+
+
+def test_owned_staging_does_not_delete_another_exporters_workspace(
+    tmp_path: Path,
+) -> None:
+    from tools import export_model as export_tool
+
+    first_output = tmp_path / "first.onnx"
+    first_lock = tmp_path / "first-lock.json"
+    second_output = tmp_path / "second.onnx"
+    second_lock = tmp_path / "second-lock.json"
+    first = export_tool._open_export_staging(first_output, first_lock)
+    first_sentinel = first.artifact_directory / "in-progress.onnx.tmp"
+    first_sentinel.write_bytes(b"in-progress")
+    second = export_tool._open_export_staging(second_output, second_lock)
+    try:
+        assert first_sentinel.read_bytes() == b"in-progress"
+        assert first.artifact_directory.exists()
+    finally:
+        second.close()
+        first.close()
 
 
 def test_manifest_commit_publishes_a_resolvable_immutable_generation(
@@ -703,6 +739,51 @@ def test_publication_never_overwrites_an_existing_immutable_artifact(
     assert immutable.read_bytes() == b"existing-content-must-not-change"
     assert lock_path.read_bytes() == old_lock
     assert staged.exists() is False
+
+
+def test_publication_rejects_artifact_manifest_path_collision_before_changes(
+    tmp_path: Path,
+) -> None:
+    from tools import export_model as export_tool
+
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    requested = models_dir / "dinov2-small.onnx"
+    requested_bytes = b"requested-output-must-not-change"
+    requested.write_bytes(requested_bytes)
+    previous_artifact = models_dir / "dinov2-small.previous.onnx"
+    previous_artifact_bytes = b"previous-model-generation"
+    previous_artifact.write_bytes(previous_artifact_bytes)
+    previous_manifest = tmp_path / "previous-model-lock.json"
+    previous_manifest_bytes = b'{"generation":"previous"}\n'
+    previous_manifest.write_bytes(previous_manifest_bytes)
+    staged = models_dir / ".candidate.onnx.tmp"
+    staged.write_bytes(b"candidate-generation")
+    checksum = hashlib.sha256(b"candidate-generation").hexdigest()
+    collision_path = export_tool.content_addressed_artifact_path(requested, checksum)
+    lock_data: dict[str, object] = {
+        "schemaVersion": 2,
+        "artifact": {
+            "path": collision_path.name,
+            "requestedPath": requested.name,
+            "sha256": checksum,
+        },
+    }
+
+    with pytest.raises(export_tool.ExportError, match="distinct"):
+        export_tool._publish_model_generation(
+            staged,
+            collision_path,
+            collision_path,
+            lock_data,
+        )
+
+    assert collision_path.exists() is False
+    assert requested.read_bytes() == requested_bytes
+    assert previous_artifact.read_bytes() == previous_artifact_bytes
+    assert previous_manifest.read_bytes() == previous_manifest_bytes
+    assert staged.exists() is False
+    assert list(models_dir.glob(f".{collision_path.name}.*.tmp")) == []
 
 
 @pytest.mark.parametrize(
