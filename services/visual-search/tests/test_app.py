@@ -1220,6 +1220,105 @@ async def test_internal_search_requires_bearer_auth(
     assert service.calls == []
 
 
+async def test_internal_search_maps_service_initialization_failure_without_detail(
+    settings: Settings,
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable_service() -> StubSearchService:
+        raise RuntimeError("database password and /secret/model/path")
+
+    monkeypatch.setattr(app_module, "_get_search_service", unavailable_service)
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_search_limiter] = lambda: SearchConcurrencyLimiter(1)
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await _post_search(client, auth_headers)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": {"code": "UNAVAILABLE"}}
+    assert "password" not in response.text
+    assert "/secret/model/path" not in response.text
+
+
+@pytest.mark.parametrize(
+    ("content_type", "content"),
+    [
+        ("multipart/form-data", b""),
+        (
+            "multipart/form-data; boundary=melon",
+            (
+                b"--melon\r\n"
+                b"Content-Disposition: form-data\r\n\r\n"
+                b"invalid\r\n"
+                b"--melon--\r\n"
+            ),
+        ),
+    ],
+    ids=["missing-boundary", "missing-part-name"],
+)
+async def test_internal_search_maps_malformed_multipart_to_invalid_file(
+    search_client: tuple[AsyncClient, StubSearchService],
+    auth_headers: dict[str, str],
+    content_type: str,
+    content: bytes,
+) -> None:
+    client, service = search_client
+
+    response = await client.post(
+        "/internal/search",
+        headers={**auth_headers, "content-type": content_type},
+        content=content,
+    )
+
+    assert response.status_code == 415
+    assert response.json() == {"detail": {"code": "INVALID_FILE"}}
+    assert service.calls == []
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        [
+            ("image", ("first.jpg", b"first", "image/jpeg")),
+            ("image", ("second.jpg", b"second", "image/jpeg")),
+        ],
+        [
+            ("image", ("query.jpg", b"query", "image/jpeg")),
+            ("attachment", ("extra.jpg", b"extra", "image/jpeg")),
+        ],
+    ],
+    ids=["duplicate-image", "extra-named-file"],
+)
+async def test_internal_search_requires_exactly_one_image_file_and_closes_all(
+    search_client: tuple[AsyncClient, StubSearchService],
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    files: list[tuple[str, tuple[str, bytes, str]]],
+) -> None:
+    client, service = search_client
+    closed: list[str | None] = []
+    original_close = UploadFile.close
+
+    async def recording_close(upload: UploadFile) -> None:
+        closed.append(upload.filename)
+        await original_close(upload)
+
+    monkeypatch.setattr(UploadFile, "close", recording_close)
+
+    response = await client.post(
+        "/internal/search",
+        headers=auth_headers,
+        data=_search_form(),
+        files=files,
+    )
+
+    assert response.status_code == 415
+    assert response.json() == {"detail": {"code": "INVALID_FILE"}}
+    assert service.calls == []
+    assert {item[1][0] for item in files} <= set(closed)
+
+
 async def test_internal_search_validates_and_returns_ranked_diagnostics(
     search_client: tuple[AsyncClient, StubSearchService],
     auth_headers: dict[str, str],

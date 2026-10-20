@@ -14,9 +14,14 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.datastructures import UploadFile as StarletteUploadFile
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.requests import Request
+from starlette.responses import Response
 
 from .auth import require_internal_token
 from .cli import MODEL_LOCK_PATH, CliConfigurationError, load_embedding_runtime
@@ -105,7 +110,7 @@ def _required_text(value: str | None) -> str:
 
 
 @lru_cache(maxsize=1)
-def get_search_service() -> SearchService:
+def _get_search_service() -> SearchService:
     settings = get_settings()
     if settings.database_url is None:
         raise CliConfigurationError()
@@ -130,6 +135,13 @@ def get_search_service() -> SearchService:
         raise
 
 
+def get_search_service() -> SearchService:
+    try:
+        return _get_search_service()
+    except Exception as error:
+        raise _error(503, "UNAVAILABLE") from error
+
+
 @lru_cache(maxsize=1)
 def get_search_limiter() -> SearchConcurrencyLimiter:
     return SearchConcurrencyLimiter(get_settings().max_concurrency)
@@ -138,9 +150,9 @@ def get_search_limiter() -> SearchConcurrencyLimiter:
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
-    if get_search_service.cache_info().currsize:
-        get_search_service().close()
-    get_search_service.cache_clear()
+    if _get_search_service.cache_info().currsize:
+        _get_search_service().close()
+    _get_search_service.cache_clear()
     get_search_limiter.cache_clear()
 
 
@@ -244,14 +256,50 @@ async def _await_search(task: asyncio.Task[SearchResult]) -> SearchResult:
     return await asyncio.wait_for(shielded, timeout=SEARCH_TIMEOUT_SECONDS)
 
 
+async def _multipart_uploads(
+    request: Request,
+) -> tuple[tuple[str, StarletteUploadFile], ...]:
+    form = await request.form()
+    return tuple(
+        (name, value)
+        for name, value in form.multi_items()
+        if isinstance(value, StarletteUploadFile)
+    )
+
+
+async def _close_uploads(uploads: tuple[StarletteUploadFile, ...]) -> None:
+    seen: set[int] = set()
+    for upload in uploads:
+        identity = id(upload)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        try:
+            await upload.close()
+        except Exception:
+            continue
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_error_handler(
+    request: Request,
+    error: StarletteHTTPException,
+) -> Response:
+    if request.url.path == "/internal/search" and error.status_code == 400:
+        return JSONResponse(
+            status_code=415,
+            content={"detail": {"code": "INVALID_FILE"}},
+        )
+    return await http_exception_handler(request, error)
+
+
 @app.exception_handler(RequestValidationError)
 async def _validation_error_handler(
-    request: object,
+    request: Request,
     error: RequestValidationError,
 ) -> JSONResponse:
     del error
-    path = getattr(getattr(request, "url", None), "path", None)
-    if path == "/internal/search":
+    if request.url.path == "/internal/search":
         return JSONResponse(status_code=415, content={"detail": {"code": "INVALID_FILE"}})
     return JSONResponse(status_code=422, content={"detail": "Invalid request"})
 
@@ -276,6 +324,7 @@ async def health(
     response_model=InternalSearchResponse,
 )
 async def internal_search(
+    request: Request,
     image: Annotated[UploadFile, File()],
     owner_id_value: Annotated[str, Form(alias="ownerId")],
     allowed_ids_value: Annotated[str, Form(alias="allowedPatternIds")],
@@ -287,7 +336,15 @@ async def internal_search(
     temp_path: Path | None = None
     acquired = False
     work_task: asyncio.Task[SearchResult] | None = None
+    multipart_uploads: tuple[tuple[str, StarletteUploadFile], ...] = ()
     try:
+        multipart_uploads = await _multipart_uploads(request)
+        if (
+            len(multipart_uploads) != 1
+            or multipart_uploads[0][0] != "image"
+            or multipart_uploads[0][1] is not image
+        ):
+            raise _error(415, "INVALID_FILE")
         owner_id = _canonical_uuid(owner_id_value)
         allowed_ids = _allowed_pattern_ids(allowed_ids_value)
         request_id = _canonical_uuid(request_id_value)
@@ -331,7 +388,9 @@ async def internal_search(
         if acquired and work_task is None:
             limiter.release()
         try:
-            await image.close()
+            await _close_uploads(
+                (image, *(upload for _, upload in multipart_uploads))
+            )
         finally:
             if temp_path is not None:
                 temp_path.unlink(missing_ok=True)
