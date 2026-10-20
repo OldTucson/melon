@@ -145,7 +145,9 @@ describe("responsive workspace panels", () => {
       name: `打开 ${pattern.name} 检查器`,
     });
     await user.click(image);
-    const inspector = screen.getByRole("dialog", { name: "图案检查器" });
+    const inspector = await screen.findByRole("dialog", {
+      name: "图案检查器",
+    });
     expect(inspector).toContainElement(document.activeElement as HTMLElement);
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();

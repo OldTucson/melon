@@ -11,7 +11,7 @@ import {
   FileImage,
   Heart,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { PatternItem } from "./library-types";
 import { IconButton } from "./icon-button";
@@ -26,6 +26,8 @@ const commercialStateLabels = {
   field_exclusive: "领域独占",
   global_buyout: "全局买断",
 } as const;
+
+const inspectGestureThresholdMs = 400;
 
 export function FormatPlaceholder({
   extension,
@@ -69,6 +71,26 @@ export function PatternCard({
   const [failedImageAssetId, setFailedImageAssetId] = useState<string | null>(
     null,
   );
+  const inspectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onInspectRef = useRef(onInspect);
+  useEffect(() => {
+    onInspectRef.current = onInspect;
+  }, [onInspect]);
+  const cancelPendingInspect = () => {
+    if (inspectTimerRef.current === null) return false;
+    clearTimeout(inspectTimerRef.current);
+    inspectTimerRef.current = null;
+    return true;
+  };
+  useEffect(
+    () => () => {
+      if (inspectTimerRef.current !== null) {
+        clearTimeout(inspectTimerRef.current);
+        inspectTimerRef.current = null;
+      }
+    },
+    [item.id],
+  );
   const imageFailed = imageAssetId === failedImageAssetId;
   const commercialSummary = item.commercialSummary ?? {
     state: "unlicensed" as const,
@@ -88,9 +110,15 @@ export function PatternCard({
         title={`选择 ${item.name}`}
         checked={selected}
         className="pattern-select-checkbox"
-        onClick={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSelect(item.id, {
+            ctrlKey: event.ctrlKey,
+            metaKey: event.metaKey,
+            shiftKey: event.shiftKey,
+          });
+        }}
         onDoubleClick={(event) => event.stopPropagation()}
-        onCheckedChange={() => onSelect(item.id, { metaKey: true })}
       >
         <Checkbox.Indicator>
           <Check aria-hidden="true" />
@@ -100,10 +128,24 @@ export function PatternCard({
         aria-label={`打开 ${item.name} 检查器`}
         className="pattern-media"
         type="button"
-        onClick={() => onInspect(item.id)}
+        onClick={(event) => {
+          if (event.detail === 0) {
+            cancelPendingInspect();
+            onInspect(item.id);
+            return;
+          }
+          if (cancelPendingInspect()) {
+            onOpenPreview(item.id);
+            return;
+          }
+          if (event.detail > 1) return;
+          inspectTimerRef.current = setTimeout(() => {
+            inspectTimerRef.current = null;
+            onInspectRef.current(item.id);
+          }, inspectGestureThresholdMs);
+        }}
         onDoubleClick={(event) => {
           event.stopPropagation();
-          onOpenPreview(item.id);
         }}
       >
         {imageAssetId && !imageFailed ? (
@@ -157,6 +199,7 @@ export function PatternCard({
           label="预览"
           onClick={(event) => {
             event.stopPropagation();
+            cancelPendingInspect();
             onOpenPreview(item.id);
           }}
         >

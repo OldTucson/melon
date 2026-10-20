@@ -155,8 +155,11 @@ function inspectPattern(name: string) {
   );
 }
 
-function selectPattern(name: string) {
-  fireEvent.click(screen.getByRole("checkbox", { name: `选择 ${name}` }));
+function selectPattern(name: string, modifiers: MouseEventInit = {}) {
+  fireEvent.click(screen.getByRole("checkbox", { name: `选择 ${name}` }), {
+    detail: 1,
+    ...modifiers,
+  });
 }
 
 describe("Mac-first workspace", () => {
@@ -1105,11 +1108,11 @@ describe("Mac-first workspace", () => {
     ).not.toBeChecked();
   });
 
-  it("uses card checkboxes for additive selection", () => {
+  it("uses Command-click on card checkboxes for additive selection", () => {
     renderLibrary([makePattern(1), makePattern(2)]);
 
     selectPattern("Pattern 1");
-    selectPattern("Pattern 2");
+    selectPattern("Pattern 2", { metaKey: true });
 
     expect(
       screen.getByRole("checkbox", { name: "选择 Pattern 1" }),
@@ -1122,7 +1125,7 @@ describe("Mac-first workspace", () => {
   it("reduces a multi-selection inspector to the remaining checked pattern", async () => {
     renderLibrary([makePattern(1), makePattern(2)]);
     selectPattern("Pattern 1");
-    selectPattern("Pattern 2");
+    selectPattern("Pattern 2", { metaKey: true });
     inspectPattern("Pattern 1");
 
     expect(
@@ -1131,7 +1134,7 @@ describe("Mac-first workspace", () => {
       ).getByText("已选择 2 个图案"),
     ).toBeVisible();
 
-    selectPattern("Pattern 2");
+    selectPattern("Pattern 2", { metaKey: true });
 
     await waitFor(() =>
       expect(
@@ -1151,7 +1154,7 @@ describe("Mac-first workspace", () => {
     renderLibrary([makePattern(1), makePattern(2)]);
     inspectPattern("Pattern 1");
     selectPattern("Pattern 1");
-    selectPattern("Pattern 2");
+    selectPattern("Pattern 2", { metaKey: true });
 
     await user.click(
       screen.getByRole("checkbox", { name: "选择所有已加载图案" }),
@@ -1221,7 +1224,9 @@ describe("Mac-first workspace", () => {
     await user.click(
       screen.getByRole("button", { name: "打开 Pattern 1 检查器" }),
     );
-    const nameInput = screen.getByRole("textbox", { name: "图案名称" });
+    const nameInput = await screen.findByRole("textbox", {
+      name: "图案名称",
+    });
     nameInput.focus();
     await user.keyboard("{Escape}");
     expect(card).toHaveAttribute("data-selected", "true");
@@ -1378,7 +1383,9 @@ describe("Mac-first workspace", () => {
     await user.click(
       screen.getByRole("button", { name: "打开 Pattern 1 检查器" }),
     );
-    expect(layout).toHaveAttribute("data-inspector", "open");
+    await waitFor(() =>
+      expect(layout).toHaveAttribute("data-inspector", "open"),
+    );
     expect(
       screen.getByRole("complementary", { name: "图案检查器" }),
     ).toHaveClass("library-inspector");
