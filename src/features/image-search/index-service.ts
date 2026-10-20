@@ -8,6 +8,7 @@ import {
   parseVisualSearchIndexVersion,
   selectVisualSearchBackfillCandidates,
   type VisualSearchBackfillCandidate,
+  type VisualSearchBackfillPage,
 } from "./index-repository";
 
 export const ACTIVE_VISUAL_SEARCH_INDEX_VERSION = "visual-search-v1";
@@ -20,7 +21,7 @@ export type EnqueueVisualSearchIndexJobInput = {
   now: Date;
 };
 
-export type { VisualSearchBackfillCandidate };
+export type { VisualSearchBackfillCandidate, VisualSearchBackfillPage };
 
 export function validateVisualSearchIndexVersion(value: unknown) {
   return parseVisualSearchIndexVersion(value);

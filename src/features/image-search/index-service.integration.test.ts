@@ -272,10 +272,10 @@ describe("visual search index service", () => {
     const secondPage = await db.transaction((tx) =>
       listVisualSearchBackfillCandidates(tx, {
         limit: 2,
-        cursor: firstPage.at(-1),
+        cursor: firstPage.nextCursor ?? undefined,
       }),
     );
-    const rows = [...firstPage, ...secondPage];
+    const rows = [...firstPage.candidates, ...secondPage.candidates];
 
     expect(rows).toEqual(
       [ready, manual, trashed, processing]
@@ -332,12 +332,12 @@ describe("visual search index service", () => {
 
     try {
       backfillPage = backfillDatabase.transaction(async (tx) => {
-        const candidates = await listVisualSearchBackfillCandidates(tx, {
+        const page = await listVisualSearchBackfillCandidates(tx, {
           limit: 500,
         });
         candidatesSelected.resolve();
         await releaseBackfill.promise;
-        for (const candidate of candidates) {
+        for (const candidate of page.candidates) {
           await enqueueVisualSearchIndexJob(tx, {
             ...candidate,
             indexVersion: "visual-search-v2",
@@ -421,6 +421,146 @@ describe("visual search index service", () => {
       await Promise.all([
         backfillClient.end({ timeout: 1 }),
         replacementClient.end({ timeout: 1 }),
+        monitor.end({ timeout: 1 }),
+      ]);
+    }
+  });
+
+  it("revalidates candidates after a replacement-first pattern lock commits", async () => {
+    const ownerId = await seedUser("backfill-reverse-lock@example.test");
+    const stable = await seedPatternWithPreview({
+      ownerId,
+      patternId: "00000000-0000-4000-8000-000000000030",
+      assetId: "00000000-0000-4000-8000-000000000130",
+    });
+    const replaced = await seedPatternWithPreview({
+      ownerId,
+      patternId: "00000000-0000-4000-8000-000000000040",
+      assetId: "00000000-0000-4000-8000-000000000140",
+      previewStatus: "manual",
+    });
+    const replacementAssetId = "00000000-0000-4000-8000-000000000141";
+    const databaseUrl = getServerEnv().DATABASE_URL;
+    const blockerApplication = `visual-search-replacement-${randomUUID()}`;
+    const waiterApplication = `visual-search-backfill-${randomUUID()}`;
+    const replacementClient = postgres(databaseUrl, {
+      max: 1,
+      connection: { application_name: blockerApplication },
+    });
+    const backfillClient = postgres(databaseUrl, {
+      max: 1,
+      connection: { application_name: waiterApplication },
+    });
+    const monitor = postgres(databaseUrl, { max: 1 });
+    const replacementDatabase = drizzle(replacementClient, { schema });
+    const backfillDatabase = drizzle(backfillClient, { schema });
+    const replacementMutated = deferred();
+    const releaseReplacement = deferred();
+    let replacement: Promise<unknown> | undefined;
+    let backfillPage: Promise<unknown> | undefined;
+
+    try {
+      replacement = replacementDatabase.transaction(async (tx) => {
+        const [lockedPattern] = await tx
+          .select({ id: patterns.id })
+          .from(patterns)
+          .where(
+            and(
+              eq(patterns.ownerId, ownerId),
+              eq(patterns.id, replaced.patternId),
+            ),
+          )
+          .orderBy(asc(patterns.id))
+          .for("update");
+        if (!lockedPattern) throw new Error("REPLACEMENT_PATTERN_MISSING");
+        await tx
+          .delete(assets)
+          .where(
+            and(
+              eq(assets.ownerId, ownerId),
+              eq(assets.patternId, replaced.patternId),
+              eq(assets.id, replaced.assetId),
+            ),
+          );
+        await tx.insert(assets).values({
+          id: replacementAssetId,
+          ownerId,
+          patternId: replaced.patternId,
+          role: "preview",
+          objectKey: `users/${ownerId}/patterns/${replaced.patternId}/${replacementAssetId}.webp`,
+          originalFilename: "replacement.webp",
+          sizeBytes: 12n,
+        });
+        replacementMutated.resolve();
+        await releaseReplacement.promise;
+      });
+      await withTimeout(replacementMutated.promise);
+
+      backfillPage = backfillDatabase.transaction(async (tx) => {
+        const page = await listVisualSearchBackfillCandidates(tx, {
+          limit: 500,
+        });
+        for (const candidate of page.candidates) {
+          await enqueueVisualSearchIndexJob(tx, {
+            ...candidate,
+            indexVersion: "visual-search-v2",
+            now: NOW,
+          });
+        }
+        return page;
+      });
+      await waitForPatternLockWaiter(monitor, {
+        blockerApplication,
+        waiterApplication,
+      });
+      releaseReplacement.resolve();
+      const outcomes = await withTimeout(
+        Promise.allSettled([replacement, backfillPage]),
+      );
+
+      expect(outcomes).toEqual([
+        expect.objectContaining({ status: "fulfilled" }),
+        expect.objectContaining({
+          status: "fulfilled",
+          value: {
+            candidates: [
+              {
+                ownerId,
+                patternId: stable.patternId,
+                previewAssetId: stable.assetId,
+              },
+            ],
+            scanned: 2,
+            nextCursor: {
+              ownerId,
+              patternId: replaced.patternId,
+              previewAssetId: replaced.assetId,
+            },
+          },
+        }),
+      ]);
+      expect(
+        await db
+          .select({ previewAssetId: visualSearchJobs.previewAssetId })
+          .from(visualSearchJobs)
+          .orderBy(asc(visualSearchJobs.previewAssetId)),
+      ).toEqual([{ previewAssetId: stable.assetId }]);
+      expect(
+        await db
+          .select({ id: assets.id })
+          .from(assets)
+          .where(eq(assets.patternId, replaced.patternId)),
+      ).toEqual([{ id: replacementAssetId }]);
+    } finally {
+      releaseReplacement.resolve();
+      await Promise.allSettled(
+        [replacement, backfillPage].filter(
+          (promise): promise is Promise<unknown> => promise !== undefined,
+        ),
+      );
+      await Promise.all([
+        replacementClient.end({ timeout: 1 }),
+        backfillClient.end({ timeout: 1 }),
         monitor.end({ timeout: 1 }),
       ]);
     }

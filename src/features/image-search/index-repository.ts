@@ -51,6 +51,12 @@ export type VisualSearchBackfillCandidate = z.output<
   typeof backfillCursorSchema
 >;
 
+export type VisualSearchBackfillPage = {
+  candidates: VisualSearchBackfillCandidate[];
+  scanned: number;
+  nextCursor: VisualSearchBackfillCandidate | null;
+};
+
 export function parseVisualSearchIndexVersion(value: unknown) {
   return indexVersionSchema.parse(value);
 }
@@ -92,10 +98,10 @@ export async function insertVisualSearchJob(
     : ({ inserted: false, jobId: null } as const);
 }
 
-export function selectVisualSearchBackfillCandidates(
+export async function selectVisualSearchBackfillCandidates(
   tx: DbTransaction,
   rawInput: z.input<typeof backfillPageSchema>,
-) {
+): Promise<VisualSearchBackfillPage> {
   const input = backfillPageSchema.parse(rawInput);
   // Trashed patterns remain eligible because restore retains their search index.
   const predicates = [
@@ -121,7 +127,7 @@ export function selectVisualSearchBackfillCandidates(
     );
   }
 
-  return tx
+  const scannedCandidates = await tx
     .select({
       ownerId: assets.ownerId,
       patternId: assets.patternId,
@@ -137,8 +143,72 @@ export function selectVisualSearchBackfillCandidates(
     )
     .where(and(...predicates))
     .orderBy(asc(assets.ownerId), asc(assets.patternId), asc(assets.id))
-    .limit(input.limit)
-    .for("update", { of: patterns });
+    .limit(input.limit);
+
+  const nextCursor = scannedCandidates.at(-1) ?? null;
+  if (!nextCursor) {
+    return { candidates: [], scanned: 0, nextCursor: null };
+  }
+
+  const patternIdentities = scannedCandidates.filter(
+    (candidate, index, candidates) =>
+      index === 0 ||
+      candidate.ownerId !== candidates[index - 1]!.ownerId ||
+      candidate.patternId !== candidates[index - 1]!.patternId,
+  );
+  await tx
+    .select({ ownerId: patterns.ownerId, patternId: patterns.id })
+    .from(patterns)
+    .where(
+      or(
+        ...patternIdentities.map((candidate) =>
+          and(
+            eq(patterns.ownerId, candidate.ownerId),
+            eq(patterns.id, candidate.patternId),
+          ),
+        ),
+      ),
+    )
+    .orderBy(asc(patterns.ownerId), asc(patterns.id))
+    .for("update");
+
+  const candidates = await tx
+    .select({
+      ownerId: assets.ownerId,
+      patternId: assets.patternId,
+      previewAssetId: assets.id,
+    })
+    .from(assets)
+    .innerJoin(
+      patterns,
+      and(
+        eq(patterns.ownerId, assets.ownerId),
+        eq(patterns.id, assets.patternId),
+      ),
+    )
+    .where(
+      and(
+        eq(assets.role, "preview"),
+        inArray(patterns.previewStatus, ["ready", "manual"]),
+        notInArray(patterns.status, ["deleting", "deleted"]),
+        or(
+          ...scannedCandidates.map((candidate) =>
+            and(
+              eq(assets.ownerId, candidate.ownerId),
+              eq(assets.patternId, candidate.patternId),
+              eq(assets.id, candidate.previewAssetId),
+            ),
+          ),
+        ),
+      ),
+    )
+    .orderBy(asc(assets.ownerId), asc(assets.patternId), asc(assets.id));
+
+  return {
+    candidates,
+    scanned: scannedCandidates.length,
+    nextCursor,
+  };
 }
 
 export async function deleteVisualSearchRowsForPatterns(

@@ -7,6 +7,7 @@ import {
   validateVisualSearchIndexVersion,
   type EnqueueVisualSearchIndexJobInput,
   type VisualSearchBackfillCandidate,
+  type VisualSearchBackfillPage,
 } from "@/features/image-search/index-service";
 import type { DbTransaction } from "@/lib/db/client";
 
@@ -14,6 +15,7 @@ const PAGE_SIZE = 500;
 const ARGUMENT_ERROR = "IMAGE_SEARCH_BACKFILL_ARGUMENTS_INVALID";
 
 export type ImageSearchBackfillCandidate = VisualSearchBackfillCandidate;
+export type ImageSearchBackfillPage = VisualSearchBackfillPage;
 
 type EnqueueResult =
   | { inserted: true; jobId: string }
@@ -29,7 +31,7 @@ export type ImageSearchBackfillServices<TTransaction> = {
       cursor?: ImageSearchBackfillCandidate;
       limit: number;
     },
-  ): Promise<ImageSearchBackfillCandidate[]>;
+  ): Promise<ImageSearchBackfillPage>;
   enqueue(
     tx: TTransaction,
     input: EnqueueVisualSearchIndexJobInput,
@@ -70,7 +72,7 @@ export async function runImageSearchBackfill<TTransaction>(input: {
 
   while (true) {
     const page = await input.services.transaction(async (tx) => {
-      const candidates = await input.services.listCandidates(tx, {
+      const candidatePage = await input.services.listCandidates(tx, {
         cursor,
         limit: PAGE_SIZE,
       });
@@ -78,7 +80,7 @@ export async function runImageSearchBackfill<TTransaction>(input: {
       let pageAlreadyExisting = 0;
       const timestamp = input.now();
 
-      for (const candidate of candidates) {
+      for (const candidate of candidatePage.candidates) {
         const result = await input.services.enqueue(tx, {
           ...candidate,
           indexVersion: version,
@@ -89,20 +91,21 @@ export async function runImageSearchBackfill<TTransaction>(input: {
       }
 
       return {
-        candidates,
+        ...candidatePage,
         inserted: pageInserted,
         alreadyExisting: pageAlreadyExisting,
       };
     });
 
-    if (page.candidates.length === 0) break;
+    if (page.scanned === 0) break;
     pages += 1;
-    scanned += page.candidates.length;
+    scanned += page.scanned;
     inserted += page.inserted;
     alreadyExisting += page.alreadyExisting;
 
-    if (page.candidates.length < PAGE_SIZE) break;
-    const nextCursor = page.candidates.at(-1)!;
+    if (page.scanned < PAGE_SIZE) break;
+    const nextCursor = page.nextCursor;
+    if (!nextCursor) throw new Error("IMAGE_SEARCH_BACKFILL_CURSOR_MISSING");
     if (
       cursor &&
       cursor.ownerId === nextCursor.ownerId &&

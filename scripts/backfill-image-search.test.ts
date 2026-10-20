@@ -39,7 +39,14 @@ function servicesForPages(
       transactionCount += 1;
       return work({ page: page++ });
     },
-    listCandidates: vi.fn(async (tx) => pages[tx.page] ?? []),
+    listCandidates: vi.fn(async (tx) => {
+      const candidates = pages[tx.page] ?? [];
+      return {
+        candidates,
+        scanned: candidates.length,
+        nextCursor: candidates.at(-1) ?? null,
+      };
+    }),
     enqueue: vi.fn(async () => ({ inserted: true as const, jobId: uuid(99) })),
     closeDatabase: vi.fn(async () => undefined),
   };
@@ -129,6 +136,105 @@ describe("image search backfill command", () => {
     );
   });
 
+  it("advances from the raw full-page cursor when revalidation removes a candidate", async () => {
+    const rawFirstPage = Array.from({ length: 500 }, (_, index) =>
+      candidate(index),
+    );
+    const validFirstPage = rawFirstPage.slice(0, -1);
+    const secondPage = [candidate(500)];
+    const transactions: TestTransaction[] = [];
+    const listCandidates = vi.fn(
+      async (
+        _tx: TestTransaction,
+        input: { cursor?: ImageSearchBackfillCandidate; limit: number },
+      ) => {
+        if (!input.cursor) {
+          return {
+            candidates: validFirstPage,
+            scanned: rawFirstPage.length,
+            nextCursor: rawFirstPage.at(-1)!,
+          };
+        }
+        expect(input.cursor).toEqual(rawFirstPage.at(-1));
+        return {
+          candidates: secondPage,
+          scanned: secondPage.length,
+          nextCursor: secondPage.at(-1)!,
+        };
+      },
+    );
+    const services = {
+      transaction: async <T>(work: (tx: TestTransaction) => Promise<T>) => {
+        const tx = { page: transactions.length };
+        transactions.push(tx);
+        return work(tx);
+      },
+      listCandidates,
+      enqueue: vi.fn(async () => ({
+        inserted: true as const,
+        jobId: uuid(70_000),
+      })),
+      closeDatabase: vi.fn(async () => undefined),
+    } satisfies ImageSearchBackfillServices<TestTransaction>;
+
+    await expect(
+      runImageSearchBackfill({
+        version: "visual-search-v2",
+        services,
+        now: () => NOW,
+      }),
+    ).resolves.toEqual({
+      version: "visual-search-v2",
+      pages: 2,
+      scanned: 501,
+      inserted: 500,
+      alreadyExisting: 0,
+    });
+    expect(transactions).toHaveLength(2);
+    expect(listCandidates).toHaveBeenCalledTimes(2);
+    expect(services.enqueue).toHaveBeenCalledTimes(500);
+  });
+
+  it("continues when a full raw page revalidates to no candidates", async () => {
+    const rawFirstPage = Array.from({ length: 500 }, (_, index) =>
+      candidate(index),
+    );
+    const secondPage = [candidate(500)];
+    const services = servicesForPages([]);
+    vi.mocked(services.listCandidates)
+      .mockResolvedValueOnce({
+        candidates: [],
+        scanned: rawFirstPage.length,
+        nextCursor: rawFirstPage.at(-1)!,
+      })
+      .mockResolvedValueOnce({
+        candidates: secondPage,
+        scanned: secondPage.length,
+        nextCursor: secondPage.at(-1)!,
+      });
+
+    await expect(
+      runImageSearchBackfill({
+        version: "visual-search-v2",
+        services,
+        now: () => NOW,
+      }),
+    ).resolves.toEqual({
+      version: "visual-search-v2",
+      pages: 2,
+      scanned: 501,
+      inserted: 1,
+      alreadyExisting: 0,
+    });
+    expect(services.transactionCount()).toBe(2);
+    expect(services.listCandidates).toHaveBeenNthCalledWith(
+      2,
+      { page: 1 },
+      { cursor: rawFirstPage.at(-1), limit: 500 },
+    );
+    expect(services.enqueue).toHaveBeenCalledOnce();
+  });
+
   it("is idempotent across two runs and does not alter other versions", async () => {
     const rows = [candidate(1), candidate(2), candidate(3)];
     const otherVersionIdentity = [
@@ -153,7 +259,11 @@ describe("image search backfill command", () => {
       }>
     >([[otherVersionIdentity, otherVersionJob]]);
     const services = servicesForPages([rows, rows]);
-    vi.mocked(services.listCandidates).mockImplementation(async () => rows);
+    vi.mocked(services.listCandidates).mockImplementation(async () => ({
+      candidates: rows,
+      scanned: rows.length,
+      nextCursor: rows.at(-1)!,
+    }));
     vi.mocked(services.enqueue).mockImplementation(async (_tx, input) => {
       const identity = [
         input.ownerId,
