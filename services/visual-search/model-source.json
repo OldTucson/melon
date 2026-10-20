@@ -1,0 +1,8 @@
+{
+  "repoId": "facebook/dinov2-small",
+  "revision": "ed25f3a31f01632728cabb09d1542f84ab7b0056",
+  "license": "Apache-2.0",
+  "task": "feature-extraction",
+  "inputSize": 224,
+  "dimensions": 384
+}

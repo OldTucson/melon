@@ -14,6 +14,14 @@
 # Local environment
 .env*
 !.env.example
+/.venv-visual-search/
+
+# Visual search model artifacts
+/services/visual-search/models/
+
+# Python
+__pycache__/
+*.py[cod]
 
 # TypeScript
 *.tsbuildinfo

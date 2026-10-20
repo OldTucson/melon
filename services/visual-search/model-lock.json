@@ -1,0 +1,106 @@
+{
+  "artifact": {
+    "filename": "dinov2-small.onnx",
+    "precision": "FP32",
+    "sha256": "9ea0e2f1290836406eb137c47bc6eaf0a3c9da8db6bfdb7fc425136678b77bfe",
+    "sizeBytes": 88453090
+  },
+  "exporter": {
+    "mode": "legacyTorchScript",
+    "name": "torch.onnx.export",
+    "onnxVersion": "1.23.2",
+    "opset": 17,
+    "optimumOnnxVersion": "0.1.0",
+    "pythonVersion": "3.10.7",
+    "torchVersion": "2.14.1",
+    "transformersVersion": "4.57.6"
+  },
+  "input": {
+    "dtype": "float32",
+    "dynamicAxes": {
+      "0": "batch"
+    },
+    "name": "pixel_values",
+    "preprocessing": {
+      "centerCrop": {
+        "enabled": true,
+        "size": {
+          "height": 224,
+          "width": 224
+        }
+      },
+      "colorMode": "RGB",
+      "height": 224,
+      "normalize": {
+        "enabled": true,
+        "mean": [
+          0.485,
+          0.456,
+          0.406
+        ],
+        "standardDeviation": [
+          0.229,
+          0.224,
+          0.225
+        ]
+      },
+      "processorClass": "BitImageProcessor",
+      "rescale": {
+        "enabled": true,
+        "factor": 0.00392156862745098
+      },
+      "resize": {
+        "enabled": true,
+        "resample": 3,
+        "size": {
+          "shortest_edge": 256
+        }
+      },
+      "tensorLayout": "NCHW",
+      "useFast": false,
+      "width": 224
+    },
+    "shape": [
+      "batch",
+      3,
+      224,
+      224
+    ]
+  },
+  "output": {
+    "clsTokenIndex": 0,
+    "dimensions": 384,
+    "dtype": "float32",
+    "dynamicAxes": {
+      "0": "batch"
+    },
+    "name": "last_hidden_state",
+    "shape": [
+      "batch",
+      257,
+      384
+    ]
+  },
+  "parity": {
+    "absoluteTolerance": 0.0001,
+    "batchSize": 2,
+    "maximumAbsoluteError": 8.0108642578125e-05,
+    "relativeTolerance": 0.0001
+  },
+  "runtime": {
+    "name": "onnxruntime",
+    "providers": [
+      "CPUExecutionProvider"
+    ],
+    "version": "1.23.2"
+  },
+  "schemaVersion": 1,
+  "source": {
+    "dimensions": 384,
+    "inputSize": 224,
+    "license": "Apache-2.0",
+    "repoId": "facebook/dinov2-small",
+    "revision": "ed25f3a31f01632728cabb09d1542f84ab7b0056",
+    "task": "feature-extraction"
+  }
+}
