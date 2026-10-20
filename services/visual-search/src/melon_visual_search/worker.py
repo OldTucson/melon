@@ -36,10 +36,22 @@ from .storage import (
 WorkerOutcome = Literal["idle", "completed", "retried", "failed", "stale"]
 
 INDEX_EMBEDDING_INVALID = "INDEX_EMBEDDING_INVALID"
+INDEX_DATABASE_PERMANENT_FAILURE = "INDEX_DATABASE_PERMANENT_FAILURE"
 INDEX_PREVIEW_HASH_MISMATCH = "INDEX_PREVIEW_HASH_MISMATCH"
 INDEX_TEMPORARY_FAILURE = "INDEX_TEMPORARY_FAILURE"
 
 _INDEX_VERSION_PATTERN = re.compile(r"^[a-z0-9-]{1,64}$")
+_RETRYABLE_DATABASE_SQLSTATE_CLASSES = frozenset({"08", "40", "53"})
+_RETRYABLE_DATABASE_SQLSTATES = frozenset(
+    {
+        "55P03",  # lock_not_available
+        "57014",  # query_canceled, including statement timeout
+        "57P01",  # admin_shutdown
+        "57P02",  # crash_shutdown
+        "57P03",  # cannot_connect_now
+        "57P05",  # idle_session_timeout
+    }
+)
 
 
 class CleanupRefusedError(RuntimeError):
@@ -183,6 +195,16 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _is_retryable_database_error(error: psycopg.Error) -> bool:
+    sqlstate = error.sqlstate
+    if sqlstate is None:
+        return isinstance(error, psycopg.OperationalError)
+    return (
+        sqlstate[:2] in _RETRYABLE_DATABASE_SQLSTATE_CLASSES
+        or sqlstate in _RETRYABLE_DATABASE_SQLSTATES
+    )
+
+
 class _LeaseHeartbeat:
     def __init__(
         self,
@@ -307,7 +329,18 @@ class IndexWorker:
             return self._record_failure(job, error.code, retryable=False)
         except PreviewNotFoundError as error:
             return self._record_failure(job, error.code, retryable=False)
-        except (OSError, psycopg.Error, OssError, CredentialException):
+        except psycopg.Error as error:
+            retryable = _is_retryable_database_error(error)
+            return self._record_failure(
+                job,
+                (
+                    INDEX_TEMPORARY_FAILURE
+                    if retryable
+                    else INDEX_DATABASE_PERMANENT_FAILURE
+                ),
+                retryable=retryable,
+            )
+        except (OSError, OssError, CredentialException):
             return self._record_failure(
                 job,
                 INDEX_TEMPORARY_FAILURE,

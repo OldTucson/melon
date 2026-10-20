@@ -33,6 +33,7 @@ from melon_visual_search.storage import InMemoryStorage, build_derived_key
 from melon_visual_search.worker import (
     CleanupRefusedError,
     IndexWorker,
+    _is_retryable_database_error,
     assert_cleanup_database_allowed,
     cleanup_orphans,
 )
@@ -268,7 +269,11 @@ def seed_ready_document(
 
 
 @contextmanager
-def reject_ready_publications(database_url: str) -> Iterator[None]:
+def reject_ready_publications(
+    database_url: str,
+    *,
+    sqlstate: str = "40001",
+) -> Iterator[None]:
     suffix = uuid4().hex
     function_name = f"test_reject_ready_{suffix}"
     trigger_name = f"test_reject_ready_trigger_{suffix}"
@@ -280,13 +285,13 @@ def reject_ready_publications(database_url: str) -> Iterator[None]:
                 BEGIN
                   IF NEW.status = 'ready' THEN
                     RAISE EXCEPTION 'forced publication failure'
-                      USING ERRCODE = '40001';
+                      USING ERRCODE = {};
                   END IF;
                   RETURN NEW;
                 END;
                 $$ LANGUAGE plpgsql
                 """
-            ).format(sql.Identifier(function_name))
+            ).format(sql.Identifier(function_name), sql.Literal(sqlstate))
         )
         connection.execute(
             sql.SQL(
@@ -383,7 +388,40 @@ def test_worker_publishes_one_document_and_exactly_ten_vectors(
     assert local.keypoints.shape[0] <= 256
 
 
-def test_publication_transaction_failure_deletes_the_new_object(
+@pytest.mark.parametrize(
+    "error",
+    [
+        psycopg.OperationalError("connection closed"),
+        psycopg.errors.ConnectionFailure("connection failed"),
+        psycopg.errors.SerializationFailure("serialization failed"),
+        psycopg.errors.DeadlockDetected("deadlock detected"),
+        psycopg.errors.DiskFull("database resource exhausted"),
+        psycopg.errors.LockNotAvailable("lock unavailable"),
+        psycopg.errors.QueryCanceled("statement timeout"),
+        psycopg.errors.AdminShutdown("database stopping"),
+        psycopg.errors.CrashShutdown("database crashed"),
+        psycopg.errors.CannotConnectNow("database starting"),
+    ],
+)
+def test_temporary_database_errors_are_retryable(error: psycopg.Error) -> None:
+    assert _is_retryable_database_error(error)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        psycopg.errors.CheckViolation("constraint violated"),
+        psycopg.errors.UniqueViolation("duplicate row"),
+        psycopg.errors.UndefinedTable("schema mismatch"),
+        psycopg.errors.InvalidTextRepresentation("invalid database value"),
+        psycopg.InterfaceError("invalid client operation"),
+    ],
+)
+def test_permanent_database_errors_are_not_retryable(error: psycopg.Error) -> None:
+    assert not _is_retryable_database_error(error)
+
+
+def test_temporary_publication_failure_deletes_new_object_and_retries(
     repository,
     seeded_job: SeededJob,
     database_url: str,
@@ -413,6 +451,44 @@ def test_publication_transaction_failure_deletes_the_new_object(
         ).fetchone()[0]
     assert outcome == "retried"
     assert job_row == ("pending", 1, NOW.replace() + worker.retry_delay(1))
+    assert document_count == 0
+    assert storage.object_keys == (seeded_job.preview_object_key,)
+
+
+def test_permanent_publication_failure_deletes_new_object_and_is_terminal(
+    repository,
+    seeded_job: SeededJob,
+    database_url: str,
+) -> None:
+    storage = InMemoryStorage()
+    seed_preview(storage, seeded_job)
+    worker = IndexWorker(
+        repository,
+        storage,
+        DeterministicEmbedder(),
+        worker_id="worker-permanent-database-failure",
+        index_version=INDEX_VERSION,
+        clock=lambda: NOW,
+    )
+
+    with reject_ready_publications(database_url, sqlstate="23514"):
+        outcome = worker.run_once(now=NOW)
+
+    with psycopg.connect(database_url) as connection:
+        job_row = connection.execute(
+            """
+            SELECT status, attempt_count, last_error_code
+            FROM visual_search_jobs
+            WHERE id = %s
+            """,
+            (seeded_job.id,),
+        ).fetchone()
+        document_count = connection.execute(
+            "SELECT count(*) FROM visual_search_documents WHERE owner_id = %s",
+            (seeded_job.owner_id,),
+        ).fetchone()[0]
+    assert outcome == "failed"
+    assert job_row == ("failed", 1, "INDEX_DATABASE_PERMANENT_FAILURE")
     assert document_count == 0
     assert storage.object_keys == (seeded_job.preview_object_key,)
 
