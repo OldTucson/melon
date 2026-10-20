@@ -149,7 +149,7 @@ users/{ownerId}/patterns/{patternId}/derived/search/{indexVersion}/{previewHash}
 
 ### 6.1 PostgreSQL 扩展
 
-迁移启用 `vector` 扩展，并在部署检查中验证版本。开发 PostgreSQL 镜像改为与 PostgreSQL 17 匹配的 pgvector 镜像；生产数据库必须在发布迁移前确认支持 `CREATE EXTENSION vector`。
+迁移启用 `vector` 扩展，并在部署检查中验证版本。开发 PostgreSQL 镜像改为与 PostgreSQL 17 匹配的 pgvector 镜像；生产数据库必须在发布迁移前确认支持 `CREATE EXTENSION vector` 且 pgvector 不低于 0.8.0，以支持带业务筛选的迭代近邻扫描。
 
 ### 6.2 `visual_search_documents`
 
@@ -178,9 +178,9 @@ users/{ownerId}/patterns/{patternId}/derived/search/{indexVersion}/{previewHash}
 
 ### 6.4 `visual_search_jobs`
 
-保存 `job_id`, `owner_id`, `pattern_id`, `preview_asset_id`, `preview_hash`, `index_version`, `status`, `attempt_count`, `available_at`, `lease_until`, `last_error_code` 和时间戳。
+保存 `job_id`, `owner_id`, `pattern_id`, `preview_asset_id`, 可空的 `preview_hash`, `index_version`, `status`, `attempt_count`, `available_at`, `lease_until`, `last_error_code` 和时间戳。新上传若已有可信内容哈希可以直接写入；历史预览回填时由 worker 下载并计算 SHA-256 后补齐。
 
-`pattern_id + preview_asset_id + preview_hash + index_version` 唯一，保证重复上传完成事件或重复回填不会生成重复任务。worker 使用 `FOR UPDATE SKIP LOCKED` 和租约领取任务；进程退出后，过期租约可由下一次轮询恢复。
+`owner_id + pattern_id + preview_asset_id + index_version` 唯一，使用不可变的预览资产身份保证重复上传完成事件或重复回填不会生成重复任务。worker 使用 `FOR UPDATE SKIP LOCKED` 和租约领取任务；进程退出后，过期租约可由下一次轮询恢复。
 
 ## 7. API 契约
 
@@ -228,7 +228,7 @@ users/{ownerId}/patterns/{patternId}/derived/search/{indexVersion}/{previewHash}
 ### 8.1 创建与替换
 
 - 上传完成且 preview 资产可用时，在完成事务内幂等插入索引任务；不得同步运行模型。
-- 手动预览完成时，在同一业务事务中立即将旧预览的 document 标为 `superseded`，并为新 `preview_asset_id` 创建任务。新索引完成前宁可暂时搜不到该图案，也不能继续匹配已经被替换的旧预览。
+- 手动预览完成时，在同一业务事务中替换 preview 资产；旧资产的级联约束会删除其 document、embedding 和待处理 job，同时为新 `preview_asset_id` 创建任务。新索引完成前宁可暂时搜不到该图案，也不能继续匹配已经被替换的旧预览；`superseded` 保留给不删除资产的版本切换流程。
 - worker 先写入版本化 OSS 特征对象和未发布的向量，再在一个数据库事务中把 document 标为 `ready`。数据库发布失败时删除新写的特征对象；周期性运维清理命令处理进程崩溃留下的孤立对象。搜索永远不读取半成品。
 - 预览生成失败或不支持时不创建任务；后续补充手动预览会正常触发。
 
