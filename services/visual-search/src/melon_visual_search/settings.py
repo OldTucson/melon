@@ -3,10 +3,18 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
+from pydantic.functional_validators import ModelWrapValidatorHandler
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Environment = Literal["development", "test", "production"]
@@ -145,6 +153,27 @@ class Settings(BaseSettings):
         if self.oss_endpoint is not None and not self.oss_endpoint.startswith("https://"):
             raise ValueError("production OSS endpoint must use HTTPS")
         return self
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def remove_inputs_from_validation_errors(
+        cls,
+        values: object,
+        handler: ModelWrapValidatorHandler[Settings],
+    ) -> Settings:
+        try:
+            return handler(values)
+        except ValidationError as error:
+            sanitized_errors: list[Any] = []
+            for error_detail in error.errors(include_url=False):
+                sanitized_detail = dict(error_detail)
+                sanitized_detail["input"] = None
+                sanitized_errors.append(sanitized_detail)
+            raise ValidationError.from_exception_data(
+                cls.__name__,
+                sanitized_errors,
+                hide_input=True,
+            ) from None
 
 
 @lru_cache(maxsize=1)

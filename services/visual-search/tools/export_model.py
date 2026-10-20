@@ -8,13 +8,12 @@ import json
 import os
 import platform
 import re
-import shutil
 import tempfile
 import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 INPUT_NAME = "pixel_values"
 OUTPUT_NAME = "last_hidden_state"
@@ -23,6 +22,13 @@ PARITY_ABSOLUTE_TOLERANCE = 1e-4
 PARITY_RELATIVE_TOLERANCE = 1e-4
 _SOURCE_FIELDS = {"repoId", "revision", "license", "task", "inputSize", "dimensions"}
 _PINNED_REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+FailureStage = Literal["source-validation", "model-export", "manifest-validation"]
+_FAILURE_CODES: dict[FailureStage, str] = {
+    "source-validation": "MODEL_SOURCE_INVALID",
+    "model-export": "MODEL_EXPORT_FAILED",
+    "manifest-validation": "MODEL_LOCK_INVALID",
+}
 
 
 class ExportError(RuntimeError):
@@ -47,6 +53,16 @@ class ModelSource:
             "inputSize": self.input_size,
             "dimensions": self.dimensions,
         }
+
+
+MANDATED_MODEL_SOURCE = ModelSource(
+    repo_id="facebook/dinov2-small",
+    revision="ed25f3a31f01632728cabb09d1542f84ab7b0056",
+    license="Apache-2.0",
+    task="feature-extraction",
+    input_size=224,
+    dimensions=384,
+)
 
 
 def load_model_source(path: Path) -> ModelSource:
@@ -77,7 +93,7 @@ def load_model_source(path: Path) -> ModelSource:
     if not isinstance(dimensions, int) or isinstance(dimensions, bool) or dimensions <= 0:
         raise ExportError("model source dimensions must be a positive integer")
 
-    return ModelSource(
+    source = ModelSource(
         repo_id=repo_id,
         revision=revision,
         license=license_name,
@@ -85,6 +101,9 @@ def load_model_source(path: Path) -> ModelSource:
         input_size=input_size,
         dimensions=dimensions,
     )
+    if source != MANDATED_MODEL_SOURCE:
+        raise ExportError("model source contract does not match the mandated identity")
+    return source
 
 
 def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
@@ -93,6 +112,50 @@ def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
         for chunk in iter(lambda: artifact.read(chunk_size), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def content_addressed_artifact_path(requested_output: Path, checksum: str) -> Path:
+    if not _SHA256_PATTERN.fullmatch(checksum):
+        raise ExportError("artifact checksum must be 64 lowercase hexadecimal characters")
+    return requested_output.with_name(
+        f"{requested_output.stem}.{checksum}{requested_output.suffix}"
+    )
+
+
+def resolve_locked_artifact(
+    lock_path: Path,
+    lock_data: Mapping[str, object],
+) -> Path:
+    artifact = lock_data.get("artifact")
+    if not isinstance(artifact, Mapping):
+        raise ExportError("model lock is missing the artifact contract")
+    relative_path = artifact.get("path")
+    if (
+        not isinstance(relative_path, str)
+        or not relative_path
+        or Path(relative_path).is_absolute()
+    ):
+        raise ExportError("model lock artifact path must be relative to the lock")
+    return (lock_path.resolve().parent / relative_path).resolve()
+
+
+def _cleanup_abandoned_staging_files(output_path: Path, lock_path: Path) -> None:
+    staging_contracts = (
+        (output_path.parent, f".{output_path.stem}.", ".onnx.tmp"),
+        (lock_path.parent, f".{lock_path.name}.", ".tmp"),
+    )
+    for directory, prefix, suffix in staging_contracts:
+        if not directory.exists():
+            continue
+        for candidate in directory.iterdir():
+            if not candidate.name.startswith(prefix) or not candidate.name.endswith(suffix):
+                continue
+            if not candidate.is_file() and not candidate.is_symlink():
+                continue
+            try:
+                candidate.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def _package_version(distribution: str) -> str:
@@ -209,51 +272,84 @@ def _write_json_temp(destination: Path, data: Mapping[str, object]) -> Path:
     return temporary_path
 
 
-def _backup_existing_artifact(destination: Path) -> Path | None:
-    if not destination.exists():
-        return None
-    descriptor, backup_name = tempfile.mkstemp(
-        prefix=f".{destination.name}.",
-        suffix=".backup",
-        dir=destination.parent,
-    )
-    os.close(descriptor)
-    backup_path = Path(backup_name)
-    backup_path.unlink()
+def _fsync_file(path: Path) -> None:
+    with path.open("rb") as artifact:
+        os.fsync(artifact.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
-        os.link(destination, backup_path)
-    except OSError:
-        shutil.copy2(destination, backup_path)
-    return backup_path
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
-def _publish_artifact_and_lock(
+def _publish_model_generation(
     temporary_artifact: Path,
-    output_path: Path,
-    temporary_lock: Path,
+    immutable_artifact: Path,
     lock_path: Path,
-) -> None:
-    backup = _backup_existing_artifact(output_path)
-    published_artifact = False
+    lock_data: Mapping[str, object],
+) -> Path:
+    temporary_artifact = temporary_artifact.resolve()
+    immutable_artifact = immutable_artifact.resolve()
+    lock_path = lock_path.resolve()
+    temporary_lock: Path | None = None
+    created_artifact = False
+    manifest_committed = False
     try:
-        os.replace(temporary_artifact, output_path)
-        published_artifact = True
+        artifact = lock_data.get("artifact")
+        if not isinstance(artifact, Mapping):
+            raise ExportError("model lock is missing the artifact contract")
+        expected_checksum = artifact.get("sha256")
+        if not isinstance(expected_checksum, str) or not _SHA256_PATTERN.fullmatch(
+            expected_checksum
+        ):
+            raise ExportError("model lock is missing a canonical artifact checksum")
+        if resolve_locked_artifact(lock_path, lock_data) != immutable_artifact:
+            raise ExportError("model lock does not name the immutable artifact")
+        if sha256_file(temporary_artifact) != expected_checksum:
+            raise ExportError("staged artifact checksum does not match the model lock")
+
+        immutable_artifact.parent.mkdir(parents=True, exist_ok=True)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.link(temporary_artifact, immutable_artifact)
+            created_artifact = True
+        except FileExistsError:
+            if sha256_file(immutable_artifact) != expected_checksum:
+                raise ExportError(
+                    "immutable artifact path already exists with different content"
+                ) from None
+
+        _fsync_file(immutable_artifact)
+        _fsync_directory(immutable_artifact.parent)
+        temporary_artifact.unlink(missing_ok=True)
+
+        temporary_lock = _write_json_temp(lock_path, lock_data)
         os.replace(temporary_lock, lock_path)
+        temporary_lock = None
+        manifest_committed = True
+        _fsync_directory(lock_path.parent)
+        return immutable_artifact
     except BaseException:
-        if backup is not None:
-            os.replace(backup, output_path)
-        elif published_artifact:
-            output_path.unlink(missing_ok=True)
+        if created_artifact and not manifest_committed:
+            immutable_artifact.unlink(missing_ok=True)
+            try:
+                _fsync_directory(immutable_artifact.parent)
+            except OSError:
+                pass
         raise
     finally:
-        if backup is not None:
-            backup.unlink(missing_ok=True)
+        temporary_artifact.unlink(missing_ok=True)
+        if temporary_lock is not None:
+            temporary_lock.unlink(missing_ok=True)
 
 
 def export_model(source: ModelSource, output_path: Path, lock_path: Path) -> dict[str, object]:
     import numpy as np
     import onnx
-    import onnxruntime as ort
+    import onnxruntime as ort  # type: ignore[import-untyped]
     import torch
     from transformers import AutoImageProcessor, AutoModel
 
@@ -263,6 +359,7 @@ def export_model(source: ModelSource, output_path: Path, lock_path: Path) -> dic
         raise ExportError("model output and lock paths must be different")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
+    _cleanup_abandoned_staging_files(output_path, lock_path)
 
     torch.manual_seed(0)
     np.random.seed(0)
@@ -327,7 +424,6 @@ def export_model(source: ModelSource, output_path: Path, lock_path: Path) -> dic
     )
     os.close(descriptor)
     temporary_artifact = Path(temporary_name)
-    temporary_lock: Path | None = None
     try:
         with warnings.catch_warnings():
             warnings.filterwarnings(
@@ -401,12 +497,23 @@ def export_model(source: ModelSource, output_path: Path, lock_path: Path) -> dic
         artifact_checksum = sha256_file(temporary_artifact)
         artifact_size = temporary_artifact.stat().st_size
         maximum_error = float(np.max(np.abs(onnx_output - torch_output)))
+        immutable_artifact = content_addressed_artifact_path(
+            output_path,
+            artifact_checksum,
+        )
         lock_data: dict[str, object] = {
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "source": source.as_lock_data(),
             "artifact": {
-                "filename": output_path.name,
+                "filename": immutable_artifact.name,
+                "path": Path(
+                    os.path.relpath(immutable_artifact, lock_path.parent)
+                ).as_posix(),
                 "precision": "FP32",
+                "requestedFilename": output_path.name,
+                "requestedPath": Path(
+                    os.path.relpath(output_path, lock_path.parent)
+                ).as_posix(),
                 "sha256": artifact_checksum,
                 "sizeBytes": artifact_size,
             },
@@ -447,34 +554,25 @@ def export_model(source: ModelSource, output_path: Path, lock_path: Path) -> dic
                 "maximumAbsoluteError": maximum_error,
             },
         }
-        temporary_lock = _write_json_temp(lock_path, lock_data)
-        _publish_artifact_and_lock(
+        _publish_model_generation(
             temporary_artifact,
-            output_path,
-            temporary_lock,
+            immutable_artifact,
             lock_path,
+            lock_data,
         )
-        temporary_lock = None
         return lock_data
     finally:
         temporary_artifact.unlink(missing_ok=True)
-        if temporary_lock is not None:
-            temporary_lock.unlink(missing_ok=True)
 
 
-def _safe_error_message(error: BaseException) -> str:
-    message = " ".join(str(error).splitlines())
-    message = re.sub(
-        r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+",
-        r"\1<redacted>",
-        message,
+def _cli_failure_message(stage: FailureStage, error: BaseException) -> str:
+    exception_name = type(error).__name__
+    if not exception_name.isidentifier():
+        exception_name = "Exception"
+    return (
+        f"error: stage={stage} code={_FAILURE_CODES[stage]} "
+        f"exception={exception_name}\n"
     )
-    message = re.sub(
-        r"(?i)([?&](?:token|access_key|secret|signature)=)[^&\s]+",
-        r"\1<redacted>",
-        message,
-    )
-    return message[:1000] or type(error).__name__
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -486,7 +584,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=service_root / "model-source.json",
         help="path to the pinned model source contract",
     )
-    parser.add_argument("--output", type=Path, required=True, help="destination ONNX path")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help=(
+            "requested ONNX basename/location; publication inserts .<sha256> "
+            "before the suffix"
+        ),
+    )
     parser.add_argument("--lock", type=Path, required=True, help="destination model lock path")
     return parser
 
@@ -496,19 +602,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     try:
         source = load_model_source(arguments.source)
-        lock_data = export_model(source, arguments.output, arguments.lock)
-    except (ExportError, OSError) as exc:
-        parser.exit(1, f"error: {_safe_error_message(exc)}\n")
     except Exception as exc:
-        parser.exit(
-            1,
-            f"error: model export failed ({type(exc).__name__}): {_safe_error_message(exc)}\n",
-        )
+        parser.exit(1, _cli_failure_message("source-validation", exc))
 
-    artifact = lock_data["artifact"]
-    if not isinstance(artifact, dict) or not isinstance(artifact.get("sha256"), str):
-        raise ExportError("generated lock is missing the artifact checksum")
-    print(f"exported {arguments.output} sha256={artifact['sha256']}")
+    try:
+        lock_data = export_model(source, arguments.output, arguments.lock)
+    except Exception as exc:
+        parser.exit(1, _cli_failure_message("model-export", exc))
+
+    try:
+        artifact = lock_data["artifact"]
+        if not isinstance(artifact, dict) or not isinstance(artifact.get("sha256"), str):
+            raise ExportError("generated lock is missing the artifact checksum")
+        artifact_checksum = artifact["sha256"]
+        published_artifact = resolve_locked_artifact(arguments.lock, lock_data)
+    except Exception as exc:
+        parser.exit(1, _cli_failure_message("manifest-validation", exc))
+
+    print(f"exported {published_artifact} sha256={artifact_checksum}")
     print(f"wrote {arguments.lock}")
     return 0
 

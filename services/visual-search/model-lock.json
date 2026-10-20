@@ -1,7 +1,10 @@
 {
   "artifact": {
-    "filename": "dinov2-small.onnx",
+    "filename": "dinov2-small.9ea0e2f1290836406eb137c47bc6eaf0a3c9da8db6bfdb7fc425136678b77bfe.onnx",
+    "path": "models/dinov2-small.9ea0e2f1290836406eb137c47bc6eaf0a3c9da8db6bfdb7fc425136678b77bfe.onnx",
     "precision": "FP32",
+    "requestedFilename": "dinov2-small.onnx",
+    "requestedPath": "models/dinov2-small.onnx",
     "sha256": "9ea0e2f1290836406eb137c47bc6eaf0a3c9da8db6bfdb7fc425136678b77bfe",
     "sizeBytes": 88453090
   },
@@ -94,7 +97,7 @@
     ],
     "version": "1.23.2"
   },
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "source": {
     "dimensions": 384,
     "inputSize": 224,
