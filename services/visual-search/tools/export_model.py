@@ -22,6 +22,7 @@ OUTPUT_NAME = "last_hidden_state"
 OPSET_VERSION = 17
 PARITY_ABSOLUTE_TOLERANCE = 1e-4
 PARITY_RELATIVE_TOLERANCE = 0.0
+PREPROCESSING_ABSOLUTE_TOLERANCE = 1e-6
 _SOURCE_FIELDS = {"repoId", "revision", "license", "task", "inputSize", "dimensions"}
 _PINNED_REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -328,6 +329,15 @@ def _normalize_size(value: object) -> dict[str, int] | int | None:
 
 
 def _preprocessing_contract(processor: Any, source: ModelSource) -> dict[str, object]:
+    from melon_visual_search.image_io import (
+        ALPHA_DARK_BACKGROUND,
+        ALPHA_INFORMATION_METRIC,
+        ALPHA_LIGHT_BACKGROUND,
+        ALPHA_TIE_BREAK,
+    )
+
+    if getattr(processor, "do_convert_rgb", None) is not True:
+        raise ExportError("pinned image processor must enable RGB conversion")
     resample = getattr(processor, "resample", None)
     return {
         "colorMode": "RGB",
@@ -354,7 +364,48 @@ def _preprocessing_contract(processor: Any, source: ModelSource) -> dict[str, ob
         "tensorLayout": "NCHW",
         "height": source.input_size,
         "width": source.input_size,
+        "alphaComposite": {
+            "lightBackground": list(ALPHA_LIGHT_BACKGROUND),
+            "darkBackground": list(ALPHA_DARK_BACKGROUND),
+            "informationMetric": ALPHA_INFORMATION_METRIC,
+            "tieBreak": ALPHA_TIE_BREAK,
+        },
     }
+
+
+def _preprocess_validation_images(
+    images: Sequence[Any],
+    preprocessing: object,
+) -> Any:
+    import numpy as np
+
+    from melon_visual_search import embedding
+
+    arrays = [np.asarray(image.convert("RGB"), dtype=np.uint8) for image in images]
+    contract = embedding.parse_preprocessing_contract(preprocessing)
+    return embedding.preprocess_images(arrays, contract)
+
+
+def _validate_preprocessing_parity(candidate: Any, reference: Any) -> float:
+    import numpy as np
+
+    if candidate.shape != reference.shape or candidate.dtype != np.float32:
+        raise ExportError("runtime preprocessing shape or dtype does not match Transformers")
+    if reference.dtype != np.float32:
+        raise ExportError("Transformers preprocessing did not produce float32")
+    maximum_error = float(np.max(np.abs(candidate - reference)))
+    if (
+        not np.isfinite(candidate).all()
+        or not np.isfinite(reference).all()
+        or not np.isfinite(maximum_error)
+        or maximum_error > PREPROCESSING_ABSOLUTE_TOLERANCE
+    ):
+        raise ExportError(
+            "runtime preprocessing parity failed at maximum absolute error tolerance "
+            f"{PREPROCESSING_ABSOLUTE_TOLERANCE:.8g}; maximum absolute error "
+            f"{maximum_error:.8g}"
+        )
+    return maximum_error
 
 
 def _validate_tensor_shape(
@@ -572,8 +623,18 @@ def export_model(source: ModelSource, output_path: Path, lock_path: Path) -> dic
             )[0]
 
     wrapper = LastHiddenState(model).eval()
-    processed = processor(images=_fixed_rgb_images(source.input_size), return_tensors="pt")
-    pixel_values = processed[INPUT_NAME].to(dtype=torch.float32, device="cpu").contiguous()
+    validation_images = _fixed_rgb_images(source.input_size)
+    preprocessing = _preprocessing_contract(processor, source)
+    numpy_input = _preprocess_validation_images(validation_images, preprocessing)
+    transformer_input = processor(
+        images=validation_images,
+        return_tensors="np",
+    )[INPUT_NAME]
+    _validate_preprocessing_parity(numpy_input, transformer_input)
+    pixel_values = torch.from_numpy(numpy_input).to(
+        dtype=torch.float32,
+        device="cpu",
+    ).contiguous()
     expected_input_shape = (2, 3, source.input_size, source.input_size)
     if tuple(pixel_values.shape) != expected_input_shape:
         raise ExportError(
@@ -653,7 +714,6 @@ def export_model(source: ModelSource, output_path: Path, lock_path: Path) -> dic
         if not isinstance(inputs[0].shape[0], str) or not isinstance(outputs[0].shape[0], str):
             raise ExportError("ONNX model batch axis is not dynamic")
 
-        numpy_input = pixel_values.detach().cpu().numpy()
         onnx_output = _run_onnx_validation_batch(
             session,
             numpy_input,
@@ -725,7 +785,7 @@ def export_model(source: ModelSource, output_path: Path, lock_path: Path) -> dic
                 "dtype": "float32",
                 "shape": ["batch", 3, source.input_size, source.input_size],
                 "dynamicAxes": {"0": "batch"},
-                "preprocessing": _preprocessing_contract(processor, source),
+                "preprocessing": preprocessing,
             },
             "output": {
                 "name": OUTPUT_NAME,

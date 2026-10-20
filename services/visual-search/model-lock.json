@@ -25,6 +25,20 @@
     },
     "name": "pixel_values",
     "preprocessing": {
+      "alphaComposite": {
+        "darkBackground": [
+          24,
+          24,
+          24
+        ],
+        "informationMetric": "grayscale-variance",
+        "lightBackground": [
+          240,
+          240,
+          240
+        ],
+        "tieBreak": "light"
+      },
       "centerCrop": {
         "enabled": true,
         "size": {

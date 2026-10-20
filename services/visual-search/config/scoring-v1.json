@@ -1,0 +1,30 @@
+{
+  "categoryOrder": {
+    "possible_source": 2,
+    "probable_source": 3,
+    "visually_similar": 1
+  },
+  "schemaVersion": 1,
+  "thresholds": {
+    "minimumVisualSimilarity": 0.55,
+    "possibleGeometry": {
+      "minimumCoverage": 0.04,
+      "minimumInlierRatio": 0.25,
+      "minimumInliers": 8
+    },
+    "possiblePhashDistance": 12,
+    "probableGeometry": {
+      "minimumCoverage": 0.12,
+      "minimumInlierRatio": 0.45,
+      "minimumInliers": 18
+    },
+    "probablePhashDistance": 6
+  },
+  "version": "scoring-v1",
+  "weights": {
+    "bestVisual": 0.55,
+    "geometry": 0.15,
+    "globalVisual": 0.15,
+    "phash": 0.15
+  }
+}
