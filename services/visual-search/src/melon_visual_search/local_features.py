@@ -355,9 +355,7 @@ def _read_array_metadata(
             raise _features_error("local feature array version is unsupported")
         if fortran_order or dtype.hasobject:
             raise _features_error("local feature array storage is unsupported")
-        if any(
-            not isinstance(dimension, int) or dimension < 0 for dimension in shape
-        ):
+        if any(type(dimension) is not int or dimension < 0 for dimension in shape):
             raise _features_error("local feature array shape is invalid")
         payload_size = math.prod(shape) * dtype.itemsize
         if (
@@ -416,7 +414,7 @@ def _validate_zip_container(encoded: bytes) -> None:
                 raise _features_error("local feature array metadata is invalid")
     except ImageSearchError:
         raise
-    except (OSError, ValueError, zipfile.BadZipFile) as error:
+    except Exception as error:
         raise _features_error("local feature archive is malformed") from error
 
 
@@ -451,7 +449,7 @@ def load_local_features(encoded: bytes | bytearray | memoryview) -> LocalFeature
             )
     except ImageSearchError:
         raise
-    except (EOFError, KeyError, OSError, ValueError, zipfile.BadZipFile) as error:
+    except Exception as error:
         raise _features_error("local feature archive arrays could not be loaded") from error
     return _validated_features(features)
 

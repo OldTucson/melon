@@ -8,6 +8,7 @@ import pillow_heif
 import pytest
 from PIL import Image
 
+from melon_visual_search import image_io
 from melon_visual_search.image_io import (
     ALPHA_DARK_BACKGROUND,
     ALPHA_LIGHT_BACKGROUND,
@@ -108,6 +109,27 @@ def test_decode_accepts_shortest_edge_96_and_rejects_95() -> None:
     assert captured.value.code == IMAGE_SEARCH_INVALID_FILE
 
 
+@pytest.mark.parametrize("size", [(96 * 64, 96), (96, 96 * 64)])
+def test_decode_accepts_the_exact_maximum_aspect_ratio(
+    size: tuple[int, int],
+) -> None:
+    assert image_io.MAX_IMAGE_ASPECT_RATIO == 64
+
+    decoded = decode_image(encoded_image(size=size))
+
+    assert decoded.shape == (size[1], size[0], 3)
+
+
+@pytest.mark.parametrize("size", [((96 * 64) + 1, 96), (96, (96 * 64) + 1)])
+def test_decode_rejects_an_aspect_ratio_just_above_the_limit(
+    size: tuple[int, int],
+) -> None:
+    with pytest.raises(ImageSearchError) as captured:
+        decode_image(encoded_image(size=size))
+
+    assert captured.value.code == IMAGE_SEARCH_IMAGE_TOO_LARGE
+
+
 def test_decode_applies_exif_orientation_before_returning_rgb() -> None:
     image = Image.new("RGB", (96, 120), (230, 30, 20))
     exif = Image.Exif()
@@ -196,8 +218,16 @@ def test_regions_are_global_plus_nine_overlapping_tiles() -> None:
     assert regions[0].kind == "global"
     assert all(region.kind == "tile" for region in regions[1:])
     assert regions[0].bounds == (0.0, 0.0, 1.0, 1.0)
-    assert regions[1].bounds == pytest.approx((0.0, 0.0, 0.4, 0.4))
-    assert regions[-1].bounds == pytest.approx((0.6, 0.6, 1.0, 1.0))
+    assert regions[1].bounds == (0.0, 0.0, 41 / 101, 39 / 97)
+    assert regions[1].bounds == pytest.approx((0.0, 0.0, 0.4, 0.4), abs=0.01)
+    assert regions[5].bounds == (30 / 101, 29 / 97, 41 / 101, 39 / 97)
+    assert regions[9].bounds == (60 / 101, 58 / 97, 41 / 101, 39 / 97)
+    assert regions[3].bounds[0] + regions[3].bounds[2] == 1.0
+    assert regions[7].bounds[1] + regions[7].bounds[3] == 1.0
+    assert regions[9].bounds[0] + regions[9].bounds[2] == 1.0
+    assert regions[9].bounds[1] + regions[9].bounds[3] == 1.0
+    np.testing.assert_array_equal(regions[5].image, image[29:68, 30:71])
+    np.testing.assert_array_equal(regions[9].image, image[58:97, 60:101])
     assert all(region.image.size > 0 for region in regions)
     assert all(region.image.shape[0] > 0 for region in regions)
     assert all(region.image.shape[1] > 0 for region in regions)

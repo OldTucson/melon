@@ -256,3 +256,59 @@ def test_local_feature_archive_rejects_huge_declared_shape_before_numpy_load(
         load_local_features(encoded.getvalue())
 
     assert captured.value.code == IMAGE_SEARCH_FEATURES_INVALID
+
+
+def test_local_feature_archive_rejects_boolean_shape_dimensions() -> None:
+    def npy_bytes(array: np.ndarray) -> bytes:
+        output = io.BytesIO()
+        np.save(output, array, allow_pickle=False)
+        return output.getvalue()
+
+    def raw_float32_npy(shape: tuple[object, ...], payload_size: int) -> bytes:
+        output = io.BytesIO()
+        np.lib.format.write_array_header_1_0(
+            output,
+            {
+                "descr": np.dtype(np.float32).str,
+                "fortran_order": False,
+                "shape": shape,
+            },
+        )
+        output.write(b"\0" * payload_size)
+        return output.getvalue()
+
+    encoded = io.BytesIO()
+    with zipfile.ZipFile(encoded, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "format_version.npy",
+            npy_bytes(np.array([LOCAL_FEATURE_ARCHIVE_VERSION], dtype=np.uint16)),
+        )
+        archive.writestr("phash.npy", npy_bytes(np.array([0], dtype=np.uint64)))
+        archive.writestr("keypoints.npy", raw_float32_npy((True, 2), 2 * 4))
+        archive.writestr("descriptors.npy", raw_float32_npy((True, 128), 128 * 4))
+
+    with pytest.raises(ImageSearchError) as captured:
+        load_local_features(encoded.getvalue())
+
+    assert captured.value.code == IMAGE_SEARCH_FEATURES_INVALID
+
+
+def test_local_feature_archive_translates_header_parser_type_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from melon_visual_search import local_features as local_features_module
+
+    def malformed_header(*args: object, **kwargs: object) -> object:
+        raise TypeError("untrusted header details")
+
+    monkeypatch.setattr(
+        local_features_module.npy_format,
+        "read_magic",
+        malformed_header,
+    )
+
+    with pytest.raises(ImageSearchError) as captured:
+        load_local_features(feature_archive())
+
+    assert captured.value.code == IMAGE_SEARCH_FEATURES_INVALID
+    assert "untrusted header details" not in str(captured.value)

@@ -1,12 +1,12 @@
 {
   "artifact": {
-    "filename": "dinov2-small.9ea0e2f1290836406eb137c47bc6eaf0a3c9da8db6bfdb7fc425136678b77bfe.onnx",
-    "path": "models/dinov2-small.9ea0e2f1290836406eb137c47bc6eaf0a3c9da8db6bfdb7fc425136678b77bfe.onnx",
+    "filename": "dinov2-small.e306c964ab0a1a9bdb334af89ab657d58448417b830a6a7f7b742f85d4441ae8.onnx",
+    "path": "models/dinov2-small.e306c964ab0a1a9bdb334af89ab657d58448417b830a6a7f7b742f85d4441ae8.onnx",
     "precision": "FP32",
     "requestedFilename": "dinov2-small.onnx",
     "requestedPath": "models/dinov2-small.onnx",
-    "sha256": "9ea0e2f1290836406eb137c47bc6eaf0a3c9da8db6bfdb7fc425136678b77bfe",
-    "sizeBytes": 88453090
+    "sha256": "e306c964ab0a1a9bdb334af89ab657d58448417b830a6a7f7b742f85d4441ae8",
+    "sizeBytes": 88453010
   },
   "exporter": {
     "mode": "legacyTorchScript",
@@ -48,6 +48,7 @@
       },
       "colorMode": "RGB",
       "height": 224,
+      "maximumAspectRatio": 64,
       "normalize": {
         "enabled": true,
         "mean": [

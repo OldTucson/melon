@@ -20,7 +20,12 @@ from melon_visual_search.embedding import (
     load_model_contract,
     preprocess_images,
 )
-from melon_visual_search.image_io import ImageSearchError, decode_image, make_regions
+from melon_visual_search.image_io import (
+    MAX_IMAGE_ASPECT_RATIO,
+    ImageSearchError,
+    decode_image,
+    make_regions,
+)
 
 SERVICE_ROOT = Path(__file__).parents[1]
 MODEL_LOCK_PATH = SERVICE_ROOT / "model-lock.json"
@@ -40,10 +45,12 @@ class FakeSession:
         *,
         input_name: str = "pixel_values",
         output_name: str = "last_hidden_state",
+        output_tokens: str | int = 257,
         output_factory: Callable[[int], np.ndarray] | None = None,
     ) -> None:
         self.input_name = input_name
         self.output_name = output_name
+        self.output_tokens = output_tokens
         self.output_factory = output_factory or valid_output
         self.run_calls: list[tuple[list[str], dict[str, np.ndarray]]] = []
 
@@ -55,7 +62,7 @@ class FakeSession:
             FakeNode(
                 self.output_name,
                 "tensor(float)",
-                ["batch", "tokens", 384],
+                ["batch", self.output_tokens, 384],
             )
         ]
 
@@ -189,6 +196,16 @@ def test_committed_lock_records_versioned_alpha_and_model_preprocessing() -> Non
     assert contract.preprocessing.tensor_layout == "NCHW"
 
 
+def test_committed_lock_versions_the_decode_aspect_ratio() -> None:
+    raw = json.loads(MODEL_LOCK_PATH.read_text(encoding="utf-8"))
+    contract = load_model_contract(MODEL_LOCK_PATH)
+
+    assert raw["input"]["preprocessing"]["maximumAspectRatio"] == (
+        MAX_IMAGE_ASPECT_RATIO
+    )
+    assert contract.preprocessing.maximum_aspect_ratio == MAX_IMAGE_ASPECT_RATIO
+
+
 def test_artifact_checksum_is_verified_before_session_creation(tmp_path: Path) -> None:
     lock_path, artifact, _ = write_locked_model(tmp_path)
     artifact.write_bytes(b"tampered")
@@ -311,6 +328,48 @@ def test_model_lock_preprocessing_schema_is_strict(
     assert captured.value.code == IMAGE_SEARCH_MODEL_INVALID
 
 
+def test_model_lock_rejects_duplicate_top_level_fields(tmp_path: Path) -> None:
+    encoded = MODEL_LOCK_PATH.read_text(encoding="utf-8").replace(
+        "{",
+        '{"schemaVersion": 2,',
+        1,
+    )
+    lock_path = tmp_path / "model-lock.json"
+    lock_path.write_text(encoded, encoding="utf-8")
+
+    with pytest.raises(ImageSearchError) as captured:
+        load_model_contract(lock_path)
+
+    assert captured.value.code == IMAGE_SEARCH_MODEL_INVALID
+
+
+@pytest.mark.parametrize(
+    ("field", "duplicate_value"),
+    [
+        ("sha256", "f" * 64),
+        ("path", "../../sensitive-model-location"),
+    ],
+)
+def test_model_lock_rejects_duplicate_nested_artifact_fields(
+    tmp_path: Path,
+    field: str,
+    duplicate_value: str,
+) -> None:
+    encoded = MODEL_LOCK_PATH.read_text(encoding="utf-8").replace(
+        '"artifact": {',
+        f'"artifact": {{"{field}": {json.dumps(duplicate_value)},',
+        1,
+    )
+    lock_path = tmp_path / "model-lock.json"
+    lock_path.write_text(encoded, encoding="utf-8")
+
+    with pytest.raises(ImageSearchError) as captured:
+        load_model_contract(lock_path)
+
+    assert captured.value.code == IMAGE_SEARCH_MODEL_INVALID
+    assert duplicate_value not in str(captured.value)
+
+
 def test_session_contract_drift_is_rejected(tmp_path: Path) -> None:
     session = FakeSession(input_name="renamed_input")
 
@@ -318,6 +377,18 @@ def test_session_contract_drift_is_rejected(tmp_path: Path) -> None:
         fake_runtime(tmp_path, session)
 
     assert captured.value.code == IMAGE_SEARCH_MODEL_INVALID
+
+
+def test_symbolic_output_token_metadata_is_rejected_before_inference(
+    tmp_path: Path,
+) -> None:
+    session = FakeSession(output_tokens="tokens")
+
+    with pytest.raises(ImageSearchError) as captured:
+        fake_runtime(tmp_path, session)
+
+    assert captured.value.code == IMAGE_SEARCH_MODEL_INVALID
+    assert session.run_calls == []
 
 
 @pytest.mark.parametrize("failure", ["zero", "nan", "shape"])
@@ -402,6 +473,51 @@ def test_exporter_rejects_a_processor_without_explicit_rgb_conversion() -> None:
             processor,
             export_model.MANDATED_MODEL_SOURCE,
         )
+
+
+def test_exporter_canonicalizes_locked_output_dimensions() -> None:
+    from tools import export_model
+
+    class FakeDimension:
+        def __init__(self, parameter: str) -> None:
+            self.dim_param = parameter
+            self.dim_value = 0
+
+        def ClearField(self, field: str) -> None:
+            assert field == "dim_param"
+            self.dim_param = ""
+
+    dimensions = [
+        FakeDimension("batch"),
+        FakeDimension("tokens"),
+        FakeDimension("features"),
+    ]
+    model = SimpleNamespace(
+        graph=SimpleNamespace(
+            output=[
+                SimpleNamespace(
+                    name="last_hidden_state",
+                    type=SimpleNamespace(
+                        tensor_type=SimpleNamespace(
+                            shape=SimpleNamespace(dim=dimensions),
+                        )
+                    ),
+                )
+            ]
+        )
+    )
+
+    export_model._canonicalize_output_metadata(
+        model,
+        token_count=257,
+        dimensions=384,
+    )
+
+    assert dimensions[0].dim_param == "batch"
+    assert dimensions[1].dim_param == ""
+    assert dimensions[1].dim_value == 257
+    assert dimensions[2].dim_param == ""
+    assert dimensions[2].dim_value == 384
 
 
 @pytest.mark.skipif(

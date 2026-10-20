@@ -334,6 +334,7 @@ def _preprocessing_contract(processor: Any, source: ModelSource) -> dict[str, ob
         ALPHA_INFORMATION_METRIC,
         ALPHA_LIGHT_BACKGROUND,
         ALPHA_TIE_BREAK,
+        MAX_IMAGE_ASPECT_RATIO,
     )
 
     if getattr(processor, "do_convert_rgb", None) is not True:
@@ -364,6 +365,7 @@ def _preprocessing_contract(processor: Any, source: ModelSource) -> dict[str, ob
         "tensorLayout": "NCHW",
         "height": source.input_size,
         "width": source.input_size,
+        "maximumAspectRatio": MAX_IMAGE_ASPECT_RATIO,
         "alphaComposite": {
             "lightBackground": list(ALPHA_LIGHT_BACKGROUND),
             "darkBackground": list(ALPHA_DARK_BACKGROUND),
@@ -406,6 +408,23 @@ def _validate_preprocessing_parity(candidate: Any, reference: Any) -> float:
             f"{maximum_error:.8g}"
         )
     return maximum_error
+
+
+def _canonicalize_output_metadata(
+    model: Any,
+    *,
+    token_count: int,
+    dimensions: int,
+) -> None:
+    outputs = model.graph.output
+    if len(outputs) != 1 or outputs[0].name != OUTPUT_NAME:
+        raise ExportError("ONNX graph does not expose the locked output")
+    output_dimensions = outputs[0].type.tensor_type.shape.dim
+    if len(output_dimensions) != 3:
+        raise ExportError("ONNX graph output rank does not match the lock")
+    for index, value in ((1, token_count), (2, dimensions)):
+        output_dimensions[index].ClearField("dim_param")
+        output_dimensions[index].dim_value = value
 
 
 def _validate_tensor_shape(
@@ -700,6 +719,14 @@ def export_model(source: ModelSource, output_path: Path, lock_path: Path) -> dic
             os.fsync(artifact.fileno())
 
         onnx_model = onnx.load(str(temporary_artifact), load_external_data=True)
+        _canonicalize_output_metadata(
+            onnx_model,
+            token_count=token_count,
+            dimensions=source.dimensions,
+        )
+        onnx.save_model(onnx_model, str(temporary_artifact))
+        with temporary_artifact.open("rb") as artifact:
+            os.fsync(artifact.fileno())
         onnx.checker.check_model(onnx_model)
         session = ort.InferenceSession(
             str(temporary_artifact),
@@ -713,6 +740,8 @@ def export_model(source: ModelSource, output_path: Path, lock_path: Path) -> dic
             raise ExportError("ONNX model does not expose the required last_hidden_state output")
         if not isinstance(inputs[0].shape[0], str) or not isinstance(outputs[0].shape[0], str):
             raise ExportError("ONNX model batch axis is not dynamic")
+        if outputs[0].shape[1:] != [token_count, source.dimensions]:
+            raise ExportError("ONNX model output dimensions do not match the lock")
 
         onnx_output = _run_onnx_validation_batch(
             session,

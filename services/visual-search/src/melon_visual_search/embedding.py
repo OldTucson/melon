@@ -18,6 +18,7 @@ from .image_io import (
     ALPHA_INFORMATION_METRIC,
     ALPHA_LIGHT_BACKGROUND,
     ALPHA_TIE_BREAK,
+    MAX_IMAGE_ASPECT_RATIO,
     ImageSearchError,
     Region,
 )
@@ -49,6 +50,7 @@ _PREPROCESSING_FIELDS = {
     "height",
     "width",
     "alphaComposite",
+    "maximumAspectRatio",
 }
 
 
@@ -67,6 +69,7 @@ class PreprocessingContract:
     alpha_dark_background: tuple[int, int, int]
     alpha_information_metric: str
     alpha_tie_break: str
+    maximum_aspect_ratio: int
 
 
 @dataclass(frozen=True)
@@ -105,6 +108,15 @@ SessionFactory = Callable[..., _InferenceSession]
 
 def _model_error(detail: str) -> ImageSearchError:
     return ImageSearchError(IMAGE_SEARCH_MODEL_INVALID, detail)
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _model_error("model lock contains duplicate fields")
+        result[key] = value
+    return result
 
 
 def _mapping(value: object, label: str) -> Mapping[str, object]:
@@ -245,6 +257,12 @@ def parse_preprocessing_contract(value: object) -> PreprocessingContract:
     width = _positive_int(data["width"], "preprocessing width")
     if (height, width) != (crop_height, crop_width):
         raise _model_error("preprocessing dimensions must match the center crop")
+    maximum_aspect_ratio = _positive_int(
+        data["maximumAspectRatio"],
+        "maximum image aspect ratio",
+    )
+    if maximum_aspect_ratio != MAX_IMAGE_ASPECT_RATIO:
+        raise _model_error("image aspect ratio contract does not match the decoder")
 
     alpha = _exact_fields(
         data["alphaComposite"],
@@ -286,6 +304,7 @@ def parse_preprocessing_contract(value: object) -> PreprocessingContract:
         alpha_dark_background=dark_background,
         alpha_information_metric=alpha["informationMetric"],
         alpha_tie_break=alpha["tieBreak"],
+        maximum_aspect_ratio=maximum_aspect_ratio,
     )
 
 
@@ -336,7 +355,12 @@ def load_model_contract(
     artifact_root: Path | None = None,
 ) -> ModelContract:
     try:
-        raw: object = json.loads(lock_path.read_text(encoding="utf-8"))
+        raw: object = json.loads(
+            lock_path.read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_keys,
+        )
+    except ImageSearchError:
+        raise
     except (OSError, json.JSONDecodeError) as error:
         raise _model_error("model lock could not be read") from error
 
@@ -553,10 +577,7 @@ def _validate_session_contract(
         or model_output.type != "tensor(float)"
         or len(model_output.shape) != 3
         or not _dynamic_dimension(model_output.shape[0])
-        or (
-            not _dynamic_dimension(model_output.shape[1])
-            and model_output.shape[1] != contract.token_count
-        )
+        or model_output.shape[1] != contract.token_count
         or model_output.shape[2] != contract.dimensions
     ):
         raise _model_error("ONNX output metadata does not match the model lock")

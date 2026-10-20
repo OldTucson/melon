@@ -17,6 +17,7 @@ IMAGE_SEARCH_IMAGE_TOO_LARGE = "IMAGE_SEARCH_IMAGE_TOO_LARGE"
 MAX_ENCODED_BYTES = 20 * 1024 * 1024
 MAX_DECODED_PIXELS = 40_000_000
 MIN_IMAGE_EDGE = 96
+MAX_IMAGE_ASPECT_RATIO = 64
 
 # These values are part of the visual index contract. Changing them requires a
 # new index version because transparent artwork can produce different features.
@@ -41,6 +42,8 @@ class ImageSearchError(ValueError):
 
 @dataclass(frozen=True)
 class Region:
+    """An image region with normalized ``(x, y, width, height)`` bounds."""
+
     index: int
     kind: Literal["global", "tile"]
     bounds: tuple[float, float, float, float]
@@ -138,6 +141,8 @@ def decode_image(
                     raise _invalid_file("image dimensions must be positive")
                 if width * height > max_pixels:
                     raise _too_large("decoded image exceeds the pixel limit")
+                if max(width, height) > min(width, height) * MAX_IMAGE_ASPECT_RATIO:
+                    raise _too_large("image aspect ratio exceeds the supported limit")
                 if min(width, height) < min_edge:
                     raise _invalid_file("image shortest edge is below the minimum")
 
@@ -195,10 +200,10 @@ def make_regions(image: npt.NDArray[np.uint8]) -> tuple[Region, ...]:
                     index=index,
                     kind="tile",
                     bounds=(
-                        left_normalized,
-                        top_normalized,
-                        right_normalized,
-                        bottom_normalized,
+                        left / width,
+                        top / height,
+                        (right - left) / width,
+                        (bottom - top) / height,
                     ),
                     image=np.ascontiguousarray(image[top:bottom, left:right].copy()),
                 )
