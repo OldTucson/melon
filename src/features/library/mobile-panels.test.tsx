@@ -103,8 +103,11 @@ describe("responsive workspace panels", () => {
     renderDeepLinkedPattern();
 
     await waitFor(() =>
-      expect(useSelectionStore.getState().selectedIds).toEqual([pattern.id]),
+      expect(
+        screen.getByRole("complementary", { name: "图案检查器" }),
+      ).toBeInTheDocument(),
     );
+    expect(useSelectionStore.getState().selectedIds).toEqual([]);
     expect(
       screen.getByRole("complementary", { name: "图案检查器" }),
     ).toBeInTheDocument();
@@ -134,17 +137,20 @@ describe("responsive workspace panels", () => {
     expect(trigger).toHaveFocus();
   });
 
-  it("dismisses the compact inspector without clearing selection and can switch to folders", async () => {
+  it("dismisses the compact inspector without changing selection and can switch to folders", async () => {
     const user = userEvent.setup();
     renderWorkspace();
     const card = within(screen.getByRole("list", { name: "图案列表" })).getByRole("listitem");
-    await user.click(card);
+    const image = within(card).getByRole("button", {
+      name: `打开 ${pattern.name} 检查器`,
+    });
+    await user.click(image);
     const inspector = screen.getByRole("dialog", { name: "图案检查器" });
     expect(inspector).toContainElement(document.activeElement as HTMLElement);
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(useSelectionStore.getState().selectedIds).toEqual([pattern.id]);
-    expect(card).toHaveFocus();
+    expect(useSelectionStore.getState().selectedIds).toEqual([]);
+    expect(image).toHaveFocus();
     const show = screen.getByRole("button", { name: "显示检查器" });
     await user.click(show);
     await user.click(screen.getByRole("button", { name: "收起检查器" }));
@@ -157,7 +163,11 @@ describe("responsive workspace panels", () => {
   it("keeps desktop folders and inspector nonmodal, names icon actions and exposes unabridged names", () => {
     const { container } = renderWorkspace(false);
     const card = within(screen.getByRole("list", { name: "图案列表" })).getByRole("listitem");
-    fireEvent.click(card);
+    fireEvent.click(
+      within(card).getByRole("button", {
+        name: `打开 ${pattern.name} 检查器`,
+      }),
+    );
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: "图案检查器" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: longName })).toHaveAttribute("title", longName);

@@ -22,6 +22,7 @@ export function PatternGrid({
   items,
   mode,
   onFavorite,
+  onInspect,
   onLoadMore,
   onOpenPreview,
   onSelect,
@@ -32,6 +33,7 @@ export function PatternGrid({
   items: PatternItem[];
   mode: LibraryViewMode;
   onFavorite: (item: PatternItem) => void;
+  onInspect: (id: string) => void;
   onLoadMore: () => void;
   onOpenPreview: (id: string) => void;
   onSelect: (id: string, modifiers: SelectionModifiers) => void;
@@ -90,6 +92,7 @@ export function PatternGrid({
         key={`${mode}:${columns}:${rowHeight}`}
         mode={mode}
         onFavorite={onFavorite}
+        onInspect={onInspect}
         onOpenPreview={onOpenPreview}
         onSelect={onSelect}
         rowCount={rowCount}
@@ -111,6 +114,7 @@ function VirtualPatternCanvas({
   items,
   mode,
   onFavorite,
+  onInspect,
   onOpenPreview,
   onSelect,
   rowCount,
@@ -122,6 +126,7 @@ function VirtualPatternCanvas({
   items: PatternItem[];
   mode: LibraryViewMode;
   onFavorite: (item: PatternItem) => void;
+  onInspect: (id: string) => void;
   onOpenPreview: (id: string) => void;
   onSelect: (id: string, modifiers: SelectionModifiers) => void;
   rowCount: number;
@@ -180,6 +185,7 @@ function VirtualPatternCanvas({
                 key={item.id}
                 mode={mode}
                 onFavorite={onFavorite}
+                onInspect={onInspect}
                 onOpenPreview={onOpenPreview}
                 onSelect={onSelect}
                 selected={selectedIds.has(item.id)}

@@ -7,6 +7,7 @@ export const storageObjectKinds = ["source", "derived"] as const;
 export const storageSourceExtensions = [
   "psd",
   "ai",
+  "pdf",
   "jpg",
   "jpeg",
   "png",

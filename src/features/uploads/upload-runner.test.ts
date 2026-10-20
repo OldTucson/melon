@@ -101,6 +101,22 @@ function completionCheckpoint(
 }
 
 describe("upload runner", () => {
+  it("uploads PDF sources with their correct MIME type", async () => {
+    const file = new File(["%PDF-1.7"], "catalog.pdf", {
+      type: "application/pdf",
+      lastModified: 123,
+    });
+    const task = createUploadTask(file);
+    const harness = createHarness();
+
+    await runUpload(task, file, harness.dependencies);
+
+    expect(task.extension).toBe("pdf");
+    expect(harness.upload).toHaveBeenCalledWith(
+      expect.objectContaining({ file, contentType: "application/pdf" }),
+    );
+  });
+
   it("uses stable IDs through init, multipart, and complete", async () => {
     const file = new File(["png"], "leaf.png", {
       type: "image/png",

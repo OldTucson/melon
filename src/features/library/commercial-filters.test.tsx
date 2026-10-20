@@ -94,6 +94,7 @@ function renderToolbar(
       <QueryOwnerProvider ownerId={ownerId}>
         <Tooltip.Provider>
           <LibraryToolbar
+            inspectorAvailable={false}
             inspectorHidden={false}
             onQueryChange={onQueryChange}
             onShowInspector={vi.fn()}
@@ -191,6 +192,7 @@ describe("commercial library filters", () => {
           item={item}
           mode="grid"
           onFavorite={vi.fn()}
+          onInspect={vi.fn()}
           onOpenPreview={vi.fn()}
           onSelect={vi.fn()}
           selected={false}

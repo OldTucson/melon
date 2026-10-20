@@ -70,7 +70,7 @@ export function BulkActionBar({
   loadedPatterns: PatternItem[];
 }) {
   const selectedIds = useSelectionStore((state) => state.selectedIds);
-  const clear = useSelectionStore((state) => state.clear);
+  const clearSelected = useSelectionStore((state) => state.clearSelected);
   const selectAll = useSelectionStore((state) => state.selectAll);
   const [moveOpen, setMoveOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
@@ -143,7 +143,7 @@ export function BulkActionBar({
                 if (checked === true) {
                   selectAll(loadedPatterns.map((pattern) => pattern.id));
                 } else {
-                  clear();
+                  clearSelected();
                 }
               }}
             >
@@ -240,7 +240,7 @@ export function BulkActionBar({
           >
             <Trash2 aria-hidden="true" />
           </ActionButton>
-          <ActionButton label="清除选择" onClick={clear}>
+          <ActionButton label="清除选择" onClick={clearSelected}>
             <X aria-hidden="true" />
           </ActionButton>
           {tooMany ? (

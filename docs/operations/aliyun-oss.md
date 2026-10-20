@@ -1,6 +1,6 @@
 # 阿里云 OSS 运行配置
 
-本文只描述 `melon` 的 OSS 安全边界和上线检查。最后核对日期：2026-10-13。阿里云控制台名称可能调整；权限含义以本文链接的官方文档为准。
+本文只描述 `melon` 的 OSS 安全边界和上线检查。最后核对日期：2026-10-20。阿里云控制台名称可能调整；权限含义以本文链接的官方文档为准。
 
 ## 访问模型
 
@@ -15,11 +15,11 @@ Bucket 必须是 `melon` 专用的私有 Bucket。浏览器不持有长期 Acces
 对象键只允许以下两种规范结构，其中所有 ID 都是 UUID，扩展名固定为小写：
 
 ```text
-users/{OWNER_UUID}/patterns/{PATTERN_UUID}/source/{ASSET_UUID}.{psd|ai|jpg|jpeg|png|procreate}
+users/{OWNER_UUID}/patterns/{PATTERN_UUID}/source/{ASSET_UUID}.{psd|ai|pdf|jpg|jpeg|png|procreate}
 users/{OWNER_UUID}/patterns/{PATTERN_UUID}/derived/{ASSET_UUID}.{jpg|jpeg|png|webp}
 ```
 
-`source` 保存原始资产，只接受产品批准的原文件格式；`derived` 保存 preview 和 thumbnail 等派生资产，只接受 JPG、PNG 或 WebP 图像。WebP 仅允许用于派生资产，不能声明为 source。派生角色由数据库记录和调用方区分，不编码进对象键。每个派生对象必须使用自己的资产 UUID；preview 和 thumbnail 禁止复用同一资产 UUID，否则会解析为同一个 OSS key。应用使用 `assertDistinctDerivedAssetIds` 在生成这两个派生键前验证这一约束。对象键不包含邮箱、用户名、图案名或原始文件名。
+`source` 保存原始资产，只接受产品批准的原文件格式（包括 PDF）；`derived` 保存 preview 和 thumbnail 等派生资产，只接受 JPG、PNG 或 WebP 图像。WebP 仅允许用于派生资产，不能声明为 source。派生角色由数据库记录和调用方区分，不编码进对象键。每个派生对象必须使用自己的资产 UUID；preview 和 thumbnail 禁止复用同一资产 UUID，否则会解析为同一个 OSS key。应用使用 `assertDistinctDerivedAssetIds` 在生成这两个派生键前验证这一约束。对象键不包含邮箱、用户名、图案名或原始文件名。
 
 生成对象键、STS policy 和归属校验时，合法 UUID 输入会先规范为与 PostgreSQL `uuid` 文本输出一致的小写形式。解析已存在的对象键时不做宽松修复：只接受完整的小写规范 key，大写 UUID 或其他等价写法一律 fail closed。这样数据库值、policy resource 与归属比较只有一种文本表示。
 
@@ -153,6 +153,18 @@ Multipart part 不会自行过期。创建启用状态的生命周期规则：
 
 该规则只回收未完成 part，不在此规则中自动删除已完成对象。应用仍会在用户明确放弃时调用 abort；生命周期规则是断网、进程退出或 abort 失败时的兜底。参见[OSS 生命周期概览](https://www.alibabacloud.com/help/en/oss/user-guide/overview-54/)和[基于最后修改时间的生命周期规则](https://www.alibabacloud.com/help/en/oss/user-guide/lifecycle-rules-based-on-the-last-modified-time)。
 
+## 手动预览清理
+
+手动 JPG/PNG 封面会在浏览器中生成至多 2048 px 的预览和 512 px 的缩略图，并使用普通 `PutObject` 上传，不创建 multipart part。该次 STS session policy 只允许初始化返回的两个精确 derived object key，不能写 source 或当前预览对象。
+
+上传取消、完成校验失败以及旧预览替换后的删除失败都会把待清理 key 持久化到 operation。即使取消时的即时删除已经成功，上传租约也会保留到 STS 凭证过期并经过在途写入缓冲期；清理命令随后会再次幂等删除同一组 key，防止迟到的 `PutObject` 重新留下孤立对象。它也会接管进程退出后遗留的初始化或验证状态。生产环境应每 5 分钟执行一次：
+
+```bash
+npm run preview:cleanup
+```
+
+命令可幂等重试；仍有 OSS 删除失败时以非零状态退出，便于 systemd timer 或监控告警。永久删除也会按图案前缀做最终兜底清理。
+
 ## 应用环境变量
 
 只填写资源标识和连接信息，示例值不是可用凭证：
@@ -175,7 +187,7 @@ OSS_ADAPTER=real
 - Bucket 版本控制保持关闭，状态为 `Disabled`。
 - 生产和开发 CORS 都是精确 origin，无通配 origin/header。
 - 中国大陆受影响账号的自定义域名、ICP 和 HTTPS 证书均生效。
-- 浏览器 STS 有效期为 900 秒，策略只有当前 owner/pattern 前缀和三项 action。
+- 浏览器 STS 有效期为 900 秒；源文件上传只覆盖当前 owner/pattern 前缀，手动预览只覆盖本次两个精确 derived key，二者都只有三项写入 action。
 - 浏览器凭证不能读取对象、列举 Bucket、访问其他图案或其他用户前缀。
 - 本地 RAM 调用者和 ECS 实例角色只能假设指定上传角色。
 - 本地 RAM 调用者和 ECS 实例角色能以 `users/` 下的图案前缀调用 `ListObjectsV2`，但不能列举 Bucket 根前缀或 `users/` 以外的对象；对象读取和删除仍只能访问 `BUCKET/users/*`。

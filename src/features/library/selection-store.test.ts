@@ -46,15 +46,49 @@ describe("library selection store", () => {
     expect(store.getState().anchorId).toBe("b");
   });
 
-  it("clears selection and preview on Escape", () => {
+  it("clears selection, inspector, and preview on Escape", () => {
     store.getState().select("c", orderedIds, {});
+    store.getState().openInspector(["c"]);
     store.getState().openPreview("c");
     store.getState().clear();
 
     expect(store.getState()).toMatchObject({
       selectedIds: [],
       anchorId: null,
+      inspectorIds: [],
       previewId: null,
+    });
+  });
+
+  it("tracks inspector targets independently from checkbox selection", () => {
+    store.getState().select("b", orderedIds, {});
+    store.getState().openInspector(["d"]);
+
+    expect(store.getState()).toMatchObject({
+      selectedIds: ["b"],
+      inspectorIds: ["d"],
+    });
+
+    store.getState().closeInspector();
+
+    expect(store.getState()).toMatchObject({
+      selectedIds: ["b"],
+      inspectorIds: [],
+    });
+  });
+
+  it("clears only checkbox selection without closing inspector or preview", () => {
+    store.getState().select("b", orderedIds, {});
+    store.getState().openInspector(["d"]);
+    store.getState().openPreview("c");
+
+    store.getState().clearSelected();
+
+    expect(store.getState()).toMatchObject({
+      anchorId: null,
+      selectedIds: [],
+      inspectorIds: ["d"],
+      previewId: "c",
     });
   });
 
@@ -70,6 +104,7 @@ describe("library selection store", () => {
   it("removes selections and previews that disappear from the result set", () => {
     store.getState().select("b", orderedIds, {});
     store.getState().select("d", orderedIds, { metaKey: true });
+    store.getState().openInspector(["b"]);
     store.getState().openPreview("b");
 
     store.getState().reconcile(["a", "d", "e"]);
@@ -77,6 +112,7 @@ describe("library selection store", () => {
     expect(store.getState()).toMatchObject({
       selectedIds: ["d"],
       anchorId: "d",
+      inspectorIds: [],
       previewId: null,
     });
   });

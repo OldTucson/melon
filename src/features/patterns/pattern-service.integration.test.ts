@@ -27,7 +27,7 @@ type SeedPattern = {
   ownerId: string;
   name: string;
   originalFilename?: string;
-  extension?: "psd" | "ai" | "jpg" | "jpeg" | "png" | "procreate";
+  extension?: "psd" | "ai" | "pdf" | "jpg" | "jpeg" | "png" | "procreate";
   sizeBytes?: bigint;
   folderId?: string | null;
   status?: (typeof patternStatuses)[number];

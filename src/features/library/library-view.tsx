@@ -93,19 +93,21 @@ export function LibraryView({
       )
     : undefined;
   const [viewMode, setViewMode] = useState<LibraryViewMode>("grid");
-  const [collapsedSelectionKey, setCollapsedSelectionKey] = useState<
+  const [collapsedInspectorKey, setCollapsedInspectorKey] = useState<
     string | null
   >(null);
   const uploadTasks = useUploadStore((state) => state.tasks);
+  const inspectorIds = useSelectionStore((state) => state.inspectorIds);
   const selectedIds = useSelectionStore((state) => state.selectedIds);
   const previewId = useSelectionStore((state) => state.previewId);
   const select = useSelectionStore((state) => state.select);
   const clearSelection = useSelectionStore((state) => state.clear);
+  const closeInspector = useSelectionStore((state) => state.closeInspector);
   const closePreview = useSelectionStore((state) => state.closePreview);
+  const openInspector = useSelectionStore((state) => state.openInspector);
   const openPreview = useSelectionStore((state) => state.openPreview);
   const reconcileSelection = useSelectionStore((state) => state.reconcile);
   const togglePreview = useSelectionStore((state) => state.togglePreview);
-  const appliedInitialSelectedId = useRef<string | null>(null);
   const mutation = usePatternPatchMutation(initialQuery);
   const querySignature = serializeLibrarySearchParams(initialQuery).toString();
   const patternsQuery = useInfiniteQuery<
@@ -124,9 +126,9 @@ export function LibraryView({
     () => patternsQuery.data?.pages.flatMap((page) => page.items) ?? [],
     [patternsQuery.data],
   );
-  const soleSelectedId = selectedIds.length === 1 ? selectedIds[0] : undefined;
-  const soleSelectedPattern = soleSelectedId
-    ? items.find((pattern) => pattern.id === soleSelectedId)
+  const soleInspectorId = inspectorIds.length === 1 ? inspectorIds[0] : undefined;
+  const soleInspectorPattern = soleInspectorId
+    ? items.find((pattern) => pattern.id === soleInspectorId)
     : undefined;
   const activeLocalPatternIds = useMemo(
     () =>
@@ -142,28 +144,23 @@ export function LibraryView({
       ),
     [uploadTasks],
   );
-  const transientSelectedId = isTransientPatternStatus(
-    soleSelectedPattern?.status,
-  )
-    ? soleSelectedId
-    : undefined;
-  const deepLinkNeedsFetch =
-    Boolean(initialSelectedId) &&
-    (selectedIds.length === 0 || soleSelectedId === initialSelectedId);
   const watchedPatternId =
-    transientSelectedId ?? (deepLinkNeedsFetch ? initialSelectedId : undefined);
+    soleInspectorId &&
+    (!soleInspectorPattern || isTransientPatternStatus(soleInspectorPattern.status))
+      ? soleInspectorId
+      : undefined;
   const locallyActiveWatch = activeLocalPatternIds.has(watchedPatternId ?? "");
   const watch = useRef<{
     patternId?: string;
     startedAt?: number;
   }>({});
-  const selectedPatternQuery = useQuery({
+  const inspectedPatternQuery = useQuery({
     queryKey: queryKeys.pattern(ownerId, watchedPatternId ?? "none"),
     queryFn: () => fetchPattern(watchedPatternId!),
     enabled: Boolean(watchedPatternId) && !locallyActiveWatch,
     refetchInterval: (query) => {
       if (locallyActiveWatch) return false;
-      const status = query.state.data?.status ?? soleSelectedPattern?.status;
+      const status = query.state.data?.status ?? soleInspectorPattern?.status;
       if (query.state.error) {
         return query.state.error instanceof ApiResponseError &&
           query.state.error.status === 404
@@ -192,67 +189,68 @@ export function LibraryView({
     },
     refetchIntervalInBackground: false,
   });
-  const selectedDetailPattern =
-    selectedPatternQuery.data &&
-    libraryStatuses.has(selectedPatternQuery.data.status)
-      ? selectedPatternQuery.data
+  const inspectedDetailPattern =
+    inspectedPatternQuery.data &&
+    libraryStatuses.has(inspectedPatternQuery.data.status)
+      ? inspectedPatternQuery.data
       : null;
   const displayItems = useMemo(
     () =>
-      selectedDetailPattern
+      inspectedDetailPattern
         ? items.map((item) =>
-            item.id === selectedDetailPattern.id ? selectedDetailPattern : item,
+            item.id === inspectedDetailPattern.id ? inspectedDetailPattern : item,
           )
         : items,
-    [items, selectedDetailPattern],
+    [items, inspectedDetailPattern],
   );
   const orderedIds = useMemo(
     () => displayItems.map((item) => item.id),
     [displayItems],
   );
   const availableIds = useMemo(
-    () =>
-      selectedDetailPattern && !orderedIds.includes(selectedDetailPattern.id)
-        ? [...orderedIds, selectedDetailPattern.id]
-        : orderedIds,
-    [selectedDetailPattern, orderedIds],
+    () => {
+      const detailId = inspectedDetailPattern?.id ?? initialSelectedId;
+      return detailId && !orderedIds.includes(detailId)
+        ? [...orderedIds, detailId]
+        : orderedIds;
+    },
+    [initialSelectedId, inspectedDetailPattern, orderedIds],
   );
   const patternsById = useMemo(() => {
     const result = new Map(displayItems.map((item) => [item.id, item]));
-    if (selectedDetailPattern) {
-      result.set(selectedDetailPattern.id, selectedDetailPattern);
+    if (inspectedDetailPattern) {
+      result.set(inspectedDetailPattern.id, inspectedDetailPattern);
     }
     return result;
-  }, [displayItems, selectedDetailPattern]);
+  }, [displayItems, inspectedDetailPattern]);
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
-  const selectedPatterns = useMemo(
+  const inspectorPatterns = useMemo(
     () =>
-      selectedIds.flatMap((id) => {
+      inspectorIds.flatMap((id) => {
         const pattern = patternsById.get(id);
         return pattern ? [pattern] : [];
       }),
-    [patternsById, selectedIds],
+    [inspectorIds, patternsById],
   );
   const previewPattern =
     displayItems.find((item) => item.id === previewId) ?? null;
-  const selectionKey = selectedIds.join("|");
+  const inspectorKey = inspectorIds.join("|");
+  const selectedKey = selectedIds.join("|");
   const inspectorCollapsed =
-    selectedIds.length > 0 && collapsedSelectionKey === selectionKey;
+    inspectorIds.length > 0 && collapsedInspectorKey === inspectorKey;
   const watchedPatternUnavailable = Boolean(
     watchedPatternId &&
-      ((selectedPatternQuery.error instanceof ApiResponseError &&
-        selectedPatternQuery.error.status === 404) ||
-        (selectedPatternQuery.data &&
-          !libraryStatuses.has(selectedPatternQuery.data.status))),
+      ((inspectedPatternQuery.error instanceof ApiResponseError &&
+        inspectedPatternQuery.error.status === 404) ||
+        (inspectedPatternQuery.data &&
+          !libraryStatuses.has(inspectedPatternQuery.data.status))),
   );
 
   useEffect(() => {
     clearSelection();
     closePreview();
-    // Clearing a route's selection also invalidates its applied deep link.
-    // StrictMode replays this setup before replaying the selection effect.
-    appliedInitialSelectedId.current = null;
-  }, [clearSelection, closePreview, initialSelectedId, querySignature]);
+    if (initialSelectedId) openInspector([initialSelectedId]);
+  }, [clearSelection, closePreview, initialSelectedId, openInspector, querySignature]);
 
   useEffect(() => {
     if (!watchedPatternId || !watchedPatternUnavailable) return;
@@ -272,11 +270,14 @@ export function LibraryView({
           : current,
     );
     if (selectedIds.includes(watchedPatternId)) clearSelection();
+    if (inspectorIds.includes(watchedPatternId)) closeInspector();
     if (previewId === watchedPatternId) closePreview();
   }, [
     clearSelection,
+    closeInspector,
     closePreview,
     initialQuery,
+    inspectorIds,
     ownerId,
     previewId,
     queryClient,
@@ -290,7 +291,20 @@ export function LibraryView({
   }, [availableIds, reconcileSelection]);
 
   useEffect(() => {
-    if (!selectedDetailPattern) return;
+    if (inspectorIds.length <= 1 || inspectorKey === selectedKey) return;
+    if (selectedIds.length > 0) openInspector(selectedIds);
+    else closeInspector();
+  }, [
+    closeInspector,
+    inspectorIds.length,
+    inspectorKey,
+    openInspector,
+    selectedIds,
+    selectedKey,
+  ]);
+
+  useEffect(() => {
+    if (!inspectedDetailPattern) return;
     queryClient.setQueryData<InfiniteData<PatternPage, string | null>>(
       queryKeys.patterns(ownerId, initialQuery),
       (current) =>
@@ -300,31 +314,15 @@ export function LibraryView({
               pages: current.pages.map((page) => ({
                 ...page,
                 items: page.items.map((item) =>
-                  item.id === selectedDetailPattern.id
-                    ? selectedDetailPattern
+                  item.id === inspectedDetailPattern.id
+                    ? inspectedDetailPattern
                     : item,
                 ),
               })),
             }
           : current,
     );
-  }, [initialQuery, ownerId, queryClient, selectedDetailPattern]);
-
-  useEffect(() => {
-    if (!initialSelectedId) {
-      appliedInitialSelectedId.current = null;
-      return;
-    }
-    if (
-      !selectedDetailPattern ||
-      appliedInitialSelectedId.current === initialSelectedId
-    ) {
-      return;
-    }
-    select(initialSelectedId, availableIds, {});
-    setCollapsedSelectionKey(null);
-    appliedInitialSelectedId.current = initialSelectedId;
-  }, [availableIds, initialSelectedId, querySignature, select, selectedDetailPattern]);
+  }, [initialQuery, inspectedDetailPattern, ownerId, queryClient]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -358,7 +356,7 @@ export function LibraryView({
     router.replace(`${pathname}${next ? `?${next}` : ""}`);
   };
 
-  const showInspector = selectedIds.length > 0 && !inspectorCollapsed;
+  const showInspector = inspectorPatterns.length > 0 && !inspectorCollapsed;
 
   return (
     <main
@@ -399,9 +397,10 @@ export function LibraryView({
         <div className="library-controls">
           <LibraryToolbar
             key={querySignature}
+            inspectorAvailable={inspectorPatterns.length > 0}
             inspectorHidden={inspectorCollapsed}
             onQueryChange={updateQuery}
-            onShowInspector={() => setCollapsedSelectionKey(null)}
+            onShowInspector={() => setCollapsedInspectorKey(null)}
             onViewModeChange={setViewMode}
             query={initialQuery}
             resultCount={items.length}
@@ -453,6 +452,14 @@ export function LibraryView({
                 : undefined
             }
             onLoadMore={() => void patternsQuery.fetchNextPage()}
+            onInspect={(id) => {
+              openInspector(
+                selectedIds.length > 1 && selectedIds.includes(id)
+                  ? selectedIds
+                  : [id],
+              );
+              setCollapsedInspectorKey(null);
+            }}
             onOpenPreview={openPreview}
             onSelect={(id, modifiers) => select(id, orderedIds, modifiers)}
             selectedIds={selectedSet}
@@ -460,28 +467,28 @@ export function LibraryView({
         )}
       </section>
 
-      {showInspector && selectedPatterns.length === 1 ? (
+      {showInspector && inspectorPatterns.length === 1 ? (
         <Inspector
-          key={selectedPatterns[0]!.id}
+          key={inspectorPatterns[0]!.id}
           activeQuery={initialQuery}
-          onCollapse={() => setCollapsedSelectionKey(selectionKey)}
-          pattern={selectedPatterns[0]!}
+          onCollapse={() => setCollapsedInspectorKey(inspectorKey)}
+          pattern={inspectorPatterns[0]!}
           statusCheck={
-            isTransientPatternStatus(selectedPatterns[0]!.status)
+            isTransientPatternStatus(inspectorPatterns[0]!.status)
               ? {
-                  isError: selectedPatternQuery.isError,
-                  isFetching: selectedPatternQuery.isFetching,
-                  refetch: () => void selectedPatternQuery.refetch(),
+                  isError: inspectedPatternQuery.isError,
+                  isFetching: inspectedPatternQuery.isFetching,
+                  refetch: () => void inspectedPatternQuery.refetch(),
                 }
               : undefined
           }
         />
       ) : null}
-      {showInspector && selectedPatterns.length > 1 ? (
+      {showInspector && inspectorPatterns.length > 1 ? (
         <MultiSelectionInspector
           activeQuery={initialQuery}
-          patterns={selectedPatterns}
-          onCollapse={() => setCollapsedSelectionKey(selectionKey)}
+          patterns={inspectorPatterns}
+          onCollapse={() => setCollapsedInspectorKey(inspectorKey)}
         />
       ) : null}
 

@@ -38,6 +38,16 @@ describe("upload request contracts", () => {
     ).toMatchObject({ sizeBytes: 209_715_200 });
   });
 
+  it("accepts PDF as a standalone source format", () => {
+    expect(
+      parseUploadInit({
+        ...validInit(),
+        originalFilename: "Pattern catalog.PDF",
+        extension: "pdf",
+      }),
+    ).toMatchObject({ originalFilename: "Pattern catalog.PDF", extension: "pdf" });
+  });
+
   it("maps an oversized declaration to its stable error code", () => {
     expect(() =>
       parseUploadInit({

@@ -149,24 +149,42 @@ function renderLibrary(
   };
 }
 
+function inspectPattern(name: string) {
+  fireEvent.click(
+    screen.getByRole("button", { name: `打开 ${name} 检查器` }),
+  );
+}
+
+function selectPattern(name: string) {
+  fireEvent.click(screen.getByRole("checkbox", { name: `选择 ${name}` }));
+}
+
 describe("Mac-first workspace", () => {
-  it("preserves a selected deep link through StrictMode effect replay", () => {
+  it("preserves an inspected deep link through StrictMode effect replay", () => {
     const item = makePattern(1);
     const client = createClient([item]);
     render(<StrictMode>{libraryTree(client, query, item.id)}</StrictMode>);
     expect(screen.getByRole("tab", { name: "商业授权" })).toBeVisible();
-    expect(screen.getByRole("checkbox", { name: "选择 Pattern 1" })).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: "选择 Pattern 1" }),
+    ).not.toBeChecked();
   });
 
-  it("updates deep links and clears selection on navigation without selected", () => {
+  it("updates inspector deep links and closes it on navigation without selected", () => {
     const first = makePattern(1);
     const second = makePattern(2);
     const client = createClient([first, second]);
     const view = render(libraryTree(client, query, first.id));
     view.rerender(libraryTree(client, query, second.id));
-    expect(screen.getByRole("checkbox", { name: "选择 Pattern 2" })).toBeChecked();
+    expect(
+      within(
+        screen.getByRole("complementary", { name: "图案检查器" }),
+      ).getByText("Pattern 2"),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("checkbox", { name: "选择 Pattern 2" }),
+    ).not.toBeChecked();
     view.rerender(libraryTree(client, query));
-    expect(screen.getByRole("checkbox", { name: "选择 Pattern 2" })).not.toBeChecked();
     expect(screen.queryByRole("tab", { name: "商业授权" })).not.toBeInTheDocument();
   });
 
@@ -185,6 +203,7 @@ describe("Mac-first workspace", () => {
         .getState()
         .selectAll(items.slice(0, 2).map((item) => item.id)),
     );
+    inspectPattern("Pattern 1");
     let inspector = within(
       screen.getByRole("complementary", { name: "图案检查器" }),
     );
@@ -228,7 +247,7 @@ describe("Mac-first workspace", () => {
     client.setQueryData(queryKeys.folders(ownerId), [folder]);
     vi.mocked(fetch).mockImplementation(() => new Promise(() => {}));
     render(libraryTree(client));
-    act(() => useSelectionStore.getState().selectAll([item.id]));
+    inspectPattern(item.name);
     const inspector = within(
       screen.getByRole("complementary", { name: "图案检查器" }),
     );
@@ -269,6 +288,7 @@ describe("Mac-first workspace", () => {
       act(() =>
         useSelectionStore.getState().selectAll(items.map((item) => item.id)),
       );
+      inspectPattern(items[0]!.name);
       const inspector = within(
         screen.getByRole("complementary", { name: "图案检查器" }),
       );
@@ -319,6 +339,7 @@ describe("Mac-first workspace", () => {
     act(() =>
       useSelectionStore.getState().selectAll(items.map((item) => item.id)),
     );
+    inspectPattern(items[0]!.name);
     const inspector = within(
       screen.getByRole("complementary", { name: "图案检查器" }),
     );
@@ -354,7 +375,7 @@ describe("Mac-first workspace", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     renderLibrary([processing]);
-    act(() => useSelectionStore.getState().selectAll([processing.id]));
+    inspectPattern(processing.name);
 
     expect(screen.getAllByText("图案正在完成上传")).not.toHaveLength(0);
     await act(async () => vi.advanceTimersByTimeAsync(4_999));
@@ -377,7 +398,7 @@ describe("Mac-first workspace", () => {
   it("locks direct metadata mutations while the selected pattern is processing", () => {
     const processing = { ...makePattern(1), status: "processing" as const };
     renderLibrary([processing]);
-    act(() => useSelectionStore.getState().selectAll([processing.id]));
+    inspectPattern(processing.name);
 
     const inspector = within(
       screen.getByRole("complementary", { name: "图案检查器" }),
@@ -399,6 +420,20 @@ describe("Mac-first workspace", () => {
     ).toBeDisabled();
   });
 
+  it("disables manual preview replacement for a failed upload record", () => {
+    const failed = {
+      ...makePattern(1),
+      status: "failed" as const,
+      previewStatus: "failed" as const,
+    };
+    renderLibrary([failed]);
+    inspectPattern(failed.name);
+
+    expect(
+      screen.getByRole("button", { name: "更新预览" }),
+    ).toBeDisabled();
+  });
+
   it("retries a failed first status request at the low-frequency interval", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-15T00:00:30.000Z"));
@@ -416,7 +451,7 @@ describe("Mac-first workspace", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
     render(libraryTree(client));
-    act(() => useSelectionStore.getState().selectAll([processing.id]));
+    inspectPattern(processing.name);
 
     await act(async () => {
       await Promise.resolve();
@@ -429,7 +464,7 @@ describe("Mac-first workspace", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("clears a stale selection after the detail endpoint returns 404", async () => {
+  it("closes a stale inspector after the detail endpoint returns 404", async () => {
     const processing = { ...makePattern(1), status: "processing" as const };
     vi.mocked(fetch).mockResolvedValue(
       Response.json(
@@ -438,7 +473,7 @@ describe("Mac-first workspace", () => {
       ),
     );
     renderLibrary([processing]);
-    act(() => useSelectionStore.getState().selectAll([processing.id]));
+    inspectPattern(processing.name);
 
     fireEvent.click(screen.getByRole("button", { name: "重新检查" }));
 
@@ -452,13 +487,13 @@ describe("Mac-first workspace", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("clears a stale selection after the detail leaves the library", async () => {
+  it("closes a stale inspector after the detail leaves the library", async () => {
     const processing = { ...makePattern(1), status: "processing" as const };
     vi.mocked(fetch).mockResolvedValue(
       Response.json({ ...processing, status: "trashed" as const }),
     );
     renderLibrary([processing]);
-    act(() => useSelectionStore.getState().selectAll([processing.id]));
+    inspectPattern(processing.name);
 
     fireEvent.click(screen.getByRole("button", { name: "重新检查" }));
 
@@ -497,7 +532,7 @@ describe("Mac-first workspace", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     renderLibrary([processing]);
-    act(() => useSelectionStore.getState().selectAll([processing.id]));
+    inspectPattern(processing.name);
 
     await act(async () => vi.advanceTimersByTimeAsync(30_000));
 
@@ -539,7 +574,7 @@ describe("Mac-first workspace", () => {
     const fetchMock = vi.fn(async () => Response.json(processing));
     vi.stubGlobal("fetch", fetchMock);
     renderLibrary([processing]);
-    act(() => useSelectionStore.getState().selectAll([processing.id]));
+    inspectPattern(processing.name);
 
     await act(async () => vi.advanceTimersByTimeAsync(5_000));
 
@@ -563,7 +598,7 @@ describe("Mac-first workspace", () => {
       vi.stubGlobal("fetch", fetchMock);
       pause();
       renderLibrary([processing]);
-      act(() => useSelectionStore.getState().selectAll([processing.id]));
+      inspectPattern(processing.name);
 
       await act(async () => vi.advanceTimersByTimeAsync(10_000));
 
@@ -588,7 +623,7 @@ describe("Mac-first workspace", () => {
       .mockResolvedValueOnce(Response.json(ready));
     vi.stubGlobal("fetch", fetchMock);
     renderLibrary([processing]);
-    act(() => useSelectionStore.getState().selectAll([processing.id]));
+    inspectPattern(processing.name);
 
     fireEvent.click(screen.getByRole("button", { name: "重新检查" }));
     expect(await screen.findByText("状态暂时无法更新")).toBeInTheDocument();
@@ -612,6 +647,7 @@ describe("Mac-first workspace", () => {
     act(() =>
       useSelectionStore.getState().selectAll(items.map((item) => item.id)),
     );
+    inspectPattern(items[0]!.name);
     const inspector = within(
       screen.getByRole("complementary", { name: "图案检查器" }),
     );
@@ -631,6 +667,7 @@ describe("Mac-first workspace", () => {
     act(() =>
       useSelectionStore.getState().selectAll(items.map((item) => item.id)),
     );
+    inspectPattern(items[0]!.name);
     fireEvent.click(
       within(
         screen.getByRole("complementary", { name: "图案检查器" }),
@@ -1000,19 +1037,21 @@ describe("Mac-first workspace", () => {
     renderLibrary([makePattern(1), makePattern(2)]);
 
     const first = await screen.findByRole("listitem", { name: /Pattern 1/ });
-    await user.click(first);
+    await user.click(
+      screen.getByRole("checkbox", { name: "选择 Pattern 1" }),
+    );
     expect(first).toHaveAttribute("data-selected", "true");
     expect(fetchMock).not.toHaveBeenCalled();
 
-    await user.keyboard(" ");
+    fireEvent.keyDown(document.body, { key: " " });
     expect(
       screen.getByRole("dialog", { name: "Pattern 1 预览" }),
     ).toBeVisible();
-    await user.keyboard("{Escape}");
+    fireEvent.keyDown(document.body, { key: "Escape" });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(first).toHaveAttribute("data-selected", "true");
 
-    await user.keyboard("{Escape}");
+    fireEvent.keyDown(document.body, { key: "Escape" });
     expect(first).not.toHaveAttribute("data-selected", "true");
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -1035,15 +1074,42 @@ describe("Mac-first workspace", () => {
     expect(
       screen.getByRole("checkbox", { name: "选择 Pattern 2" }),
     ).not.toBeChecked();
+    expect(
+      screen.queryByRole("complementary", { name: "图案检查器" }),
+    ).not.toBeInTheDocument();
   });
 
-  it("forwards Control clicks for additive card selection", () => {
+  it("opens the inspector from the image area without selecting the pattern", () => {
+    renderLibrary([makePattern(1)]);
+
+    fireEvent.click(document.querySelector(".pattern-media")!);
+
+    expect(
+      screen.getByRole("complementary", { name: "图案检查器" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("checkbox", { name: "选择 Pattern 1" }),
+    ).not.toBeChecked();
+  });
+
+  it("does not inspect a pattern from its metadata area", () => {
+    renderLibrary([makePattern(1)]);
+
+    fireEvent.click(screen.getByText("Pattern 1"));
+
+    expect(
+      screen.queryByRole("complementary", { name: "图案检查器" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("checkbox", { name: "选择 Pattern 1" }),
+    ).not.toBeChecked();
+  });
+
+  it("uses card checkboxes for additive selection", () => {
     renderLibrary([makePattern(1), makePattern(2)]);
 
-    fireEvent.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
-    fireEvent.click(screen.getByRole("listitem", { name: /Pattern 2/ }), {
-      ctrlKey: true,
-    });
+    selectPattern("Pattern 1");
+    selectPattern("Pattern 2");
 
     expect(
       screen.getByRole("checkbox", { name: "选择 Pattern 1" }),
@@ -1051,6 +1117,60 @@ describe("Mac-first workspace", () => {
     expect(
       screen.getByRole("checkbox", { name: "选择 Pattern 2" }),
     ).toBeChecked();
+  });
+
+  it("reduces a multi-selection inspector to the remaining checked pattern", async () => {
+    renderLibrary([makePattern(1), makePattern(2)]);
+    selectPattern("Pattern 1");
+    selectPattern("Pattern 2");
+    inspectPattern("Pattern 1");
+
+    expect(
+      within(
+        screen.getByRole("complementary", { name: "图案检查器" }),
+      ).getByText("已选择 2 个图案"),
+    ).toBeVisible();
+
+    selectPattern("Pattern 2");
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("textbox", { name: "图案名称" }),
+      ).toHaveValue("Pattern 1"),
+    );
+    expect(
+      screen.getByRole("checkbox", { name: "选择 Pattern 1" }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: "选择 Pattern 2" }),
+    ).not.toBeChecked();
+  });
+
+  it("clears checkbox selection without closing an independent inspector", async () => {
+    const user = userEvent.setup();
+    renderLibrary([makePattern(1), makePattern(2)]);
+    inspectPattern("Pattern 1");
+    selectPattern("Pattern 1");
+    selectPattern("Pattern 2");
+
+    await user.click(
+      screen.getByRole("checkbox", { name: "选择所有已加载图案" }),
+    );
+
+    expect(
+      screen.getByRole("complementary", { name: "图案检查器" }),
+    ).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "图案名称" })).toHaveValue(
+      "Pattern 1",
+    );
+    expect(
+      screen.getAllByRole("checkbox", { name: /选择 Pattern/ }),
+    ).toHaveLength(2);
+    for (const checkbox of screen.getAllByRole("checkbox", {
+      name: /选择 Pattern/,
+    })) {
+      expect(checkbox).not.toBeChecked();
+    }
   });
 
   it("selects every loaded result from the bulk selection checkbox", async () => {
@@ -1079,7 +1199,9 @@ describe("Mac-first workspace", () => {
     const user = userEvent.setup();
     renderLibrary([makePattern(1)]);
 
-    await user.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
+    await user.click(
+      screen.getByRole("checkbox", { name: "选择 Pattern 1" }),
+    );
     const listView = screen.getByRole("button", { name: "列表视图" });
     listView.focus();
     await user.keyboard(" ");
@@ -1093,7 +1215,12 @@ describe("Mac-first workspace", () => {
     renderLibrary([makePattern(1)]);
 
     const card = screen.getByRole("listitem", { name: /Pattern 1/ });
-    await user.click(card);
+    await user.click(
+      screen.getByRole("checkbox", { name: "选择 Pattern 1" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "打开 Pattern 1 检查器" }),
+    );
     const nameInput = screen.getByRole("textbox", { name: "图案名称" });
     nameInput.focus();
     await user.keyboard("{Escape}");
@@ -1124,7 +1251,9 @@ describe("Mac-first workspace", () => {
     });
 
     const card = screen.getByRole("listitem", { name: /Pattern 1/ });
-    await user.click(card);
+    await user.click(
+      screen.getByRole("checkbox", { name: "选择 Pattern 1" }),
+    );
     await user.click(screen.getByRole("button", { name: "筛选标签" }));
     expect(screen.getByRole("menu")).toBeVisible();
     await user.keyboard("{Escape}");
@@ -1137,7 +1266,7 @@ describe("Mac-first workspace", () => {
     const item = makePattern(1);
     const { client } = renderLibrary([item]);
 
-    fireEvent.click(await screen.findByRole("listitem", { name: /Pattern 1/ }));
+    selectPattern("Pattern 1");
     expect(
       within(screen.getByLabelText("图库工具栏")).getByText("已选择 1 项"),
     ).toBeVisible();
@@ -1161,7 +1290,7 @@ describe("Mac-first workspace", () => {
   it("clears selection when the active query changes", async () => {
     const item = makePattern(1);
     const view = renderLibrary([item]);
-    fireEvent.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
+    selectPattern("Pattern 1");
     expect(
       screen.getByRole("checkbox", { name: "选择 Pattern 1" }),
     ).toBeChecked();
@@ -1246,7 +1375,9 @@ describe("Mac-first workspace", () => {
     const layout = document.querySelector(".library-layout");
     expect(layout).not.toHaveAttribute("data-inspector");
     const first = await screen.findByRole("listitem", { name: /Pattern 1/ });
-    await user.click(first);
+    await user.click(
+      screen.getByRole("button", { name: "打开 Pattern 1 检查器" }),
+    );
     expect(layout).toHaveAttribute("data-inspector", "open");
     expect(
       screen.getByRole("complementary", { name: "图案检查器" }),
@@ -1263,10 +1394,14 @@ describe("Mac-first workspace", () => {
       screen.getByRole("complementary", { name: "图案检查器" }),
     ).toBeVisible();
 
-    fireEvent.doubleClick(first.querySelector(".pattern-media")!);
+    const checkbox = screen.getByRole("checkbox", {
+      name: "选择 Pattern 1",
+    });
+    await user.dblClick(first.querySelector(".pattern-media")!);
     expect(
       screen.getByRole("dialog", { name: "Pattern 1 预览" }),
     ).toBeVisible();
+    expect(checkbox).not.toBeChecked();
   });
 
   it("debounces name changes for 400 ms and flushes the latest name on blur", async () => {
@@ -1285,7 +1420,7 @@ describe("Mac-first workspace", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderLibrary([item]);
 
-    fireEvent.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
+    inspectPattern(item.name);
     const input = screen.getByRole("textbox", { name: "图案名称" });
     fireEvent.change(input, { target: { value: "New pattern name" } });
 
@@ -1324,7 +1459,7 @@ describe("Mac-first workspace", () => {
     vi.stubGlobal("fetch", fetchMock);
     const view = renderLibrary([item]);
 
-    fireEvent.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
+    inspectPattern(item.name);
     fireEvent.change(screen.getByRole("textbox", { name: "图案名称" }), {
       target: { value: "Flush on unmount" },
     });
@@ -1368,7 +1503,7 @@ describe("Mac-first workspace", () => {
     vi.stubGlobal("fetch", fetchMock);
     const { client } = renderLibrary([item]);
 
-    fireEvent.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
+    inspectPattern(item.name);
     const input = screen.getByRole("textbox", { name: "图案名称" });
     const externallyRenamed = { ...item, name: "Server name", version: 1 };
     act(() => {
@@ -1424,7 +1559,7 @@ describe("Mac-first workspace", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderLibrary([item]);
 
-    fireEvent.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
+    inspectPattern(item.name);
     const input = screen.getByRole("textbox", { name: "图案名称" });
     fireEvent.change(input, { target: { value: "Rejected name" } });
     await act(async () => {
@@ -1458,7 +1593,7 @@ describe("Mac-first workspace", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderLibrary([item]);
 
-    fireEvent.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
+    inspectPattern(item.name);
     const input = screen.getByRole("textbox", { name: "图案名称" });
     fireEvent.change(input, { target: { value: "   " } });
     await act(async () => vi.advanceTimersByTimeAsync(400));
@@ -1485,7 +1620,7 @@ describe("Mac-first workspace", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderLibrary([item]);
 
-    fireEvent.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
+    inspectPattern(item.name);
     const input = screen.getByRole("textbox", { name: "图案名称" });
     fireEvent.change(input, { target: { value: "One request" } });
     await act(async () => {
@@ -1523,7 +1658,7 @@ describe("Mac-first workspace", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderLibrary([item]);
 
-    fireEvent.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
+    inspectPattern(item.name);
     const input = screen.getByRole("textbox", { name: "图案名称" });
     fireEvent.change(input, { target: { value: "First name" } });
     await act(async () => vi.advanceTimersByTimeAsync(400));
@@ -1587,7 +1722,7 @@ describe("Mac-first workspace", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderLibrary([item]);
 
-    fireEvent.click(screen.getByRole("listitem", { name: /Pattern 1/ }));
+    inspectPattern(item.name);
     fireEvent.change(screen.getByRole("textbox", { name: "图案名称" }), {
       target: { value: "Renamed first" },
     });

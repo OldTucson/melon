@@ -21,6 +21,7 @@ import {
 const issueInputSchema = z.object({
   ownerId: normalizedUuidSchema,
   patternId: normalizedUuidSchema,
+  objectKeys: z.array(z.string().min(1)).min(1).max(3).optional(),
 });
 
 type FakeCredentialIssuerOptions = Partial<
@@ -158,7 +159,11 @@ export class FakeOssAdapter implements OssAdapter {
 }
 
 export class FakeCredentialIssuer implements BrowserCredentialIssuer {
-  readonly issues: Array<{ ownerId: string; patternId: string }> = [];
+  readonly issues: Array<{
+    ownerId: string;
+    patternId: string;
+    objectKeys?: string[];
+  }> = [];
   private readonly config: Required<
     Pick<
       BrowserOssCredentials,
@@ -178,7 +183,11 @@ export class FakeCredentialIssuer implements BrowserCredentialIssuer {
     this.now = options.now ?? (() => new Date());
   }
 
-  async issue(input: { ownerId: string; patternId: string }) {
+  async issue(input: {
+    ownerId: string;
+    patternId: string;
+    objectKeys?: readonly string[];
+  }) {
     const parsed = issueInputSchema.parse(input);
     this.issues.push(parsed);
     this.sequence += 1;

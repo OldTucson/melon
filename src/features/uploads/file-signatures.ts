@@ -12,6 +12,7 @@ export type DetectedFileSignature =
   | { format: "png"; mimeType: "image/png" }
   | { format: "webp"; mimeType: "image/webp" }
   | { format: "psd"; mimeType: "image/vnd.adobe.photoshop" }
+  | { format: "pdf"; mimeType: "application/pdf" }
   | { format: "ai-pdf"; mimeType: "application/pdf" }
   | { format: "ai-postscript"; mimeType: "application/postscript" }
   | { format: "procreate"; mimeType: "application/zip" };
@@ -40,6 +41,7 @@ export function requiredSignatureBytes(extension: VerifiableExtension) {
   if (extension === "jpg" || extension === "jpeg") return JPEG.length;
   if (extension === "png") return PNG.length;
   if (extension === "psd") return PSD.length;
+  if (extension === "pdf") return PDF.length;
   if (extension === "ai") return POSTSCRIPT.length;
   if (extension === "webp") return 12;
   return ZIP_SIGNATURES[0].length;
@@ -57,6 +59,8 @@ export function detectFileSignature(
     result = { format: "png", mimeType: "image/png" };
   } else if (extension === "psd" && startsWith(bytes, PSD)) {
     result = { format: "psd", mimeType: "image/vnd.adobe.photoshop" };
+  } else if (extension === "pdf" && startsWith(bytes, PDF)) {
+    result = { format: "pdf", mimeType: "application/pdf" };
   } else if (
     extension === "webp" &&
     startsWith(bytes, RIFF) &&

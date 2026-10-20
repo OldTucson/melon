@@ -55,6 +55,7 @@ async function loadTags() {
 }
 
 export function LibraryToolbar({
+  inspectorAvailable,
   inspectorHidden,
   onQueryChange,
   onShowInspector,
@@ -64,6 +65,7 @@ export function LibraryToolbar({
   selectedCount,
   viewMode,
 }: {
+  inspectorAvailable: boolean;
   inspectorHidden: boolean;
   onQueryChange: (query: PatternQuery) => void;
   onShowInspector: () => void;
@@ -329,7 +331,7 @@ export function LibraryToolbar({
       </div>
       <div className="toolbar-view-controls">
         <span className="inspector-toggle-slot">
-        {inspectorHidden && selectedCount > 0 ? (
+        {inspectorHidden && inspectorAvailable ? (
           <IconButton label="显示检查器" onClick={onShowInspector}>
             <PanelRightOpen aria-hidden="true" />
           </IconButton>

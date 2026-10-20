@@ -9,10 +9,14 @@ export type SelectionModifiers = {
 
 export type SelectionState = {
   anchorId: string | null;
+  inspectorIds: string[];
   previewId: string | null;
   selectedIds: string[];
   clear: () => void;
+  clearSelected: () => void;
+  closeInspector: () => void;
   closePreview: () => void;
+  openInspector: (ids: readonly string[]) => void;
   openPreview: (id: string) => void;
   reconcile: (orderedIds: readonly string[]) => void;
   removeSelected: (ids: readonly string[]) => void;
@@ -30,16 +34,21 @@ const selectionState = (
   get: StoreApi<SelectionState>["getState"],
 ): SelectionState => ({
   anchorId: null,
+  inspectorIds: [],
   previewId: null,
   selectedIds: [],
   clear: () =>
-    set({ anchorId: null, previewId: null, selectedIds: [] }),
+    set({ anchorId: null, inspectorIds: [], previewId: null, selectedIds: [] }),
+  clearSelected: () => set({ anchorId: null, selectedIds: [] }),
+  closeInspector: () => set({ inspectorIds: [] }),
   closePreview: () => set({ previewId: null }),
+  openInspector: (ids) => set({ inspectorIds: [...new Set(ids)] }),
   openPreview: (id) => set({ previewId: id }),
   reconcile: (orderedIds) =>
     set((current) => {
       const available = new Set(orderedIds);
       const selectedIds = current.selectedIds.filter((id) => available.has(id));
+      const inspectorIds = current.inspectorIds.filter((id) => available.has(id));
       const anchorId =
         current.anchorId && available.has(current.anchorId)
           ? current.anchorId
@@ -50,19 +59,22 @@ const selectionState = (
           : null;
       if (
         selectedIds.length === current.selectedIds.length &&
+        inspectorIds.length === current.inspectorIds.length &&
         anchorId === current.anchorId &&
         previewId === current.previewId
       ) {
         return current;
       }
-      return { selectedIds, anchorId, previewId };
+      return { selectedIds, inspectorIds, anchorId, previewId };
     }),
   removeSelected: (ids) =>
     set((current) => {
       const removed = new Set(ids);
       const selectedIds = current.selectedIds.filter((id) => !removed.has(id));
+      const inspectorIds = current.inspectorIds.filter((id) => !removed.has(id));
       return {
         selectedIds,
+        inspectorIds,
         anchorId:
           current.anchorId && removed.has(current.anchorId)
             ? (selectedIds[0] ?? null)

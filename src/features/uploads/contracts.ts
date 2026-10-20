@@ -9,6 +9,7 @@ export const MAX_UPLOAD_SIZE_BYTES = 209_715_200;
 export const uploadSourceExtensions = [
   "psd",
   "ai",
+  "pdf",
   "jpg",
   "jpeg",
   "png",

@@ -7,6 +7,7 @@ import { publicOperationIdSchema } from "@/lib/validation/operation-id";
 export const patternFormats = [
   "psd",
   "ai",
+  "pdf",
   "jpg",
   "jpeg",
   "png",
@@ -50,7 +51,7 @@ const queryBoolean = z.union([
 export const patternQuerySchema = z
   .object({
     q: z.string().trim().max(100).refine(hasNoNullByte).optional(),
-    formats: z.array(z.enum(patternFormats)).max(6).default([]),
+    formats: z.array(z.enum(patternFormats)).max(patternFormats.length).default([]),
     tagIds: z.array(z.string().uuid()).max(20).default([]),
     tagMode: z.enum(["all", "any"]).default("all"),
     untagged: queryBoolean.optional(),

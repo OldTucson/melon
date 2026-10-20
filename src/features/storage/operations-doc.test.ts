@@ -23,7 +23,7 @@ describe("OSS operations contract", () => {
     );
 
     expect(operations).toMatch(
-      /source\/\{ASSET_UUID\}\.\{psd\|ai\|jpg\|jpeg\|png\|procreate\}/,
+      /source\/\{ASSET_UUID\}\.\{psd\|ai\|pdf\|jpg\|jpeg\|png\|procreate\}/,
     );
     expect(operations).toMatch(
       /derived\/\{ASSET_UUID\}\.\{jpg\|jpeg\|png\|webp\}/,

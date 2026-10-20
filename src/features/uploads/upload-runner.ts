@@ -116,6 +116,7 @@ export type UploadRunnerDependencies = {
 const supportedExtensions = new Set<UploadSourceExtension>([
   "psd",
   "ai",
+  "pdf",
   "jpg",
   "jpeg",
   "png",
@@ -222,6 +223,7 @@ function contentTypeForSource(extension: UploadSourceExtension) {
   if (extension === "png") return "image/png";
   if (extension === "jpg" || extension === "jpeg") return "image/jpeg";
   if (extension === "psd") return "image/vnd.adobe.photoshop";
+  if (extension === "pdf") return "application/pdf";
   return "application/octet-stream";
 }
 

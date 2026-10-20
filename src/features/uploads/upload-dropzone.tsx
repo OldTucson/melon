@@ -3,7 +3,7 @@
 import { UploadCloud } from "lucide-react";
 import { useRef, useState } from "react";
 
-export const UPLOAD_ACCEPT = ".psd,.ai,.jpg,.jpeg,.png,.procreate";
+export const UPLOAD_ACCEPT = ".psd,.ai,.pdf,.jpg,.jpeg,.png,.procreate";
 
 export function UploadDropzone({
   compact = false,
@@ -64,7 +64,7 @@ export function UploadDropzone({
       />
       <UploadCloud aria-hidden="true" />
       <span>{compact ? "添加文件" : "选择文件或拖放到这里"}</span>
-      {!compact ? <small>PSD、AI、JPG、PNG、Procreate，单个不超过 200 MB</small> : null}
+      {!compact ? <small>PSD、AI、PDF、JPG、PNG、Procreate，单个不超过 200 MB</small> : null}
     </div>
   );
 }

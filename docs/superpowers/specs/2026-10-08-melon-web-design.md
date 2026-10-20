@@ -391,7 +391,7 @@ users/{userId}/patterns/{patternId}/source/{assetId}.{ext}
 users/{userId}/patterns/{patternId}/derived/{assetId}.{ext}
 ```
 
-`source` 的扩展名仅允许 `psd|ai|jpg|jpeg|png|procreate`；`derived` 仅允许 `jpg|jpeg|png|webp`。WebP 只用于派生预览或缩略图，不得声明为源文件。
+`source` 的扩展名仅允许 `psd|ai|pdf|jpg|jpeg|png|procreate`；`derived` 仅允许 `jpg|jpeg|png|webp`。WebP 只用于派生预览或缩略图，不得声明为源文件。
 
 ### 10.3 文件校验与租户隔离
 

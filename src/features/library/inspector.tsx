@@ -1,11 +1,13 @@
 "use client";
 
 import * as Tabs from "@radix-ui/react-tabs";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   X,
   FolderInput,
   Heart,
   HeartOff,
+  ImagePlus,
   RefreshCw,
   Trash2,
 } from "lucide-react";
@@ -30,6 +32,9 @@ import {
 import { useFoldersQuery } from "@/features/folders/folder-client";
 import { FolderPicker } from "@/features/folders/folder-picker";
 import { TrashPatternsDialog } from "./trash-patterns-dialog";
+import { ManualPreviewDialog } from "@/features/preview/manual-preview-dialog";
+import { queryKeys } from "@/lib/query/keys";
+import { useQueryOwnerId } from "@/lib/query/provider";
 
 export function Inspector({
   activeQuery,
@@ -42,8 +47,11 @@ export function Inspector({
   pattern: PatternItem;
   statusCheck?: PatternStatusCheck;
 }) {
+  const ownerId = useQueryOwnerId();
+  const queryClient = useQueryClient();
   const mutation = usePatternPatchMutation(activeQuery);
   const editable = isPatternEditable(pattern.status);
+  const [manualPreviewOpen, setManualPreviewOpen] = useState(false);
   const [name, setName] = useState(pattern.name);
   const [saveError, setSaveError] = useState<"empty" | "save" | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -250,6 +258,15 @@ export function Inspector({
                   </dd>
                 </div>
               </dl>
+              <button
+                className="secondary-button inspector-preview-button"
+                type="button"
+                disabled={pattern.status !== "ready"}
+                onClick={() => setManualPreviewOpen(true)}
+              >
+                <ImagePlus aria-hidden="true" />
+                更新预览
+              </button>
             </section>
             <TagPicker
               activeQuery={activeQuery}
@@ -268,6 +285,20 @@ export function Inspector({
           </Tabs.Content>
         </Tabs.Root>
       </div>
+      <ManualPreviewDialog
+        open={manualPreviewOpen}
+        pattern={pattern}
+        onComplete={() => {
+          void queryClient.invalidateQueries({
+            queryKey: queryKeys.pattern(ownerId, pattern.id),
+            exact: true,
+          });
+          void queryClient.invalidateQueries({
+            queryKey: ["owner", ownerId, "patterns"],
+          });
+        }}
+        onOpenChange={setManualPreviewOpen}
+      />
     </InspectorPanel>
   );
 }

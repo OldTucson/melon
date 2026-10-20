@@ -62,6 +62,12 @@ describe("pattern query contracts", () => {
     );
   });
 
+  it("accepts PDF in library format filters", () => {
+    expect(
+      parsePatternSearchParams(new URLSearchParams("format=pdf")),
+    ).toMatchObject({ formats: ["pdf"] });
+  });
+
   it("canonicalizes equivalent production search parameter order", () => {
     const firstTagId = "00000000-0000-4000-8000-000000000001";
     const secondTagId = "00000000-0000-4000-8000-000000000002";

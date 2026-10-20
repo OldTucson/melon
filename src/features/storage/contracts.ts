@@ -13,6 +13,7 @@ export interface BrowserCredentialIssuer {
   issue(input: {
     ownerId: string;
     patternId: string;
+    objectKeys?: readonly string[];
   }): Promise<BrowserOssCredentials>;
 }
 

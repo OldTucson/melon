@@ -53,6 +53,12 @@ describe("OSS object keys", () => {
     );
   });
 
+  it("builds a canonical PDF source key", () => {
+    expect(sourceObjectKey({ ownerId, patternId, assetId, extension: "PDF" })).toBe(
+      `users/${ownerId}/patterns/${patternId}/source/${assetId}.pdf`,
+    );
+  });
+
   it("normalizes UUID inputs to PostgreSQL lowercase text form", () => {
     const key = sourceObjectKey({
       ownerId: ownerId.toUpperCase(),

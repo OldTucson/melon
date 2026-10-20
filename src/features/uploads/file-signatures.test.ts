@@ -20,6 +20,7 @@ describe("upload file signatures", () => {
     ["psd", ascii("8BPS"), "psd", "image/vnd.adobe.photoshop"],
     ["webp", ascii("RIFF1234WEBP"), "webp", "image/webp"],
     ["ai", ascii("%PDF-1.7"), "ai-pdf", "application/pdf"],
+    ["pdf", ascii("%PDF-1.7"), "pdf", "application/pdf"],
     [
       "ai",
       ascii("%!PS-Adobe-3.0"),
@@ -74,6 +75,7 @@ describe("upload file signatures", () => {
     expect(requiredSignatureBytes("png")).toBe(8);
     expect(requiredSignatureBytes("psd")).toBe(4);
     expect(requiredSignatureBytes("ai")).toBe(11);
+    expect(requiredSignatureBytes("pdf")).toBe(5);
     expect(requiredSignatureBytes("procreate")).toBe(4);
     expect(requiredSignatureBytes("webp")).toBe(12);
   });

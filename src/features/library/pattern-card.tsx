@@ -52,6 +52,7 @@ export function PatternCard({
   item,
   mode,
   onFavorite,
+  onInspect,
   onOpenPreview,
   onSelect,
   selected,
@@ -59,12 +60,16 @@ export function PatternCard({
   item: PatternItem;
   mode: LibraryViewMode;
   onFavorite: (item: PatternItem) => void;
+  onInspect: (id: string) => void;
   onOpenPreview: (id: string) => void;
   onSelect: (id: string, modifiers: SelectionModifiers) => void;
   selected: boolean;
 }) {
-  const [imageFailed, setImageFailed] = useState(false);
   const imageAssetId = item.thumbnailAssetId ?? item.previewAssetId;
+  const [failedImageAssetId, setFailedImageAssetId] = useState<string | null>(
+    null,
+  );
+  const imageFailed = imageAssetId === failedImageAssetId;
   const commercialSummary = item.commercialSummary ?? {
     state: "unlicensed" as const,
     activeCount: 0,
@@ -77,30 +82,6 @@ export function PatternCard({
       data-selected={selected ? "true" : undefined}
       role="listitem"
       aria-label={`${item.name}, ${item.extension.toUpperCase()}${selected ? ", 已选择" : ""}`}
-      tabIndex={0}
-      onClick={(event) =>
-        onSelect(item.id, {
-          metaKey: event.metaKey,
-          ctrlKey: event.ctrlKey,
-          shiftKey: event.shiftKey,
-        })
-      }
-      onDoubleClick={(event) => {
-        if (
-          event.target instanceof Element &&
-          event.target.closest("button, a, input, select, textarea")
-        ) {
-          return;
-        }
-        onOpenPreview(item.id);
-      }}
-      onKeyDown={(event) => {
-        if (event.target !== event.currentTarget) return;
-        if (event.key === "Enter") {
-          event.preventDefault();
-          onSelect(item.id, {});
-        }
-      }}
     >
       <Checkbox.Root
         aria-label={`选择 ${item.name}`}
@@ -115,13 +96,22 @@ export function PatternCard({
           <Check aria-hidden="true" />
         </Checkbox.Indicator>
       </Checkbox.Root>
-      <div className="pattern-media">
+      <button
+        aria-label={`打开 ${item.name} 检查器`}
+        className="pattern-media"
+        type="button"
+        onClick={() => onInspect(item.id)}
+        onDoubleClick={(event) => {
+          event.stopPropagation();
+          onOpenPreview(item.id);
+        }}
+      >
         {imageAssetId && !imageFailed ? (
           <img
             alt={`${item.name} 缩略图`}
             loading="lazy"
             src={`/api/assets/${imageAssetId}/view`}
-            onError={() => setImageFailed(true)}
+            onError={() => setFailedImageAssetId(imageAssetId)}
           />
         ) : (
           <FormatPlaceholder
@@ -129,7 +119,7 @@ export function PatternCard({
             previewStatus={item.previewStatus}
           />
         )}
-      </div>
+      </button>
       <div className="pattern-card-copy">
         <strong title={item.name}>{item.name}</strong>
         <span>

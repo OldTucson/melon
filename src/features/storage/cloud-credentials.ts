@@ -29,6 +29,7 @@ const issuerConfigSchema = ossConnectionConfigSchema.extend({
 const issueInputSchema = z.object({
   ownerId: normalizedUuidSchema,
   patternId: normalizedUuidSchema,
+  objectKeys: z.array(z.string().min(1)).min(1).max(3).optional(),
 });
 
 const utcExpirationSchema = z
@@ -80,8 +81,10 @@ async function assumeRoleWithDefaultCredential(
   const client = new StsClientConstructor(
     new OpenApiConfig({
       credential,
+      connectTimeout: 15_000,
       endpoint: "sts.aliyuncs.com",
       protocol: "HTTPS",
+      readTimeout: 15_000,
     }),
   );
   const response = await client.assumeRole(new AssumeRoleRequest(input));
@@ -108,7 +111,7 @@ export function createAlibabaBrowserCredentialIssuer(
   return {
     async issue(input) {
       const config = issuerConfigSchema.parse(inputConfig);
-      const { ownerId, patternId } = issueInputSchema.parse(input);
+      const { ownerId, patternId, objectKeys } = issueInputSchema.parse(input);
       const response = await assumeRole({
         roleArn: config.roleArn,
         roleSessionName: createRoleSessionName(ownerId, patternId),
@@ -117,6 +120,7 @@ export function createAlibabaBrowserCredentialIssuer(
           bucket: config.bucket,
           ownerId,
           patternId,
+          objectKeys,
         }),
       });
       const parsed = temporaryCredentialSchema.safeParse(response);

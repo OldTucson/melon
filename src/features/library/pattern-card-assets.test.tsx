@@ -43,6 +43,7 @@ describe("pattern card assets", () => {
           item={item}
           mode="grid"
           onFavorite={vi.fn()}
+          onInspect={vi.fn()}
           onOpenPreview={vi.fn()}
           onSelect={vi.fn()}
           selected={false}
@@ -67,6 +68,7 @@ describe("pattern card assets", () => {
           item={item}
           mode="grid"
           onFavorite={vi.fn()}
+          onInspect={vi.fn()}
           onOpenPreview={vi.fn()}
           onSelect={vi.fn()}
           selected={false}
@@ -75,5 +77,42 @@ describe("pattern card assets", () => {
     );
     fireEvent.error(screen.getByRole("img", { name: "Leaf 缩略图" }));
     expect(screen.getByText("PNG")).toBeVisible();
+  });
+
+  it("retries the image when the displayed asset changes", () => {
+    const { rerender } = render(
+      <Tooltip.Provider>
+        <PatternCard
+          item={item}
+          mode="grid"
+          onFavorite={vi.fn()}
+          onInspect={vi.fn()}
+          onOpenPreview={vi.fn()}
+          onSelect={vi.fn()}
+          selected={false}
+        />
+      </Tooltip.Provider>,
+    );
+    fireEvent.error(screen.getByRole("img", { name: "Leaf 缩略图" }));
+
+    const replacementAssetId = "00000000-0000-4000-8000-000000000005";
+    rerender(
+      <Tooltip.Provider>
+        <PatternCard
+          item={{ ...item, thumbnailAssetId: replacementAssetId }}
+          mode="grid"
+          onFavorite={vi.fn()}
+          onInspect={vi.fn()}
+          onOpenPreview={vi.fn()}
+          onSelect={vi.fn()}
+          selected={false}
+        />
+      </Tooltip.Provider>,
+    );
+
+    expect(screen.getByRole("img", { name: "Leaf 缩略图" })).toHaveAttribute(
+      "src",
+      `/api/assets/${replacementAssetId}/view`,
+    );
   });
 });

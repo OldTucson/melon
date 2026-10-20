@@ -75,6 +75,33 @@ describe("createAlibabaBrowserCredentialIssuer", () => {
     expect(assumeRole).not.toHaveBeenCalled();
   });
 
+  it("passes exact object-key restrictions into the STS policy", async () => {
+    const assumeRole = vi.fn().mockResolvedValue({
+      accessKeyId: "STS.test-access-key",
+      accessKeySecret: "temporary-secret",
+      securityToken: "temporary-token",
+      expiration: "2026-10-09T10:15:00Z",
+    });
+    const issuer = createAlibabaBrowserCredentialIssuer(config, {
+      assumeRole,
+      now,
+    });
+    const objectKeys = [
+      `users/${ownerId}/patterns/${patternId}/derived/cccccccc-cccc-4ccc-8ccc-cccccccccccc.webp`,
+      `users/${ownerId}/patterns/${patternId}/derived/dddddddd-dddd-4ddd-8ddd-dddddddddddd.webp`,
+    ];
+
+    await issuer.issue({ ownerId, patternId, objectKeys });
+
+    const request = assumeRole.mock.calls[0]?.[0] as { policy: string };
+    const policy = JSON.parse(request.policy) as {
+      Statement: Array<{ Resource: string[] }>;
+    };
+    expect(policy.Statement[0]?.Resource).toEqual(
+      objectKeys.map((key) => `acs:oss:*:*:${config.bucket}/${key}`),
+    );
+  });
+
   it("fails closed when STS omits or malforms a temporary credential", async () => {
     const assumeRole = vi.fn().mockResolvedValue({
       accessKeyId: "STS.test-access-key",

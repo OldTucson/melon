@@ -23,6 +23,22 @@ function createClient(credentials: BrowserOssCredentials) {
 }
 
 export const alibabaBrowserMultipartClient = {
+  async put(input: {
+    credentials: BrowserOssCredentials;
+    objectKey: string;
+    file: Blob;
+    contentType: string;
+    onProgress(fraction: number): void;
+  }) {
+    const client = createClient(input.credentials);
+    input.onProgress(0);
+    await client.put(input.objectKey, input.file, {
+      mime: input.contentType,
+      headers: { "x-oss-forbid-overwrite": "true" },
+    });
+    input.onProgress(1);
+  },
+
   async upload(input: {
     credentials: BrowserOssCredentials;
     objectKey: string;

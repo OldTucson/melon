@@ -11,8 +11,7 @@ import {
   useState,
 } from "react";
 
-import { generateRasterPreview } from "@/features/preview/raster-preview";
-import { useSelectionStore } from "@/features/library/selection-store";
+import { generatePreview } from "@/features/preview/preview-pipeline";
 import { ApiResponseError } from "@/lib/query/client";
 import { useQueryOwnerId } from "@/lib/query/provider";
 
@@ -57,7 +56,7 @@ export function useUploadManager() {
 function errorMessage(error: unknown) {
   if (!(error instanceof Error)) return "无法添加文件";
   if (error.message === "UPLOAD_FILE_TOO_LARGE") return "单个文件不能超过 200 MB";
-  if (error.message === "UPLOAD_EXTENSION_UNSUPPORTED") return "仅支持 PSD、AI、JPG、PNG 和 Procreate";
+  if (error.message === "UPLOAD_EXTENSION_UNSUPPORTED") return "仅支持 PSD、AI、PDF、JPG、PNG 和 Procreate";
   if (error.message === "UPLOAD_FILE_EMPTY") return "不能上传空文件";
   return "无法添加文件";
 }
@@ -109,7 +108,7 @@ export function UploadManagerProvider({ children }: { children: React.ReactNode 
         delete: (id) =>
           database ? deleteCheckpoint(database, id) : Promise.resolve(),
       },
-      generatePreview: generateRasterPreview,
+      generatePreview,
       hashFile: hashFileInChunks,
       onUpdate: (patch) =>
         attempts.current.runIfCurrent(taskId, attempt, () =>
@@ -149,8 +148,6 @@ export function UploadManagerProvider({ children }: { children: React.ReactNode 
           await queryClient.invalidateQueries({
             queryKey: ["owner", ownerId, "patterns"],
           });
-          if (!attempts.current.isCurrent(task.localTaskId, attempt)) return;
-          useSelectionStore.getState().select(result.patternId, [result.patternId], {});
         }
       } catch {
         // The runner records a user-safe task error.
@@ -263,7 +260,7 @@ export function UploadManagerProvider({ children }: { children: React.ReactNode 
             const controller = new AbortController();
             controllers.current.set(id, controller);
             try {
-              const result = await recoverUploadCompletion(
+              await recoverUploadCompletion(
                 latestTask,
                 dependenciesFor(id, attempt, controller.signal),
               );
@@ -271,10 +268,6 @@ export function UploadManagerProvider({ children }: { children: React.ReactNode 
               await queryClient.invalidateQueries({
                 queryKey: ["owner", ownerId, "patterns"],
               });
-              if (!attempts.current.isCurrent(id, attempt)) return;
-              useSelectionStore
-                .getState()
-                .select(result.patternId, [result.patternId], {});
             } catch {
               // The runner records a user-safe task error.
             } finally {

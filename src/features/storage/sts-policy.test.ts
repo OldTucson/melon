@@ -44,6 +44,48 @@ describe("createUploadPolicy", () => {
     });
   });
 
+  it("can restrict browser writes to exact initialized object keys", () => {
+    const objectKeys = [
+      `users/${ownerId}/patterns/${patternId}/derived/cccccccc-cccc-4ccc-8ccc-cccccccccccc.webp`,
+      `users/${ownerId}/patterns/${patternId}/derived/dddddddd-dddd-4ddd-8ddd-dddddddddddd.webp`,
+    ];
+    const policy = JSON.parse(
+      createUploadPolicy({
+        bucket: "melon-test-assets",
+        ownerId,
+        patternId,
+        objectKeys,
+      }),
+    ) as { Statement: Array<{ Resource: string[] }> };
+
+    expect(policy.Statement[0]?.Resource).toEqual(
+      objectKeys.map((key) => `acs:oss:*:*:melon-test-assets/${key}`),
+    );
+  });
+
+  it("rejects exact keys outside the owned pattern or noncanonical keys", () => {
+    expect(() =>
+      createUploadPolicy({
+        bucket: "melon-test-assets",
+        ownerId,
+        patternId,
+        objectKeys: [
+          `users/${ownerId}/patterns/eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee/derived/cccccccc-cccc-4ccc-8ccc-cccccccccccc.webp`,
+        ],
+      }),
+    ).toThrow();
+    expect(() =>
+      createUploadPolicy({
+        bucket: "melon-test-assets",
+        ownerId,
+        patternId,
+        objectKeys: [
+          `users/${ownerId}/patterns/${patternId}/derived/not-an-asset.webp`,
+        ],
+      }),
+    ).toThrow();
+  });
+
   it("contains no wildcard, read, bucket-list, or invented multipart action", () => {
     const policy = JSON.parse(
       createUploadPolicy({

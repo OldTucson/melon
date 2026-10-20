@@ -41,7 +41,7 @@ export function selectOutputType({ hasAlpha }: { hasAlpha: boolean }) {
   return hasAlpha ? ("image/png" as const) : ("image/webp" as const);
 }
 
-export type RasterPreviewResult = {
+export type PreviewResult = {
   preview: Blob;
   thumbnail: Blob;
   previewWidth: number;
@@ -51,9 +51,32 @@ export type RasterPreviewResult = {
   outputType: "image/png" | "image/webp";
 };
 
-export type RasterPreviewWorkerResponse =
-  | { ok: true; result: RasterPreviewResult }
+export type RasterPreviewResult = PreviewResult;
+
+export type PreviewWorkerErrorCode =
+  | "PREVIEW_UNSUPPORTED"
+  | "PREVIEW_PIXEL_LIMIT"
+  | "PREVIEW_DECODE_FAILED";
+
+export type PreviewWorkerResponse =
+  | { ok: true; result: PreviewResult }
   | {
       ok: false;
-      code: "PREVIEW_PIXEL_LIMIT" | "PREVIEW_DECODE_FAILED";
+      code: PreviewWorkerErrorCode;
     };
+
+export type RasterPreviewWorkerResponse = PreviewWorkerResponse;
+
+export function previewErrorCode(error: unknown): PreviewWorkerErrorCode {
+  if (
+    error instanceof Error &&
+    [
+      "PREVIEW_UNSUPPORTED",
+      "PREVIEW_PIXEL_LIMIT",
+      "PREVIEW_DECODE_FAILED",
+    ].includes(error.message)
+  ) {
+    return error.message as PreviewWorkerErrorCode;
+  }
+  return "PREVIEW_DECODE_FAILED";
+}
