@@ -264,6 +264,46 @@ describe("image search backfill command", () => {
     expect(services.closeDatabase).toHaveBeenCalledOnce();
   });
 
+  it("does not print a success result when closing the database fails", async () => {
+    const services = servicesForPages([[candidate(1)]]);
+    const closeError = new Error("DATABASE_CLOSE_FAILED_WITH_SECRET_DETAILS");
+    vi.mocked(services.closeDatabase).mockRejectedValueOnce(closeError);
+    const stdout = vi.fn();
+
+    await expect(
+      runImageSearchBackfillCli({
+        args: ["--version", "visual-search-v2"],
+        loadServices: async () => services,
+        now: () => NOW,
+        stdout,
+      }),
+    ).rejects.toBe(closeError);
+    expect(stdout).not.toHaveBeenCalled();
+    expect(services.closeDatabase).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the operation error when closing the database also fails", async () => {
+    const services = servicesForPages([]);
+    const operationError = new Error(
+      "DATABASE_OPERATION_FAILED_WITH_SECRET_DETAILS",
+    );
+    const closeError = new Error("DATABASE_CLOSE_FAILED_WITH_SECRET_DETAILS");
+    vi.mocked(services.listCandidates).mockRejectedValueOnce(operationError);
+    vi.mocked(services.closeDatabase).mockRejectedValueOnce(closeError);
+    const stdout = vi.fn();
+
+    await expect(
+      runImageSearchBackfillCli({
+        args: ["--version", "visual-search-v2"],
+        loadServices: async () => services,
+        now: () => NOW,
+        stdout,
+      }),
+    ).rejects.toBe(operationError);
+    expect(stdout).not.toHaveBeenCalled();
+    expect(services.closeDatabase).toHaveBeenCalledOnce();
+  });
+
   it("exits nonzero with a safe message when invoked with invalid arguments", () => {
     const result = spawnSync(
       process.execPath,

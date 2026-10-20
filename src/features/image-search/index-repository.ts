@@ -137,7 +137,8 @@ export function selectVisualSearchBackfillCandidates(
     )
     .where(and(...predicates))
     .orderBy(asc(assets.ownerId), asc(assets.patternId), asc(assets.id))
-    .limit(input.limit);
+    .limit(input.limit)
+    .for("update", { of: patterns });
 }
 
 export async function deleteVisualSearchRowsForPatterns(

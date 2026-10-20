@@ -1,9 +1,13 @@
 import { randomUUID } from "node:crypto";
 
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { closeDatabase, db } from "@/lib/db/client";
+import { getServerEnv } from "@/lib/env/server";
+import * as schema from "@/lib/db/schema";
 import {
   assets,
   patterns,
@@ -35,12 +39,14 @@ async function seedUser(email: string) {
 
 async function seedPatternWithPreview(input: {
   ownerId: string;
+  patternId?: string;
+  assetId?: string;
   status?: (typeof patterns.$inferInsert)["status"];
   previewStatus?: (typeof patterns.$inferInsert)["previewStatus"];
   role?: (typeof assets.$inferInsert)["role"];
 }) {
-  const patternId = randomUUID();
-  const assetId = randomUUID();
+  const patternId = input.patternId ?? randomUUID();
+  const assetId = input.assetId ?? randomUUID();
   await db.insert(patterns).values({
     id: patternId,
     ownerId: input.ownerId,
@@ -61,6 +67,63 @@ async function seedPatternWithPreview(input: {
     sizeBytes: 12n,
   });
   return { patternId, assetId };
+}
+
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs = 5_000) {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("VISUAL_SEARCH_CONCURRENCY_TIMEOUT")),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function waitForPatternLockWaiter(
+  monitor: ReturnType<typeof postgres>,
+  input: { blockerApplication: string; waiterApplication: string },
+) {
+  return withTimeout(
+    (async () => {
+      while (true) {
+        const waiters = await monitor<{ pid: number }[]>`
+          select waiter.pid
+          from pg_stat_activity waiter
+          where waiter.datname = current_database()
+            and waiter.application_name = ${input.waiterApplication}
+            and waiter.state = 'active'
+            and waiter.wait_event_type = 'Lock'
+            and waiter.query ilike '%patterns%'
+            and waiter.query ilike '%for update%'
+            and exists (
+              select 1
+              from pg_stat_activity blocker
+              where blocker.pid = any(pg_blocking_pids(waiter.pid))
+                and blocker.application_name = ${input.blockerApplication}
+            )
+        `;
+        if (waiters[0]) return waiters[0].pid;
+        await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      }
+    })(),
+  );
 }
 
 describe("visual search index service", () => {
@@ -232,6 +295,135 @@ describe("visual search index service", () => {
       patternId: trashed.patternId,
       previewAssetId: trashed.assetId,
     });
+  });
+
+  it("holds pattern locks until a backfill page commits before preview replacement", async () => {
+    const ownerId = await seedUser("backfill-lock@example.test");
+    const stable = await seedPatternWithPreview({
+      ownerId,
+      patternId: "00000000-0000-4000-8000-000000000010",
+      assetId: "00000000-0000-4000-8000-000000000110",
+    });
+    const replaced = await seedPatternWithPreview({
+      ownerId,
+      patternId: "00000000-0000-4000-8000-000000000020",
+      assetId: "00000000-0000-4000-8000-000000000120",
+      previewStatus: "manual",
+    });
+    const replacementAssetId = "00000000-0000-4000-8000-000000000121";
+    const databaseUrl = getServerEnv().DATABASE_URL;
+    const blockerApplication = `visual-search-backfill-${randomUUID()}`;
+    const waiterApplication = `visual-search-replacement-${randomUUID()}`;
+    const backfillClient = postgres(databaseUrl, {
+      max: 1,
+      connection: { application_name: blockerApplication },
+    });
+    const replacementClient = postgres(databaseUrl, {
+      max: 1,
+      connection: { application_name: waiterApplication },
+    });
+    const monitor = postgres(databaseUrl, { max: 1 });
+    const backfillDatabase = drizzle(backfillClient, { schema });
+    const replacementDatabase = drizzle(replacementClient, { schema });
+    const candidatesSelected = deferred();
+    const releaseBackfill = deferred();
+    let backfillPage: Promise<unknown> | undefined;
+    let replacement: Promise<unknown> | undefined;
+
+    try {
+      backfillPage = backfillDatabase.transaction(async (tx) => {
+        const candidates = await listVisualSearchBackfillCandidates(tx, {
+          limit: 500,
+        });
+        candidatesSelected.resolve();
+        await releaseBackfill.promise;
+        for (const candidate of candidates) {
+          await enqueueVisualSearchIndexJob(tx, {
+            ...candidate,
+            indexVersion: "visual-search-v2",
+            now: NOW,
+          });
+        }
+      });
+      await withTimeout(candidatesSelected.promise);
+
+      replacement = replacementDatabase.transaction(async (tx) => {
+        const [lockedPattern] = await tx
+          .select({ id: patterns.id })
+          .from(patterns)
+          .where(
+            and(
+              eq(patterns.ownerId, ownerId),
+              eq(patterns.id, replaced.patternId),
+            ),
+          )
+          .orderBy(asc(patterns.id))
+          .for("update");
+        if (!lockedPattern) throw new Error("REPLACEMENT_PATTERN_MISSING");
+        await tx
+          .delete(assets)
+          .where(
+            and(
+              eq(assets.ownerId, ownerId),
+              eq(assets.patternId, replaced.patternId),
+              eq(assets.id, replaced.assetId),
+            ),
+          );
+        await tx.insert(assets).values({
+          id: replacementAssetId,
+          ownerId,
+          patternId: replaced.patternId,
+          role: "preview",
+          objectKey: `users/${ownerId}/patterns/${replaced.patternId}/${replacementAssetId}.webp`,
+          originalFilename: "replacement.webp",
+          sizeBytes: 12n,
+        });
+      });
+
+      const observed = await withTimeout(
+        Promise.race([
+          waitForPatternLockWaiter(monitor, {
+            blockerApplication,
+            waiterApplication,
+          }).then(() => "blocked" as const),
+          replacement.then(() => "completed" as const),
+        ]),
+      );
+      releaseBackfill.resolve();
+      const outcomes = await withTimeout(
+        Promise.allSettled([backfillPage, replacement]),
+      );
+
+      expect(observed).toBe("blocked");
+      expect(outcomes).toEqual([
+        expect.objectContaining({ status: "fulfilled" }),
+        expect.objectContaining({ status: "fulfilled" }),
+      ]);
+      expect(
+        await db
+          .select({ previewAssetId: visualSearchJobs.previewAssetId })
+          .from(visualSearchJobs)
+          .orderBy(asc(visualSearchJobs.previewAssetId)),
+      ).toEqual([{ previewAssetId: stable.assetId }]);
+      expect(
+        await db
+          .select({ id: assets.id })
+          .from(assets)
+          .where(eq(assets.patternId, replaced.patternId)),
+      ).toEqual([{ id: replacementAssetId }]);
+    } finally {
+      releaseBackfill.resolve();
+      await Promise.allSettled(
+        [backfillPage, replacement].filter(
+          (promise): promise is Promise<unknown> => promise !== undefined,
+        ),
+      );
+      await Promise.all([
+        backfillClient.end({ timeout: 1 }),
+        replacementClient.end({ timeout: 1 }),
+        monitor.end({ timeout: 1 }),
+      ]);
+    }
   });
 
   it("does not return an existing job for a different index version", async () => {

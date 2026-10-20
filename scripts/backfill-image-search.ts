@@ -141,17 +141,24 @@ export async function runImageSearchBackfillCli<TTransaction>(input: {
 }) {
   const { version } = parseBackfillArgs(input.args);
   const services = await input.loadServices();
+  let result: ImageSearchBackfillResult;
   try {
-    const result = await runImageSearchBackfill({
+    result = await runImageSearchBackfill({
       version,
       services,
       now: input.now,
     });
-    input.stdout(JSON.stringify(result));
-    return result;
-  } finally {
-    await services.closeDatabase();
+  } catch (error) {
+    try {
+      await services.closeDatabase();
+    } catch {
+      // The operation failure remains authoritative; direct execution sanitizes it.
+    }
+    throw error;
   }
+  await services.closeDatabase();
+  input.stdout(JSON.stringify(result));
+  return result;
 }
 
 async function main() {
