@@ -21,7 +21,7 @@ INPUT_NAME = "pixel_values"
 OUTPUT_NAME = "last_hidden_state"
 OPSET_VERSION = 17
 PARITY_ABSOLUTE_TOLERANCE = 1e-4
-PARITY_RELATIVE_TOLERANCE = 1e-4
+PARITY_RELATIVE_TOLERANCE = 0.0
 _SOURCE_FIELDS = {"repoId", "revision", "license", "task", "inputSize", "dimensions"}
 _PINNED_REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -128,6 +128,8 @@ def content_addressed_artifact_path(requested_output: Path, checksum: str) -> Pa
 def resolve_locked_artifact(
     lock_path: Path,
     lock_data: Mapping[str, object],
+    *,
+    artifact_root: Path,
 ) -> Path:
     artifact = lock_data.get("artifact")
     if not isinstance(artifact, Mapping):
@@ -139,7 +141,27 @@ def resolve_locked_artifact(
         or Path(relative_path).is_absolute()
     ):
         raise ExportError("model lock artifact path must be relative to the lock")
-    return (lock_path.resolve().parent / relative_path).resolve()
+    relative_artifact = Path(relative_path)
+    if ".." in relative_artifact.parts:
+        raise ExportError("model lock artifact path must not contain parent traversal")
+
+    checksum = artifact.get("sha256")
+    if not isinstance(checksum, str) or not _SHA256_PATTERN.fullmatch(checksum):
+        raise ExportError("model lock is missing a canonical artifact checksum")
+    suffix = relative_artifact.suffix
+    basename_without_suffix = (
+        relative_artifact.name[: -len(suffix)] if suffix else relative_artifact.name
+    )
+    if not basename_without_suffix.endswith(f".{checksum}"):
+        raise ExportError("model lock artifact basename does not embed the declared checksum")
+
+    resolved_root = artifact_root.resolve()
+    resolved_artifact = (lock_path.resolve().parent / relative_artifact).resolve()
+    if resolved_artifact == resolved_root or not resolved_artifact.is_relative_to(
+        resolved_root
+    ):
+        raise ExportError("model lock artifact resolves outside the artifact root")
+    return resolved_artifact
 
 
 def _validate_distinct_paths(*roles: tuple[str, Path]) -> None:
@@ -354,6 +376,45 @@ def _validate_tensor_shape(
         raise ExportError(f"{label} output contains non-finite values")
 
 
+def _validate_output_parity(candidate: Any, reference: Any) -> float:
+    import numpy as np
+
+    maximum_error = float(np.max(np.abs(candidate - reference)))
+    if not np.isfinite(maximum_error) or maximum_error > PARITY_ABSOLUTE_TOLERANCE:
+        raise ExportError(
+            "ONNX parity failed at maximum absolute error tolerance "
+            f"{PARITY_ABSOLUTE_TOLERANCE:.8g}; maximum absolute error "
+            f"{maximum_error:.8g}"
+        )
+    return maximum_error
+
+
+def _run_onnx_validation_batch(
+    session: Any,
+    model_input: Any,
+    *,
+    batch_size: int,
+    token_count: int,
+    dimensions: int,
+    label: str,
+) -> Any:
+    try:
+        output = session.run(
+            [OUTPUT_NAME],
+            {INPUT_NAME: model_input},
+        )[0]
+    except Exception as exc:
+        raise ExportError(f"{label} failed ({type(exc).__name__})") from None
+    _validate_tensor_shape(
+        output,
+        batch_size=batch_size,
+        token_count=token_count,
+        dimensions=dimensions,
+        label=label,
+    )
+    return output
+
+
 def _write_json_temp(
     destination: Path,
     data: Mapping[str, object],
@@ -400,6 +461,7 @@ def _publish_model_generation(
     lock_staging_directory: Path | None = None,
 ) -> Path:
     temporary_artifact = temporary_artifact.resolve()
+    artifact_root = immutable_artifact.parent.resolve()
     immutable_artifact = immutable_artifact.resolve()
     lock_path = lock_path.resolve()
     temporary_lock: Path | None = None
@@ -418,7 +480,11 @@ def _publish_model_generation(
             expected_checksum
         ):
             raise ExportError("model lock is missing a canonical artifact checksum")
-        if resolve_locked_artifact(lock_path, lock_data) != immutable_artifact:
+        if resolve_locked_artifact(
+            lock_path,
+            lock_data,
+            artifact_root=artifact_root,
+        ) != immutable_artifact:
             raise ExportError("model lock does not name the immutable artifact")
         if sha256_file(temporary_artifact) != expected_checksum:
             raise ExportError("staged artifact checksum does not match the model lock")
@@ -587,33 +653,33 @@ def export_model(source: ModelSource, output_path: Path, lock_path: Path) -> dic
         if not isinstance(inputs[0].shape[0], str) or not isinstance(outputs[0].shape[0], str):
             raise ExportError("ONNX model batch axis is not dynamic")
 
-        onnx_output = session.run(
-            [OUTPUT_NAME],
-            {INPUT_NAME: pixel_values.detach().cpu().numpy()},
-        )[0]
-        _validate_tensor_shape(
-            onnx_output,
+        numpy_input = pixel_values.detach().cpu().numpy()
+        onnx_output = _run_onnx_validation_batch(
+            session,
+            numpy_input,
             batch_size=2,
             token_count=token_count,
             dimensions=source.dimensions,
-            label="ONNX Runtime",
+            label="ONNX Runtime parity batch",
         )
-        try:
-            np.testing.assert_allclose(
-                onnx_output,
-                torch_output,
-                atol=PARITY_ABSOLUTE_TOLERANCE,
-                rtol=PARITY_RELATIVE_TOLERANCE,
-            )
-        except AssertionError as exc:
-            maximum_error = float(np.max(np.abs(onnx_output - torch_output)))
-            raise ExportError(
-                f"ONNX parity failed at 1e-4 tolerance; maximum absolute error {maximum_error:.8g}"
-            ) from exc
+        parity_error = _validate_output_parity(onnx_output, torch_output)
+        dynamic_batch_size = 1
+        dynamic_output = _run_onnx_validation_batch(
+            session,
+            numpy_input[:dynamic_batch_size],
+            batch_size=dynamic_batch_size,
+            token_count=token_count,
+            dimensions=source.dimensions,
+            label="ONNX Runtime dynamic batch validation",
+        )
+        dynamic_parity_error = _validate_output_parity(
+            dynamic_output,
+            torch_output[:dynamic_batch_size],
+        )
+        maximum_error = max(parity_error, dynamic_parity_error)
 
         artifact_checksum = sha256_file(temporary_artifact)
         artifact_size = temporary_artifact.stat().st_size
-        maximum_error = float(np.max(np.abs(onnx_output - torch_output)))
         immutable_artifact = content_addressed_artifact_path(
             output_path,
             artifact_checksum,
@@ -670,7 +736,7 @@ def export_model(source: ModelSource, output_path: Path, lock_path: Path) -> dic
                 "dimensions": source.dimensions,
             },
             "parity": {
-                "batchSize": 2,
+                "validatedBatchSizes": [dynamic_batch_size, 2],
                 "absoluteTolerance": PARITY_ABSOLUTE_TOLERANCE,
                 "relativeTolerance": PARITY_RELATIVE_TOLERANCE,
                 "maximumAbsoluteError": maximum_error,
@@ -739,7 +805,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not isinstance(artifact, dict) or not isinstance(artifact.get("sha256"), str):
             raise ExportError("generated lock is missing the artifact checksum")
         artifact_checksum = artifact["sha256"]
-        published_artifact = resolve_locked_artifact(arguments.lock, lock_data)
+        published_artifact = resolve_locked_artifact(
+            arguments.lock,
+            lock_data,
+            artifact_root=arguments.output.resolve().parent,
+        )
     except Exception as exc:
         parser.exit(1, _cli_failure_message("manifest-validation", exc))
 

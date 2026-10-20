@@ -86,9 +86,12 @@
   },
   "parity": {
     "absoluteTolerance": 0.0001,
-    "batchSize": 2,
     "maximumAbsoluteError": 8.0108642578125e-05,
-    "relativeTolerance": 0.0001
+    "relativeTolerance": 0.0,
+    "validatedBatchSizes": [
+      1,
+      2
+    ]
   },
   "runtime": {
     "name": "onnxruntime",

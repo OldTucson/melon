@@ -506,6 +506,48 @@ def test_model_artifact_sha256_is_streamed(tmp_path: Path) -> None:
     assert sha256_file(model_path) == hashlib.sha256(model_bytes).hexdigest()
 
 
+def test_output_parity_enforces_the_absolute_error_limit() -> None:
+    import numpy as np
+
+    from tools.export_model import ExportError, _validate_output_parity
+
+    reference = np.array([10.0], dtype=np.float32)
+    candidate = np.array([10.0009], dtype=np.float32)
+
+    with pytest.raises(ExportError, match="maximum absolute error"):
+        _validate_output_parity(candidate, reference)
+
+
+def test_dynamic_batch_runtime_validation_rejects_a_fixed_batch_session() -> None:
+    import numpy as np
+
+    from tools.export_model import ExportError, _run_onnx_validation_batch
+
+    class FixedBatchSession:
+        def run(
+            self,
+            output_names: list[str],
+            input_feed: dict[str, object],
+        ) -> list[object]:
+            assert output_names == ["last_hidden_state"]
+            model_input = input_feed["pixel_values"]
+            assert isinstance(model_input, np.ndarray)
+            assert model_input.shape[0] == 1
+            raise RuntimeError("session was traced for a fixed batch of two")
+
+    model_input = np.zeros((1, 3, 224, 224), dtype=np.float32)
+
+    with pytest.raises(ExportError, match="dynamic batch validation failed"):
+        _run_onnx_validation_batch(
+            FixedBatchSession(),
+            model_input,
+            batch_size=1,
+            token_count=257,
+            dimensions=384,
+            label="dynamic batch validation",
+        )
+
+
 def test_content_addressed_artifact_preserves_requested_location_and_basename(
     tmp_path: Path,
 ) -> None:
@@ -517,6 +559,118 @@ def test_content_addressed_artifact_preserves_requested_location_and_basename(
     derived = content_addressed_artifact_path(requested, checksum)
 
     assert derived == requested.with_name(f"dinov2-small.{checksum}.onnx")
+
+
+def test_resolve_locked_artifact_accepts_a_checksum_qualified_path_under_root(
+    tmp_path: Path,
+) -> None:
+    from tools.export_model import resolve_locked_artifact
+
+    checksum = "a" * 64
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    artifact = models_dir / f"dinov2-small.{checksum}.onnx"
+    lock_path = tmp_path / "model-lock.json"
+    manifest: dict[str, object] = {
+        "artifact": {
+            "path": artifact.relative_to(tmp_path).as_posix(),
+            "sha256": checksum,
+        }
+    }
+
+    assert resolve_locked_artifact(
+        lock_path,
+        manifest,
+        artifact_root=models_dir,
+    ) == artifact.resolve()
+
+
+def test_resolve_locked_artifact_rejects_parent_traversal(tmp_path: Path) -> None:
+    from tools.export_model import ExportError, resolve_locked_artifact
+
+    checksum = "a" * 64
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    lock_path = tmp_path / "model-lock.json"
+    manifest: dict[str, object] = {
+        "artifact": {
+            "path": f"models/../outside/dinov2-small.{checksum}.onnx",
+            "sha256": checksum,
+        }
+    }
+
+    with pytest.raises(ExportError, match="parent traversal"):
+        resolve_locked_artifact(
+            lock_path,
+            manifest,
+            artifact_root=models_dir,
+        )
+
+
+def test_resolve_locked_artifact_rejects_a_symlink_escape_before_opening_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tools.export_model import ExportError, resolve_locked_artifact
+
+    checksum = "a" * 64
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    escaped_artifact = outside_dir / f"dinov2-small.{checksum}.onnx"
+    escaped_bytes = b"outside-root"
+    escaped_artifact.write_bytes(escaped_bytes)
+    (models_dir / "linked").symlink_to(outside_dir, target_is_directory=True)
+    lock_path = tmp_path / "model-lock.json"
+    manifest: dict[str, object] = {
+        "artifact": {
+            "path": f"models/linked/{escaped_artifact.name}",
+            "sha256": checksum,
+        }
+    }
+    original_open = Path.open
+
+    def reject_escaped_open(path: Path, *args: object, **kwargs: object) -> object:
+        if path.resolve() == escaped_artifact.resolve():
+            raise AssertionError("escaped artifact must not be opened")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", reject_escaped_open)
+
+    with pytest.raises(ExportError, match="artifact root"):
+        resolve_locked_artifact(
+            lock_path,
+            manifest,
+            artifact_root=models_dir,
+        )
+
+    monkeypatch.setattr(Path, "open", original_open)
+    assert escaped_artifact.read_bytes() == escaped_bytes
+
+
+def test_resolve_locked_artifact_rejects_checksum_basename_mismatch(
+    tmp_path: Path,
+) -> None:
+    from tools.export_model import ExportError, resolve_locked_artifact
+
+    declared_checksum = "a" * 64
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    lock_path = tmp_path / "model-lock.json"
+    manifest: dict[str, object] = {
+        "artifact": {
+            "path": f"models/dinov2-small.{'b' * 64}.onnx",
+            "sha256": declared_checksum,
+        }
+    }
+
+    with pytest.raises(ExportError, match="declared checksum"):
+        resolve_locked_artifact(
+            lock_path,
+            manifest,
+            artifact_root=models_dir,
+        )
 
 
 def test_owned_staging_preserves_selected_paths_and_valid_generation(
@@ -642,7 +796,11 @@ def test_manifest_commit_publishes_a_resolvable_immutable_generation(
     )
 
     manifest = json.loads(lock_path.read_text(encoding="utf-8"))
-    resolved = export_tool.resolve_locked_artifact(lock_path, manifest)
+    resolved = export_tool.resolve_locked_artifact(
+        lock_path,
+        manifest,
+        artifact_root=models_dir,
+    )
     assert published == immutable
     assert resolved == immutable.resolve()
     assert export_tool.sha256_file(resolved) == manifest["artifact"]["sha256"]
@@ -738,6 +896,48 @@ def test_publication_never_overwrites_an_existing_immutable_artifact(
 
     assert immutable.read_bytes() == b"existing-content-must-not-change"
     assert lock_path.read_bytes() == old_lock
+    assert staged.exists() is False
+
+
+def test_publication_rejects_an_immutable_artifact_symlink_escape(
+    tmp_path: Path,
+) -> None:
+    from tools import export_model as export_tool
+
+    model_bytes = b"candidate-generation"
+    checksum = hashlib.sha256(model_bytes).hexdigest()
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    outside_artifact = outside_dir / f"dinov2-small.{checksum}.onnx"
+    outside_artifact.write_bytes(model_bytes)
+    immutable = models_dir / outside_artifact.name
+    immutable.symlink_to(outside_artifact)
+    staged = models_dir / ".dinov2-small.staged.onnx.tmp"
+    staged.write_bytes(model_bytes)
+    lock_path = tmp_path / "model-lock.json"
+    old_lock = b'{"generation":"old"}\n'
+    lock_path.write_bytes(old_lock)
+    lock_data: dict[str, object] = {
+        "schemaVersion": 2,
+        "artifact": {
+            "path": os.path.relpath(immutable, lock_path.parent),
+            "sha256": checksum,
+        },
+    }
+
+    with pytest.raises(export_tool.ExportError, match="artifact root"):
+        export_tool._publish_model_generation(
+            staged,
+            immutable,
+            lock_path,
+            lock_data,
+        )
+
+    assert lock_path.read_bytes() == old_lock
+    assert outside_artifact.read_bytes() == model_bytes
+    assert immutable.is_symlink()
     assert staged.exists() is False
 
 
