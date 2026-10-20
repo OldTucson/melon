@@ -28,6 +28,10 @@ export const resetDatabase = async (
     await database.execute(
       sql.raw(`
         TRUNCATE TABLE
+          "visual_search_embeddings",
+          "visual_search_documents",
+          "visual_search_jobs",
+          "visual_search_workers",
           "change_log",
           "operations",
           "authorizations",

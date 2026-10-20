@@ -50,5 +50,10 @@ export const assets = pgTable(
       table.patternId,
       table.role,
     ),
+    unique("assets_owner_pattern_id_unique").on(
+      table.ownerId,
+      table.patternId,
+      table.id,
+    ),
   ],
 );
