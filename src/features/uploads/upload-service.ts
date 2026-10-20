@@ -4,6 +4,10 @@ import { createHash, randomUUID } from "node:crypto";
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 
 import { createAlibabaBrowserCredentialIssuer } from "@/features/storage/cloud-credentials";
+import {
+  ACTIVE_VISUAL_SEARCH_INDEX_VERSION,
+  enqueueVisualSearchIndexJob,
+} from "@/features/image-search/index-service";
 import { lockFolderHierarchy } from "@/features/folders/folder-repository";
 import type {
   BrowserCredentialIssuer,
@@ -1203,6 +1207,18 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
           const hasPreview = derived.some(
             (entry) => entry.asset.role === "preview",
           );
+          const previewAsset = insertedDerived.find(
+            (asset) => asset.role === "preview",
+          );
+          if (previewAsset) {
+            await enqueueVisualSearchIndexJob(tx, {
+              ownerId,
+              patternId: session.patternId,
+              previewAssetId: previewAsset.id,
+              indexVersion: ACTIVE_VISUAL_SEARCH_INDEX_VERSION,
+              now: timestamp,
+            });
+          }
           const [updatedPattern] = await tx
             .update(patterns)
             .set({

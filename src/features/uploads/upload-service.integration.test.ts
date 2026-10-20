@@ -20,6 +20,7 @@ import {
   patterns,
   uploadSessions,
   users,
+  visualSearchJobs,
 } from "@/lib/db/schema";
 import { resetDatabase } from "@/test/database";
 import { FakeCredentialIssuer, FakeOssAdapter } from "@/test/fake-oss";
@@ -40,6 +41,33 @@ const PNG_BYTES = Uint8Array.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
 ]);
 const WEBP_BYTES = new TextEncoder().encode("RIFF1234WEBP");
+
+async function installRejectVisualSearchJobTrigger() {
+  await db.execute(sql.raw(`
+    create or replace function test_reject_visual_search_job_insert()
+    returns trigger language plpgsql as $$
+    begin
+      raise exception 'TEST_VISUAL_SEARCH_ENQUEUE_FAILED';
+    end;
+    $$
+  `));
+  await db.execute(sql.raw(`
+    create trigger test_reject_visual_search_job_insert
+    before insert on visual_search_jobs
+    for each row execute function test_reject_visual_search_job_insert()
+  `));
+}
+
+async function removeRejectVisualSearchJobTrigger() {
+  await db.execute(
+    sql.raw(
+      "drop trigger if exists test_reject_visual_search_job_insert on visual_search_jobs",
+    ),
+  );
+  await db.execute(
+    sql.raw("drop function if exists test_reject_visual_search_job_insert()"),
+  );
+}
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -659,6 +687,7 @@ describe("upload service lifecycle", () => {
       id: initialized.sourceAsset.id,
       detectedMimeType: "image/vnd.adobe.photoshop",
     });
+    expect(await db.select().from(visualSearchJobs)).toEqual([]);
 
     const events = await db
       .select()
@@ -1360,37 +1389,131 @@ describe("upload service lifecycle", () => {
     });
     oss.putObject(previewKey, WEBP_BYTES, "text/plain");
 
-    const completed = await service.complete({
-      ownerId: ownerA,
-      sessionId: initialized.session.id,
-      input: {
-        ...sourceCompletion(initialized),
-        assets: [
-          ...sourceCompletion(initialized).assets,
-          {
-            assetId: previewId,
-            role: "preview",
-            objectKey: previewKey,
-            extension: "webp",
-            sizeBytes: WEBP_BYTES.byteLength,
-            width: 2048,
-            height: 2048,
-          },
-        ],
-      },
-    });
+    const completionInput: UploadCompleteInput = {
+      ...sourceCompletion(initialized),
+      assets: [
+        ...sourceCompletion(initialized).assets,
+        {
+          assetId: previewId,
+          role: "preview",
+          objectKey: previewKey,
+          extension: "webp",
+          sizeBytes: WEBP_BYTES.byteLength,
+          width: 2048,
+          height: 2048,
+        },
+      ],
+    };
+    const [completed, replay] = await Promise.all([
+      service.complete({
+        ownerId: ownerA,
+        sessionId: initialized.session.id,
+        input: completionInput,
+      }),
+      service.complete({
+        ownerId: ownerA,
+        sessionId: initialized.session.id,
+        input: completionInput,
+      }),
+    ]);
+    expect(replay).toEqual(completed);
     const preview = completed.assets.find((asset) => asset.role === "preview");
     expect(preview).toMatchObject({
       id: previewId,
       detectedMimeType: "image/webp",
       originalFilename: "preview.webp",
     });
+    expect(await db.select().from(visualSearchJobs)).toEqual([
+      expect.objectContaining({
+        ownerId: ownerA,
+        patternId: initialized.pattern.id,
+        previewAssetId: previewId,
+        indexVersion: "visual-search-v1",
+        status: "pending",
+        attemptCount: 0,
+        maxAttempts: 5,
+        availableAt: now,
+        createdAt: now,
+        updatedAt: now,
+      }),
+    ]);
 
     await service.signAssetView({ ownerId: ownerA, assetId: previewId });
     expect(oss.signedGets.at(-1)).toMatchObject({
       filename: "preview.webp",
       expiresSeconds: 60,
     });
+  });
+
+  it("rolls back upload completion when preview indexing cannot be enqueued", async () => {
+    const initialized = await service.initialize({
+      ownerId: ownerA,
+      input: initInput(),
+    });
+    oss.putObject(initialized.sourceAsset.objectKey, PSD_BYTES);
+    const previewId = randomUUID();
+    const previewKey = previewObjectKey({
+      ownerId: ownerA,
+      patternId: initialized.pattern.id,
+      assetId: previewId,
+      extension: "webp",
+    });
+    oss.putObject(previewKey, WEBP_BYTES);
+    const completionInput: UploadCompleteInput = {
+      ...sourceCompletion(initialized),
+      assets: [
+        ...sourceCompletion(initialized).assets,
+        {
+          assetId: previewId,
+          role: "preview",
+          objectKey: previewKey,
+          extension: "webp",
+          sizeBytes: WEBP_BYTES.byteLength,
+          width: 2048,
+          height: 2048,
+        },
+      ],
+    };
+
+    await installRejectVisualSearchJobTrigger();
+    try {
+      await expect(
+        service.complete({
+          ownerId: ownerA,
+          sessionId: initialized.session.id,
+          input: completionInput,
+        }),
+      ).rejects.toBeDefined();
+    } finally {
+      await removeRejectVisualSearchJobTrigger();
+    }
+
+    const [pattern] = await db
+      .select()
+      .from(patterns)
+      .where(eq(patterns.id, initialized.pattern.id));
+    const [session] = await db
+      .select()
+      .from(uploadSessions)
+      .where(eq(uploadSessions.id, initialized.session.id));
+    const assetRows = await db
+      .select()
+      .from(assets)
+      .where(eq(assets.patternId, initialized.pattern.id));
+    expect(pattern).toMatchObject({
+      status: "processing",
+      previewStatus: "pending",
+      version: 0,
+    });
+    expect(session?.status).toBe("completing");
+    expect(assetRows).toEqual([
+      expect.objectContaining({
+        id: initialized.sourceAsset.id,
+        role: "source",
+        detectedMimeType: null,
+      }),
+    ]);
+    expect(await db.select().from(visualSearchJobs)).toEqual([]);
   });
 
   it("does not accept a foreign-looking source key even when its size matches", async () => {

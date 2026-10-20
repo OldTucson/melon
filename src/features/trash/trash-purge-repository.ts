@@ -13,6 +13,7 @@ import {
 } from "drizzle-orm";
 
 import { normalizedUuidSchema } from "@/features/storage/identifiers";
+import { removeVisualSearchRowsForPatterns } from "@/features/image-search/index-service";
 import { UPLOAD_WRITE_DRAIN_GRACE_MS } from "@/features/storage/upload-timing";
 import { db, type DbTransaction } from "@/lib/db/client";
 import {
@@ -385,6 +386,7 @@ export async function deletePurgeRelations(
         inArray(uploadSessions.patternId, patternIds),
       ),
     );
+  await removeVisualSearchRowsForPatterns(tx, { ownerId, patternIds });
   await tx
     .delete(assets)
     .where(

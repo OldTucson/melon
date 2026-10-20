@@ -4,6 +4,10 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq, inArray, like, sql } from "drizzle-orm";
 
 import { createAlibabaBrowserCredentialIssuer } from "@/features/storage/cloud-credentials";
+import {
+  ACTIVE_VISUAL_SEARCH_INDEX_VERSION,
+  enqueueVisualSearchIndexJob,
+} from "@/features/image-search/index-service";
 import type {
   BrowserCredentialIssuer,
   BrowserOssCredentials,
@@ -858,6 +862,17 @@ export function createManualPreviewService(dependencies: Dependencies) {
               })),
             )
             .returning();
+          const previewAsset = inserted.find(
+            (asset) => asset.role === "preview",
+          );
+          if (!previewAsset) throw new Error("MANUAL_PREVIEW_ASSET_MISSING");
+          await enqueueVisualSearchIndexJob(tx, {
+            ownerId: identity.ownerId,
+            patternId: identity.patternId,
+            previewAssetId: previewAsset.id,
+            indexVersion: ACTIVE_VISUAL_SEARCH_INDEX_VERSION,
+            now: timestamp,
+          });
           const seq = await nextChangeSeq(tx, identity.ownerId);
           const [updated] = await tx
             .update(patterns)

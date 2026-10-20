@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { trashFolderTree } from "@/features/folders/folder-trash-service";
@@ -26,12 +26,16 @@ import {
   tags,
   uploadSessions,
   users,
+  visualSearchDocuments,
+  visualSearchEmbeddings,
+  visualSearchJobs,
 } from "@/lib/db/schema";
 import { AppError } from "@/lib/http/app-error";
 import { createOperationKey } from "@/lib/db/operation";
 import { resetDatabase } from "@/test/database";
 import { FakeOssAdapter } from "@/test/fake-oss";
 import { createUploadService } from "@/features/uploads/upload-service";
+import { batchPatterns } from "@/features/patterns/pattern-batch-service";
 
 import { createTrashPurgeService } from "./trash-purge-service";
 import { listExpiredTrashTargets } from "./trash-purge-repository";
@@ -126,6 +130,98 @@ async function seedSourceAsset(
   return { id, objectKey };
 }
 
+async function seedVisualSearchIndex(ownerId: string, patternId: string) {
+  const previewAssetId = randomUUID();
+  const documentId = randomUUID();
+  await db.insert(assets).values({
+    id: previewAssetId,
+    ownerId,
+    patternId,
+    role: "preview",
+    objectKey: `users/${ownerId}/patterns/${patternId}/derived/${previewAssetId}.webp`,
+    originalFilename: "preview.webp",
+    detectedMimeType: "image/webp",
+    sizeBytes: 12n,
+    width: 512,
+    height: 512,
+  });
+  await db.insert(visualSearchDocuments).values({
+    id: documentId,
+    ownerId,
+    patternId,
+    previewAssetId,
+    previewHash: "a".repeat(64),
+    indexVersion: "visual-search-v1",
+    status: "ready",
+  });
+  await db.insert(visualSearchEmbeddings).values({
+    documentId,
+    ownerId,
+    patternId,
+    regionIndex: 0,
+    regionKind: "global",
+    x: 0,
+    y: 0,
+    width: 1,
+    height: 1,
+    embedding: Array.from({ length: 384 }, () => 0),
+  });
+  const jobId = randomUUID();
+  await db.insert(visualSearchJobs).values({
+    id: jobId,
+    ownerId,
+    patternId,
+    previewAssetId,
+    indexVersion: "visual-search-v1",
+    status: "complete",
+  });
+  return { previewAssetId, documentId, jobId };
+}
+
+async function installSearchRowsDeletedBeforeAssetsTrigger() {
+  await db.execute(sql.raw(`
+    create or replace function test_require_search_rows_deleted_before_asset()
+    returns trigger language plpgsql as $$
+    begin
+      if old.role = 'preview' and (
+        exists (
+          select 1 from visual_search_jobs
+          where owner_id = old.owner_id
+            and pattern_id = old.pattern_id
+            and preview_asset_id = old.id
+        ) or exists (
+          select 1 from visual_search_documents
+          where owner_id = old.owner_id
+            and pattern_id = old.pattern_id
+            and preview_asset_id = old.id
+        )
+      ) then
+        raise exception 'TEST_SEARCH_ROWS_NOT_DELETED_BEFORE_ASSET';
+      end if;
+      return old;
+    end;
+    $$
+  `));
+  await db.execute(sql.raw(`
+    create trigger test_require_search_rows_deleted_before_asset
+    before delete on assets
+    for each row execute function test_require_search_rows_deleted_before_asset()
+  `));
+}
+
+async function removeSearchRowsDeletedBeforeAssetsTrigger() {
+  await db.execute(
+    sql.raw(
+      "drop trigger if exists test_require_search_rows_deleted_before_asset on assets",
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      "drop function if exists test_require_search_rows_deleted_before_asset()",
+    ),
+  );
+}
+
 async function expectAppError(
   promise: Promise<unknown>,
   code: AppError["code"],
@@ -152,13 +248,69 @@ describe("trash permanent purge", () => {
   beforeEach(async () => resetDatabase());
   afterAll(closeDatabase);
 
+  it("preserves visual search rows through ordinary trash and restore", async () => {
+    const ownerId = await seedUser("trash-search-preserve@example.test");
+    const patternId = randomUUID();
+    await db.insert(patterns).values({
+      id: patternId,
+      ownerId,
+      name: "Preserved",
+      originalFilename: "preserved.psd",
+      extension: "psd",
+      sizeBytes: 12n,
+      status: "ready",
+      previewStatus: "ready",
+    });
+    await seedVisualSearchIndex(ownerId, patternId);
+    const before = {
+      documents: await db.select().from(visualSearchDocuments),
+      embeddings: await db.select().from(visualSearchEmbeddings),
+      jobs: await db.select().from(visualSearchJobs),
+    };
+
+    await batchPatterns({
+      ownerId,
+      mutation: {
+        operationId: randomUUID(),
+        action: "trash",
+        patterns: [{ id: patternId, version: 0 }],
+      },
+    });
+    expect(await db.select().from(visualSearchDocuments)).toEqual(
+      before.documents,
+    );
+    expect(await db.select().from(visualSearchEmbeddings)).toEqual(
+      before.embeddings,
+    );
+    expect(await db.select().from(visualSearchJobs)).toEqual(before.jobs);
+
+    await restorePatterns({
+      ownerId,
+      operationId: randomUUID(),
+      patternIds: [patternId],
+    });
+    expect(await db.select().from(visualSearchDocuments)).toEqual(
+      before.documents,
+    );
+    expect(await db.select().from(visualSearchEmbeddings)).toEqual(
+      before.embeddings,
+    );
+    expect(await db.select().from(visualSearchJobs)).toEqual(before.jobs);
+  });
+
   it("persists pending before OSS, removes relations, and finalizes one pattern tombstone", async () => {
     const ownerId = await seedUser("purge-pattern@example.test");
+    const otherOwnerId = await seedUser("purge-pattern-other@example.test");
     const trashBatchId = randomUUID();
     const patternId = await seedTrashedPattern({
       ownerId,
       trashBatchId,
       name: "Orchard",
+    });
+    const otherPatternId = await seedTrashedPattern({
+      ownerId: otherOwnerId,
+      trashBatchId: randomUUID(),
+      name: "Other orchard",
     });
     const tagId = randomUUID();
     await db.insert(tags).values({
@@ -174,6 +326,11 @@ describe("trash permanent purge", () => {
     const observed: Array<{ patternStatus: string; operationState: unknown }> = [];
     const oss = new FakeOssAdapter();
     const { objectKey } = await seedSourceAsset(ownerId, patternId, oss);
+    await seedVisualSearchIndex(ownerId, patternId);
+    const otherSearch = await seedVisualSearchIndex(
+      otherOwnerId,
+      otherPatternId,
+    );
     await db.insert(uploadSessions).values({
       id: randomUUID(),
       ownerId,
@@ -219,13 +376,18 @@ describe("trash permanent purge", () => {
       now: () => now,
     });
 
-    await expect(
-      service.purgePatterns({ ownerId, operationId, patternIds: [patternId] }),
-    ).resolves.toEqual({
-      state: "complete",
-      deletedPatternCount: 1,
-      deletedFolderCount: 0,
-    });
+    await installSearchRowsDeletedBeforeAssetsTrigger();
+    try {
+      await expect(
+        service.purgePatterns({ ownerId, operationId, patternIds: [patternId] }),
+      ).resolves.toEqual({
+        state: "complete",
+        deletedPatternCount: 1,
+        deletedFolderCount: 0,
+      });
+    } finally {
+      await removeSearchRowsDeletedBeforeAssetsTrigger();
+    }
 
     expect(observed).toEqual([
       {
@@ -251,10 +413,46 @@ describe("trash permanent purge", () => {
       isFavorite: false,
       version: 1,
     });
-    expect(await db.select().from(assets)).toEqual([]);
+    expect(
+      await db.select().from(assets).where(eq(assets.ownerId, ownerId)),
+    ).toEqual([]);
     expect(await db.select().from(patternTags)).toEqual([]);
     expect(await db.select().from(uploadSessions)).toEqual([]);
     expect(oss.objects.size).toBe(0);
+    expect(
+      await db
+        .select()
+        .from(visualSearchDocuments)
+        .where(eq(visualSearchDocuments.ownerId, ownerId)),
+    ).toEqual([]);
+    expect(
+      await db
+        .select()
+        .from(visualSearchEmbeddings)
+        .where(eq(visualSearchEmbeddings.ownerId, ownerId)),
+    ).toEqual([]);
+    expect(
+      await db
+        .select()
+        .from(visualSearchJobs)
+        .where(eq(visualSearchJobs.ownerId, ownerId)),
+    ).toEqual([]);
+    expect(
+      await db
+        .select()
+        .from(visualSearchDocuments)
+        .where(eq(visualSearchDocuments.ownerId, otherOwnerId)),
+    ).toEqual([
+      expect.objectContaining({ id: otherSearch.documentId, patternId: otherPatternId }),
+    ]);
+    expect(
+      await db
+        .select()
+        .from(visualSearchJobs)
+        .where(eq(visualSearchJobs.ownerId, otherOwnerId)),
+    ).toEqual([
+      expect.objectContaining({ id: otherSearch.jobId, patternId: otherPatternId }),
+    ]);
 
     const [operation] = await db
       .select()
@@ -691,8 +889,17 @@ describe("trash permanent purge", () => {
       name: "Nested",
       folderId: childId,
     });
+    const rootPatternId = await seedTrashedPattern({
+      ownerId,
+      trashBatchId,
+      name: "Root pattern",
+      folderId: rootId,
+    });
     const oss = new FakeOssAdapter();
     await seedSourceAsset(ownerId, patternId, oss);
+    await seedSourceAsset(ownerId, rootPatternId, oss);
+    await seedVisualSearchIndex(ownerId, patternId);
+    await seedVisualSearchIndex(ownerId, rootPatternId);
     const operationId = randomUUID();
     const service = createTrashPurgeService({
       database: db,
@@ -700,13 +907,18 @@ describe("trash permanent purge", () => {
       now: () => now,
     });
 
-    await expect(
-      service.purgeFolderBatch({ ownerId, operationId, trashBatchId }),
-    ).resolves.toEqual({
-      state: "complete",
-      deletedPatternCount: 1,
-      deletedFolderCount: 2,
-    });
+    await installSearchRowsDeletedBeforeAssetsTrigger();
+    try {
+      await expect(
+        service.purgeFolderBatch({ ownerId, operationId, trashBatchId }),
+      ).resolves.toEqual({
+        state: "complete",
+        deletedPatternCount: 2,
+        deletedFolderCount: 2,
+      });
+    } finally {
+      await removeSearchRowsDeletedBeforeAssetsTrigger();
+    }
 
     const folderRows = await db
       .select()
@@ -723,16 +935,27 @@ describe("trash permanent purge", () => {
           folder.deletedAt?.getTime() === now.getTime(),
       ),
     ).toBe(true);
-    const [pattern] = await db
+    const patternRows = await db
       .select()
       .from(patterns)
-      .where(eq(patterns.id, patternId));
-    expect(pattern).toMatchObject({ status: "deleted", folderId: null });
+      .where(inArray(patterns.id, [patternId, rootPatternId]));
+    expect(patternRows).toHaveLength(2);
+    expect(
+      patternRows.every(
+        (pattern) => pattern.status === "deleted" && pattern.folderId === null,
+      ),
+    ).toBe(true);
+    expect(await db.select().from(visualSearchDocuments)).toEqual([]);
+    expect(await db.select().from(visualSearchEmbeddings)).toEqual([]);
+    expect(await db.select().from(visualSearchJobs)).toEqual([]);
     const [event] = await db.select().from(changeLog);
     expect(event).toMatchObject({
       operationId,
       operation: "folder_tree.deleted",
       entityType: "folder_tree",
+      payload: {
+        patternIds: [patternId, rootPatternId].sort(),
+      },
     });
   });
 

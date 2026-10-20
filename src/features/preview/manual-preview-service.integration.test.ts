@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { db, closeDatabase } from "@/lib/db/client";
@@ -10,6 +10,9 @@ import {
   patterns,
   uploadSessions,
   users,
+  visualSearchDocuments,
+  visualSearchEmbeddings,
+  visualSearchJobs,
 } from "@/lib/db/schema";
 import { resetDatabase } from "@/test/database";
 import { FakeCredentialIssuer, FakeOssAdapter } from "@/test/fake-oss";
@@ -42,11 +45,79 @@ const seedUser = async (email: string) => {
   return id;
 };
 
+async function seedVisualSearchIndex(input: {
+  ownerId: string;
+  patternId: string;
+  previewAssetId: string;
+}) {
+  const documentId = randomUUID();
+  await db.insert(visualSearchDocuments).values({
+    id: documentId,
+    ownerId: input.ownerId,
+    patternId: input.patternId,
+    previewAssetId: input.previewAssetId,
+    previewHash: "a".repeat(64),
+    indexVersion: "visual-search-v1",
+    status: "ready",
+  });
+  await db.insert(visualSearchEmbeddings).values({
+    documentId,
+    ownerId: input.ownerId,
+    patternId: input.patternId,
+    regionIndex: 0,
+    regionKind: "global",
+    x: 0,
+    y: 0,
+    width: 1,
+    height: 1,
+    embedding: Array.from({ length: 384 }, () => 0),
+  });
+  await db.insert(visualSearchJobs).values({
+    id: randomUUID(),
+    ownerId: input.ownerId,
+    patternId: input.patternId,
+    previewAssetId: input.previewAssetId,
+    indexVersion: "visual-search-v1",
+    status: "complete",
+  });
+  return documentId;
+}
+
+async function installRejectVisualSearchJobTrigger() {
+  await db.execute(sql.raw(`
+    create or replace function test_reject_manual_visual_search_job_insert()
+    returns trigger language plpgsql as $$
+    begin
+      raise exception 'TEST_MANUAL_VISUAL_SEARCH_ENQUEUE_FAILED';
+    end;
+    $$
+  `));
+  await db.execute(sql.raw(`
+    create trigger test_reject_manual_visual_search_job_insert
+    before insert on visual_search_jobs
+    for each row execute function test_reject_manual_visual_search_job_insert()
+  `));
+}
+
+async function removeRejectVisualSearchJobTrigger() {
+  await db.execute(
+    sql.raw(
+      "drop trigger if exists test_reject_manual_visual_search_job_insert on visual_search_jobs",
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      "drop function if exists test_reject_manual_visual_search_job_insert()",
+    ),
+  );
+}
+
 describe("manual preview service", () => {
   let ownerId: string;
   let otherOwnerId: string;
   let patternId: string;
   let sourceAssetId: string;
+  let oldPreviewAssetId: string;
   let oldPreviewKey: string;
   let oldThumbnailKey: string;
   let oss: FakeOssAdapter;
@@ -59,6 +130,7 @@ describe("manual preview service", () => {
     otherOwnerId = await seedUser("other@example.test");
     patternId = randomUUID();
     sourceAssetId = randomUUID();
+    oldPreviewAssetId = randomUUID();
     oldPreviewKey = `users/${ownerId}/patterns/${patternId}/derived/${randomUUID()}.png`;
     oldThumbnailKey = `users/${ownerId}/patterns/${patternId}/derived/${randomUUID()}.png`;
     await db.insert(patterns).values({
@@ -82,7 +154,7 @@ describe("manual preview service", () => {
         sizeBytes: 1024n,
       },
       {
-        id: randomUUID(), ownerId, patternId, role: "preview",
+        id: oldPreviewAssetId, ownerId, patternId, role: "preview",
         objectKey: oldPreviewKey, originalFilename: "preview.png",
         detectedMimeType: "image/png", sizeBytes: 24n, width: 800, height: 600,
       },
@@ -109,6 +181,11 @@ describe("manual preview service", () => {
   afterAll(async () => closeDatabase());
 
   it("atomically replaces derived assets while preserving the source", async () => {
+    await seedVisualSearchIndex({
+      ownerId,
+      patternId,
+      previewAssetId: oldPreviewAssetId,
+    });
     const operationId = randomUUID();
     const initialized = await service.initialize({
       ownerId,
@@ -157,9 +234,94 @@ describe("manual preview service", () => {
       "source",
       "thumbnail",
     ]);
+    const preview = rows.find((row) => row.role === "preview")!;
+    expect(await db.select().from(visualSearchDocuments)).toEqual([]);
+    expect(await db.select().from(visualSearchEmbeddings)).toEqual([]);
+    expect(await db.select().from(visualSearchJobs)).toEqual([
+      expect.objectContaining({
+        ownerId,
+        patternId,
+        previewAssetId: preview.id,
+        indexVersion: "visual-search-v1",
+        status: "pending",
+        attemptCount: 0,
+        maxAttempts: 5,
+      }),
+    ]);
     expect(oss.deleteCalls.flat()).toEqual(
       expect.arrayContaining([oldPreviewKey, oldThumbnailKey]),
     );
+  });
+
+  it("rolls back manual replacement when indexing cannot be enqueued", async () => {
+    const oldDocumentId = await seedVisualSearchIndex({
+      ownerId,
+      patternId,
+      previewAssetId: oldPreviewAssetId,
+    });
+    const initialized = await service.initialize({
+      ownerId,
+      patternId,
+      input: { operationId: randomUUID(), version: 0, extension: "png" },
+    });
+    const previewBytes = pngHeader(1200, 800);
+    const thumbnailBytes = pngHeader(480, 320);
+    oss.putObject(initialized.assets.preview.objectKey, previewBytes);
+    oss.putObject(initialized.assets.thumbnail.objectKey, thumbnailBytes);
+
+    await installRejectVisualSearchJobTrigger();
+    try {
+      await expect(
+        service.complete({
+          ownerId,
+          patternId,
+          input: {
+            operationId: initialized.operationId,
+            version: 0,
+            assets: [
+              {
+                ...initialized.assets.preview,
+                sizeBytes: previewBytes.byteLength,
+                width: 1200,
+                height: 800,
+              },
+              {
+                ...initialized.assets.thumbnail,
+                sizeBytes: thumbnailBytes.byteLength,
+                width: 480,
+                height: 320,
+              },
+            ],
+          },
+        }),
+      ).rejects.toBeDefined();
+    } finally {
+      await removeRejectVisualSearchJobTrigger();
+    }
+
+    const rows = await db
+      .select()
+      .from(assets)
+      .where(and(eq(assets.ownerId, ownerId), eq(assets.patternId, patternId)));
+    expect(rows.map((row) => row.id)).toContain(oldPreviewAssetId);
+    expect(rows.map((row) => row.id)).not.toContain(
+      initialized.assets.preview.assetId,
+    );
+    expect(await db.select().from(visualSearchDocuments)).toEqual([
+      expect.objectContaining({ id: oldDocumentId, previewAssetId: oldPreviewAssetId }),
+    ]);
+    expect(await db.select().from(visualSearchEmbeddings)).toHaveLength(1);
+    expect(await db.select().from(visualSearchJobs)).toEqual([
+      expect.objectContaining({
+        previewAssetId: oldPreviewAssetId,
+        status: "complete",
+      }),
+    ]);
+    const [pattern] = await db
+      .select()
+      .from(patterns)
+      .where(eq(patterns.id, patternId));
+    expect(pattern).toMatchObject({ version: 0, previewStatus: "ready" });
   });
 
   it("records a credential lease for permanent-deletion fencing", async () => {
