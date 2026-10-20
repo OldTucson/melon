@@ -5,6 +5,7 @@ import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -19,9 +20,16 @@ LEASE_DURATION = timedelta(minutes=5)
 HEARTBEAT_INTERVAL_SECONDS = 15
 MAX_RETRY_DELAY_SECONDS = 3600
 DATABASE_POOL_TIMEOUT_SECONDS = 5.0
-DATABASE_STATEMENT_TIMEOUT_SECONDS = 30.0
+DATABASE_STATEMENT_TIMEOUT_SECONDS = 10.0
+MAX_ALLOWED_PATTERN_IDS = 10_000
+MAX_RECALL_ROWS_PER_VECTOR = 100
+MAX_RECALL_CANDIDATES = 50
+EXACT_RECALL_PATTERN_LIMIT = 500
 
 _ERROR_CODE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
+_INDEX_VERSION_PATTERN = re.compile(r"^[a-z0-9-]{1,64}$")
+_PGVECTOR_VERSION_PATTERN = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+MINIMUM_PGVECTOR_VERSION = (0, 8, 0)
 
 
 class LeaseLostError(RuntimeError):
@@ -116,12 +124,42 @@ class CleanupInventory:
     live_jobs: tuple[LiveJobObjectReference, ...]
 
 
+@dataclass(frozen=True)
+class RecallCandidate:
+    document_id: UUID
+    owner_id: UUID
+    pattern_id: UUID
+    index_version: str
+    preview_hash: str
+    phash: str
+    best_visual: float
+    global_visual: float
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _configure_connection(connection: psycopg.Connection[Any]) -> None:
+def validate_pgvector_version(value: object) -> tuple[int, int, int]:
+    if not isinstance(value, str):
+        raise RuntimeError("PGVECTOR_VERSION_UNSUPPORTED")
+    match = _PGVECTOR_VERSION_PATTERN.fullmatch(value)
+    if match is None:
+        raise RuntimeError("PGVECTOR_VERSION_UNSUPPORTED")
+    major, minor, patch = (int(part) for part in match.groups())
+    parsed = (major, minor, patch)
+    if parsed < MINIMUM_PGVECTOR_VERSION:
+        raise RuntimeError("PGVECTOR_VERSION_UNSUPPORTED")
+    return parsed
+
+
+def _configure_connection(
+    connection: psycopg.Connection[Any],
+    *,
+    statement_timeout_ms: int,
+) -> None:
     register_vector(connection)
+    connection.execute(f"SET statement_timeout = '{statement_timeout_ms}ms'")
 
 
 def _validate_worker_id(worker_id: str) -> str:
@@ -195,9 +233,11 @@ class Repository:
             kwargs={
                 "autocommit": True,
                 "row_factory": dict_row,
-                "options": f"-c statement_timeout={statement_timeout_ms}",
             },
-            configure=_configure_connection,
+            configure=partial(
+                _configure_connection,
+                statement_timeout_ms=statement_timeout_ms,
+            ),
         )
         self._pool.wait(timeout=pool_timeout_seconds)
 
@@ -218,6 +258,248 @@ class Repository:
         if row is None or not isinstance(row["name"], str):
             raise RuntimeError("INDEX_DATABASE_NAME_UNAVAILABLE")
         return row["name"]
+
+    def require_pgvector_compatible(self) -> tuple[int, int, int]:
+        with self._pool.connection() as connection:
+            row = connection.execute(
+                "SELECT extversion FROM pg_extension WHERE extname = 'vector'"
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("PGVECTOR_VERSION_UNSUPPORTED")
+        return validate_pgvector_version(row["extversion"])
+
+    def has_ready_documents(
+        self,
+        *,
+        owner_id: UUID,
+        index_version: str,
+        allowed_pattern_ids: Sequence[UUID],
+    ) -> bool:
+        allowed_ids = self._validate_recall_scope(
+            owner_id,
+            index_version,
+            allowed_pattern_ids,
+        )
+        if not allowed_ids:
+            return False
+        with self._pool.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT 1
+                FROM visual_search_documents
+                WHERE owner_id = %s
+                  AND index_version = %s
+                  AND status = 'ready'
+                  AND pattern_id = ANY(%s::uuid[])
+                LIMIT 1
+                """,
+                (owner_id, index_version, list(allowed_ids)),
+            ).fetchone()
+        return row is not None
+
+    def recall_candidates(
+        self,
+        *,
+        owner_id: UUID,
+        index_version: str,
+        allowed_pattern_ids: Sequence[UUID],
+        query_vectors: npt.NDArray[np.float32],
+    ) -> tuple[RecallCandidate, ...]:
+        allowed_ids = self._validate_recall_scope(
+            owner_id,
+            index_version,
+            allowed_pattern_ids,
+        )
+        vectors = self._validate_query_vectors(query_vectors)
+        if not allowed_ids:
+            return ()
+
+        exact = len(allowed_ids) <= EXACT_RECALL_PATTERN_LIMIT
+        merged: dict[UUID, dict[str, Any]] = {}
+        with self._pool.connection() as connection, connection.transaction():
+            if not exact:
+                connection.execute("SET LOCAL hnsw.ef_search = 100")
+                connection.execute(
+                    "SET LOCAL hnsw.iterative_scan = 'relaxed_order'"
+                )
+            for vector in vectors:
+                rows = connection.execute(
+                    self._exact_recall_sql() if exact else self._hnsw_recall_sql(),
+                    {
+                        "owner_id": owner_id,
+                        "index_version": index_version,
+                        "allowed_ids": list(allowed_ids),
+                        "query_vector": vector,
+                        "limit": MAX_RECALL_ROWS_PER_VECTOR,
+                    },
+                ).fetchall()
+                for row in rows:
+                    pattern_id = row["pattern_id"]
+                    similarity = min(1.0, max(-1.0, float(row["similarity"])))
+                    current = merged.get(pattern_id)
+                    if current is None:
+                        bits = row["phash"]
+                        if (
+                            not isinstance(bits, str)
+                            or len(bits) != 64
+                            or set(bits) - {"0", "1"}
+                        ):
+                            raise RuntimeError("IMAGE_SEARCH_DOCUMENT_INVALID")
+                        current = {
+                            "document_id": row["document_id"],
+                            "owner_id": row["owner_id"],
+                            "pattern_id": pattern_id,
+                            "index_version": row["index_version"],
+                            "preview_hash": row["preview_hash"],
+                            "phash": f"{int(bits, 2):016x}",
+                            "best_visual": similarity,
+                            "global_visual": 0.0,
+                        }
+                        merged[pattern_id] = current
+                    else:
+                        current["best_visual"] = max(
+                            float(current["best_visual"]),
+                            similarity,
+                        )
+            candidate_values = sorted(
+                merged.values(),
+                key=lambda values: (
+                    -float(values["best_visual"]),
+                    str(values["pattern_id"]),
+                ),
+            )[:MAX_RECALL_CANDIDATES]
+            if candidate_values:
+                global_rows = connection.execute(
+                    self._global_similarity_sql(),
+                    {
+                        "owner_id": owner_id,
+                        "index_version": index_version,
+                        "candidate_ids": [
+                            values["pattern_id"] for values in candidate_values
+                        ],
+                        "query_vector": vectors[0],
+                    },
+                ).fetchall()
+                global_similarities = {
+                    row["pattern_id"]: min(
+                        1.0,
+                        max(-1.0, float(row["similarity"])),
+                    )
+                    for row in global_rows
+                }
+                if len(global_similarities) != len(candidate_values):
+                    raise RuntimeError("IMAGE_SEARCH_DOCUMENT_INVALID")
+                for values in candidate_values:
+                    values["global_visual"] = global_similarities[
+                        values["pattern_id"]
+                    ]
+
+        candidates = [RecallCandidate(**values) for values in candidate_values]
+        candidates.sort(
+            key=lambda candidate: (
+                -candidate.best_visual,
+                -candidate.global_visual,
+                str(candidate.pattern_id),
+            )
+        )
+        return tuple(candidates)
+
+    @staticmethod
+    def _validate_recall_scope(
+        owner_id: UUID,
+        index_version: str,
+        allowed_pattern_ids: Sequence[UUID],
+    ) -> tuple[UUID, ...]:
+        if not isinstance(owner_id, UUID):
+            raise ValueError("owner_id must be a UUID")
+        if not isinstance(index_version, str) or not _INDEX_VERSION_PATTERN.fullmatch(
+            index_version
+        ):
+            raise ValueError("index_version must be canonical")
+        if len(allowed_pattern_ids) > MAX_ALLOWED_PATTERN_IDS:
+            raise ValueError("allowed_pattern_ids exceeds the supported limit")
+        if any(not isinstance(pattern_id, UUID) for pattern_id in allowed_pattern_ids):
+            raise ValueError("allowed_pattern_ids must contain UUID values")
+        return tuple(dict.fromkeys(allowed_pattern_ids))
+
+    @staticmethod
+    def _validate_query_vectors(
+        query_vectors: object,
+    ) -> npt.NDArray[np.float32]:
+        if (
+            not isinstance(query_vectors, np.ndarray)
+            or query_vectors.dtype != np.float32
+            or query_vectors.shape != (10, 384)
+            or not np.isfinite(query_vectors).all()
+        ):
+            raise ValueError("query_vectors must be a finite float32 (10, 384) array")
+        norms = np.linalg.norm(query_vectors, axis=1)
+        if not np.allclose(norms, np.ones(10), rtol=1e-5, atol=1e-6):
+            raise ValueError("query_vectors must be L2 normalized")
+        return np.ascontiguousarray(query_vectors, dtype=np.float32)
+
+    @staticmethod
+    def _exact_recall_sql() -> str:
+        return """
+            WITH filtered AS MATERIALIZED (
+              SELECT d.id AS document_id, d.owner_id, d.pattern_id,
+                     d.index_version, d.preview_hash, d.phash,
+                     e.region_index, e.embedding
+              FROM visual_search_documents d
+              JOIN visual_search_embeddings e
+                ON e.document_id = d.id
+               AND e.owner_id = d.owner_id
+               AND e.pattern_id = d.pattern_id
+              WHERE d.owner_id = %(owner_id)s
+                AND d.index_version = %(index_version)s
+                AND d.status = 'ready'
+                AND d.pattern_id = ANY(%(allowed_ids)s::uuid[])
+            )
+            SELECT document_id, owner_id, pattern_id, index_version,
+                   preview_hash, phash::text AS phash, region_index,
+                   1.0 - (embedding <=> %(query_vector)s) AS similarity
+            FROM filtered
+            ORDER BY embedding <=> %(query_vector)s, pattern_id, region_index
+            LIMIT %(limit)s
+        """
+
+    @staticmethod
+    def _hnsw_recall_sql() -> str:
+        return """
+            SELECT d.id AS document_id, d.owner_id, d.pattern_id,
+                   d.index_version, d.preview_hash, d.phash::text AS phash,
+                   e.region_index,
+                   1.0 - (e.embedding <=> %(query_vector)s) AS similarity
+            FROM visual_search_embeddings e
+            JOIN visual_search_documents d
+              ON d.id = e.document_id
+             AND d.owner_id = e.owner_id
+             AND d.pattern_id = e.pattern_id
+            WHERE d.owner_id = %(owner_id)s
+              AND d.index_version = %(index_version)s
+              AND d.status = 'ready'
+              AND d.pattern_id = ANY(%(allowed_ids)s::uuid[])
+            ORDER BY e.embedding <=> %(query_vector)s
+            LIMIT %(limit)s
+        """
+
+    @staticmethod
+    def _global_similarity_sql() -> str:
+        return """
+            SELECT d.pattern_id,
+                   1.0 - (e.embedding <=> %(query_vector)s) AS similarity
+            FROM visual_search_documents d
+            JOIN visual_search_embeddings e
+              ON e.document_id = d.id
+             AND e.owner_id = d.owner_id
+             AND e.pattern_id = d.pattern_id
+             AND e.region_index = 0
+            WHERE d.owner_id = %(owner_id)s
+              AND d.index_version = %(index_version)s
+              AND d.status = 'ready'
+              AND d.pattern_id = ANY(%(candidate_ids)s::uuid[])
+            ORDER BY d.pattern_id
+        """
 
     def cleanup_inventory(self, *, index_version: str) -> CleanupInventory:
         with self._pool.connection() as connection, connection.transaction():

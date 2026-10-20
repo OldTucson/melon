@@ -1,23 +1,49 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 import os
+import stat
+import threading
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
+from starlette.datastructures import UploadFile
 
+from melon_visual_search import app as app_module
 from melon_visual_search import auth as auth_module
-from melon_visual_search.app import app
+from melon_visual_search.app import (
+    SearchConcurrencyLimiter,
+    app,
+    get_search_limiter,
+    get_search_service,
+)
+from melon_visual_search.image_io import (
+    IMAGE_SEARCH_IMAGE_TOO_LARGE,
+    IMAGE_SEARCH_INVALID_FILE,
+    ImageSearchError,
+)
+from melon_visual_search.search import (
+    NoIndexError,
+    SearchItem,
+    SearchResult,
+    SearchUnavailableError,
+)
 from melon_visual_search.settings import Settings, get_settings
 
 INTERNAL_TOKEN = "test-token-with-at-least-thirty-two-bytes"
 OTHER_INTERNAL_TOKEN = "other-token-with-at-least-thirty-two-bytes"
 MODEL_SHA256 = "a" * 64
+FIXTURE_DIRECTORY = Path(__file__).parent / "fixtures"
+OWNER_ID = uuid4()
+PATTERN_ID = uuid4()
+REQUEST_ID = uuid4()
 
 
 def make_settings(tmp_path: Path, **overrides: object) -> Settings:
@@ -1062,3 +1088,358 @@ def test_source_errors_report_safe_stage_context_without_raw_details(
         "error: stage=source-validation code=MODEL_SOURCE_INVALID "
         "exception=OSError\n"
     )
+
+
+class StubSearchService:
+    def __init__(
+        self,
+        *,
+        result: SearchResult | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.result = result or SearchResult(width=400, height=368, items=())
+        self.error = error
+        self.calls: list[tuple[UUID, tuple[UUID, ...], bytes]] = []
+        self.temp_file_modes: list[int] = []
+        self.temp_dir: Path | None = None
+
+    def search_encoded(
+        self,
+        owner_id: UUID,
+        allowed_pattern_ids: tuple[UUID, ...],
+        encoded: bytes,
+    ) -> SearchResult:
+        self.calls.append((owner_id, allowed_pattern_ids, encoded))
+        if self.temp_dir is not None:
+            paths = list(self.temp_dir.iterdir())
+            assert len(paths) == 1
+            self.temp_file_modes.append(stat.S_IMODE(paths[0].stat().st_mode))
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+class BlockingSearchService(StubSearchService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def search_encoded(
+        self,
+        owner_id: UUID,
+        allowed_pattern_ids: tuple[UUID, ...],
+        encoded: bytes,
+    ) -> SearchResult:
+        self.calls.append((owner_id, allowed_pattern_ids, encoded))
+        self.started.set()
+        if not self.release.wait(timeout=5):
+            raise RuntimeError("test search release timed out")
+        return self.result
+
+
+def _search_result() -> SearchResult:
+    return SearchResult(
+        width=400,
+        height=368,
+        items=(
+            SearchItem(
+                pattern_id=PATTERN_ID,
+                kind="possible_source",
+                score=0.91234567,
+                category_rank=2,
+            ),
+        ),
+    )
+
+
+def _search_form(
+    *,
+    owner_id: str = str(OWNER_ID),
+    allowed_ids: list[str] | None = None,
+    request_id: str = str(REQUEST_ID),
+) -> dict[str, str]:
+    return {
+        "ownerId": owner_id,
+        "allowedPatternIds": json.dumps(
+            allowed_ids if allowed_ids is not None else [str(PATTERN_ID)]
+        ),
+        "requestId": request_id,
+    }
+
+
+async def _post_search(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    *,
+    image: bytes | None = None,
+    data: dict[str, str] | None = None,
+):
+    return await client.post(
+        "/internal/search",
+        headers=auth_headers,
+        data=data or _search_form(),
+        files={
+            "image": (
+                "query.jpg",
+                image
+                if image is not None
+                else (FIXTURE_DIRECTORY / "checker-crop.jpg").read_bytes(),
+                "image/jpeg",
+            )
+        },
+    )
+
+
+@pytest.fixture
+async def search_client(
+    settings: Settings,
+) -> AsyncIterator[tuple[AsyncClient, StubSearchService]]:
+    service = StubSearchService(result=_search_result())
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_search_service] = lambda: service
+    app.dependency_overrides[get_search_limiter] = lambda: SearchConcurrencyLimiter(1)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        yield client, service
+
+
+async def test_internal_search_requires_bearer_auth(
+    search_client: tuple[AsyncClient, StubSearchService],
+) -> None:
+    client, service = search_client
+
+    response = await client.post(
+        "/internal/search",
+        data=_search_form(),
+        files={"image": ("query.jpg", b"image", "image/jpeg")},
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": {"code": "INTERNAL_AUTH_REQUIRED"}}
+    assert service.calls == []
+
+
+async def test_internal_search_validates_and_returns_ranked_diagnostics(
+    search_client: tuple[AsyncClient, StubSearchService],
+    auth_headers: dict[str, str],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, service = search_client
+    service.temp_dir = settings.temp_dir
+    closed: list[str | None] = []
+    original_close = UploadFile.close
+
+    async def recording_close(upload: UploadFile) -> None:
+        closed.append(upload.filename)
+        await original_close(upload)
+
+    monkeypatch.setattr(UploadFile, "close", recording_close)
+    encoded = (FIXTURE_DIRECTORY / "checker-crop.jpg").read_bytes()
+
+    response = await _post_search(client, auth_headers, image=encoded)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "requestId": str(REQUEST_ID),
+        "query": {"width": 400, "height": 368},
+        "items": [
+            {
+                "patternId": str(PATTERN_ID),
+                "kind": "possible_source",
+                "score": 0.91234567,
+            }
+        ],
+    }
+    assert service.calls == [(OWNER_ID, (PATTERN_ID,), encoded)]
+    assert service.temp_file_modes == [0o600]
+    assert list(settings.temp_dir.iterdir()) == []
+    assert closed
+    assert set(closed) == {"query.jpg"}
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        _search_form(owner_id=str(OWNER_ID).upper()),
+        _search_form(request_id="not-a-uuid"),
+        _search_form(allowed_ids=[str(PATTERN_ID).upper()]),
+        {
+            "ownerId": str(OWNER_ID),
+            "allowedPatternIds": "not-json",
+            "requestId": str(REQUEST_ID),
+        },
+        _search_form(allowed_ids=[str(PATTERN_ID), str(PATTERN_ID)]),
+        _search_form(allowed_ids=[str(uuid4()) for _ in range(10_001)]),
+    ],
+    ids=[
+        "owner-not-canonical",
+        "request-id-invalid",
+        "pattern-not-canonical",
+        "ids-not-json",
+        "duplicate-id",
+        "too-many-ids",
+    ],
+)
+async def test_internal_search_rejects_invalid_identity_fields(
+    search_client: tuple[AsyncClient, StubSearchService],
+    auth_headers: dict[str, str],
+    data: dict[str, str],
+) -> None:
+    client, service = search_client
+
+    response = await _post_search(client, auth_headers, data=data)
+
+    assert response.status_code == 415
+    assert response.json() == {"detail": {"code": "INVALID_FILE"}}
+    assert service.calls == []
+
+
+async def test_internal_search_rejects_more_than_twenty_mebibytes(
+    search_client: tuple[AsyncClient, StubSearchService],
+    auth_headers: dict[str, str],
+    settings: Settings,
+) -> None:
+    client, service = search_client
+
+    response = await _post_search(
+        client,
+        auth_headers,
+        image=b"x" * (20 * 1024 * 1024 + 1),
+    )
+
+    assert response.status_code == 413
+    assert response.json() == {"detail": {"code": "IMAGE_TOO_LARGE"}}
+    assert service.calls == []
+    assert list(settings.temp_dir.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("error", "status", "code"),
+    [
+        (
+            ImageSearchError(IMAGE_SEARCH_INVALID_FILE, "bad query"),
+            415,
+            "INVALID_FILE",
+        ),
+        (
+            ImageSearchError(IMAGE_SEARCH_IMAGE_TOO_LARGE, "large query"),
+            413,
+            "IMAGE_TOO_LARGE",
+        ),
+        (NoIndexError(), 409, "NO_INDEX"),
+        (SearchUnavailableError(), 503, "UNAVAILABLE"),
+        (
+            ImageSearchError("IMAGE_SEARCH_INTERNAL_PATH", "/secret/model/path"),
+            503,
+            "UNAVAILABLE",
+        ),
+    ],
+)
+async def test_internal_search_maps_stable_errors_and_cleans_temp_files(
+    settings: Settings,
+    auth_headers: dict[str, str],
+    error: Exception,
+    status: int,
+    code: str,
+) -> None:
+    service = StubSearchService(error=error)
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_search_service] = lambda: service
+    app.dependency_overrides[get_search_limiter] = lambda: SearchConcurrencyLimiter(1)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await _post_search(client, auth_headers)
+
+    assert response.status_code == status
+    assert response.json() == {"detail": {"code": code}}
+    assert list(settings.temp_dir.iterdir()) == []
+
+
+async def test_internal_search_returns_busy_without_queueing(
+    settings: Settings,
+    auth_headers: dict[str, str],
+) -> None:
+    service = BlockingSearchService()
+    limiter = SearchConcurrencyLimiter(1)
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_search_service] = lambda: service
+    app.dependency_overrides[get_search_limiter] = lambda: limiter
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        first = asyncio.create_task(_post_search(client, auth_headers))
+        assert await asyncio.to_thread(service.started.wait, 2)
+
+        second = await _post_search(client, auth_headers)
+        service.release.set()
+        first_response = await first
+
+    assert second.status_code == 429
+    assert second.json() == {"detail": {"code": "BUSY"}}
+    assert first_response.status_code == 200
+    assert len(service.calls) == 1
+
+
+async def test_internal_search_timeout_keeps_permit_until_worker_finishes_and_cleans(
+    settings: Settings,
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = BlockingSearchService()
+    limiter = SearchConcurrencyLimiter(1)
+    monkeypatch.setattr(app_module, "SEARCH_TIMEOUT_SECONDS", 0.02)
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_search_service] = lambda: service
+    app.dependency_overrides[get_search_limiter] = lambda: limiter
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await _post_search(client, auth_headers)
+        assert response.status_code == 504
+        assert response.json() == {"detail": {"code": "TIMEOUT"}}
+        assert list(settings.temp_dir.iterdir()) == []
+
+        busy = await _post_search(client, auth_headers)
+        assert busy.status_code == 429
+        service.release.set()
+        for _ in range(100):
+            if not limiter.locked:
+                break
+            await asyncio.sleep(0.01)
+        assert not limiter.locked
+
+
+async def test_internal_search_cancellation_closes_upload_and_deletes_temp_file(
+    settings: Settings,
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = BlockingSearchService()
+    limiter = SearchConcurrencyLimiter(1)
+    closed = threading.Event()
+    original_close = UploadFile.close
+
+    async def recording_close(upload: UploadFile) -> None:
+        await original_close(upload)
+        closed.set()
+
+    monkeypatch.setattr(UploadFile, "close", recording_close)
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_search_service] = lambda: service
+    app.dependency_overrides[get_search_limiter] = lambda: limiter
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        request = asyncio.create_task(_post_search(client, auth_headers))
+        assert await asyncio.to_thread(service.started.wait, 2)
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+        assert closed.is_set()
+        assert list(settings.temp_dir.iterdir()) == []
+        assert limiter.locked
+        service.release.set()
+        for _ in range(100):
+            if not limiter.locked:
+                break
+            await asyncio.sleep(0.01)
+        assert not limiter.locked
