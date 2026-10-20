@@ -15,10 +15,12 @@ import psycopg
 from alibabacloud_credentials.exceptions import CredentialException  # type: ignore[import-untyped]
 from alibabacloud_oss_v2.exceptions import BaseError as OssError  # type: ignore[import-untyped]
 
+from .embedding import EmbeddingRuntimeUnavailableError
 from .image_io import ImageSearchError, Region, decode_image, make_regions
 from .local_features import extract_local_features, serialize_local_features
 from .repository import (
     HEARTBEAT_INTERVAL_SECONDS,
+    LEASE_DURATION,
     EmbeddingRecord,
     IndexJob,
     LeaseLostError,
@@ -39,6 +41,7 @@ INDEX_EMBEDDING_INVALID = "INDEX_EMBEDDING_INVALID"
 INDEX_DATABASE_PERMANENT_FAILURE = "INDEX_DATABASE_PERMANENT_FAILURE"
 INDEX_PREVIEW_HASH_MISMATCH = "INDEX_PREVIEW_HASH_MISMATCH"
 INDEX_TEMPORARY_FAILURE = "INDEX_TEMPORARY_FAILURE"
+HEARTBEAT_SHUTDOWN_TIMEOUT_SECONDS = 40.0
 
 _INDEX_VERSION_PATTERN = re.compile(r"^[a-z0-9-]{1,64}$")
 _RETRYABLE_DATABASE_SQLSTATE_CLASSES = frozenset({"08", "40", "53"})
@@ -56,6 +59,13 @@ _RETRYABLE_DATABASE_SQLSTATES = frozenset(
 
 class CleanupRefusedError(RuntimeError):
     code = "INDEX_CLEANUP_DATABASE_REFUSED"
+
+    def __init__(self) -> None:
+        super().__init__(self.code)
+
+
+class HeartbeatShutdownError(RuntimeError):
+    code = "INDEX_HEARTBEAT_SHUTDOWN_TIMEOUT"
 
     def __init__(self) -> None:
         super().__init__(self.code)
@@ -213,6 +223,7 @@ class _LeaseHeartbeat:
         worker_id: str,
         index_version: str,
         interval_seconds: float,
+        shutdown_timeout_seconds: float,
         clock: Callable[[], datetime],
     ) -> None:
         self._repository = repository
@@ -220,6 +231,7 @@ class _LeaseHeartbeat:
         self._worker_id = worker_id
         self._index_version = index_version
         self._interval_seconds = interval_seconds
+        self._shutdown_timeout_seconds = shutdown_timeout_seconds
         self._clock = clock
         self._stop = threading.Event()
         self._lease_lost = threading.Event()
@@ -235,7 +247,9 @@ class _LeaseHeartbeat:
 
     def __exit__(self, *_: object) -> None:
         self._stop.set()
-        self._thread.join()
+        self._thread.join(self._shutdown_timeout_seconds)
+        if self._thread.is_alive():
+            raise HeartbeatShutdownError()
 
     def assert_owned(self) -> None:
         if self._lease_lost.is_set():
@@ -250,6 +264,8 @@ class _LeaseHeartbeat:
                     self._index_version,
                     now=now,
                 )
+                if self._stop.is_set():
+                    return
                 self._repository.renew_lease(
                     self._job,
                     self._worker_id,
@@ -274,16 +290,20 @@ class IndexWorker:
         worker_id: str,
         index_version: str,
         heartbeat_interval_seconds: float = HEARTBEAT_INTERVAL_SECONDS,
+        heartbeat_shutdown_timeout_seconds: float = HEARTBEAT_SHUTDOWN_TIMEOUT_SECONDS,
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:
         if heartbeat_interval_seconds <= 0:
             raise ValueError("heartbeat interval must be positive")
+        if not 0 < heartbeat_shutdown_timeout_seconds < LEASE_DURATION.total_seconds():
+            raise ValueError("heartbeat shutdown timeout must be shorter than lease")
         self._repository = repository
         self._storage = storage
         self._embedder = embedder
         self.worker_id = worker_id
         self.index_version = index_version
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
+        self._heartbeat_shutdown_timeout_seconds = heartbeat_shutdown_timeout_seconds
         self._clock = clock
 
     @staticmethod
@@ -314,6 +334,7 @@ class IndexWorker:
                 self.worker_id,
                 self.index_version,
                 self._heartbeat_interval_seconds,
+                self._heartbeat_shutdown_timeout_seconds,
                 self._clock,
             ) as heartbeat:
                 return self._process(job, heartbeat)
@@ -323,6 +344,8 @@ class IndexWorker:
             return self._record_failure(job, error.code, retryable=False)
         except StorageKeyError as error:
             return self._record_failure(job, error.code, retryable=False)
+        except EmbeddingRuntimeUnavailableError as error:
+            return self._record_failure(job, error.code, retryable=True)
         except ImageSearchError as error:
             return self._record_failure(job, error.code, retryable=False)
         except _TerminalFailure as error:

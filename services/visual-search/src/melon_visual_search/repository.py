@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -17,6 +18,8 @@ from psycopg_pool import ConnectionPool
 LEASE_DURATION = timedelta(minutes=5)
 HEARTBEAT_INTERVAL_SECONDS = 15
 MAX_RETRY_DELAY_SECONDS = 3600
+DATABASE_POOL_TIMEOUT_SECONDS = 5.0
+DATABASE_STATEMENT_TIMEOUT_SECONDS = 30.0
 
 _ERROR_CODE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
 
@@ -166,16 +169,37 @@ class Repository:
         *,
         min_size: int = 1,
         max_size: int = 4,
+        statement_timeout_seconds: float = DATABASE_STATEMENT_TIMEOUT_SECONDS,
+        pool_timeout_seconds: float = DATABASE_POOL_TIMEOUT_SECONDS,
     ) -> None:
+        statement_timeout_ms = round(statement_timeout_seconds * 1000)
+        lease_seconds = LEASE_DURATION.total_seconds()
+        if (
+            not math.isfinite(statement_timeout_seconds)
+            or statement_timeout_ms < 1
+            or statement_timeout_seconds >= lease_seconds
+        ):
+            raise ValueError("statement timeout must be positive and shorter than lease")
+        if (
+            not math.isfinite(pool_timeout_seconds)
+            or pool_timeout_seconds <= 0
+            or pool_timeout_seconds >= lease_seconds
+        ):
+            raise ValueError("pool timeout must be positive and shorter than lease")
         self._pool: ConnectionPool[psycopg.Connection[dict[str, Any]]] = ConnectionPool(
             database_url,
             min_size=min_size,
             max_size=max_size,
             open=True,
-            kwargs={"autocommit": True, "row_factory": dict_row},
+            timeout=pool_timeout_seconds,
+            kwargs={
+                "autocommit": True,
+                "row_factory": dict_row,
+                "options": f"-c statement_timeout={statement_timeout_ms}",
+            },
             configure=_configure_connection,
         )
-        self._pool.wait()
+        self._pool.wait(timeout=pool_timeout_seconds)
 
     def close(self) -> None:
         self._pool.close()

@@ -16,7 +16,9 @@ from PIL import Image
 
 from melon_visual_search.embedding import (
     IMAGE_SEARCH_MODEL_INVALID,
+    IMAGE_SEARCH_MODEL_RUNTIME_UNAVAILABLE,
     EmbeddingRuntime,
+    EmbeddingRuntimeUnavailableError,
     load_model_contract,
     preprocess_images,
 )
@@ -74,6 +76,15 @@ class FakeSession:
         self.run_calls.append((output_names, input_feed))
         model_input = input_feed[self.input_name]
         return [self.output_factory(model_input.shape[0])]
+
+
+class FailingRuntimeSession(FakeSession):
+    def run(
+        self,
+        output_names: list[str],
+        input_feed: dict[str, np.ndarray],
+    ) -> list[np.ndarray]:
+        raise RuntimeError("temporary execution provider failure")
 
 
 def valid_output(batch_size: int) -> np.ndarray:
@@ -167,6 +178,16 @@ def test_embeddings_are_batched_once_and_l2_normalized(tmp_path: Path) -> None:
         np.ones(10),
         atol=1e-6,
     )
+
+
+def test_runtime_execution_failure_has_a_retryable_stable_error(tmp_path: Path) -> None:
+    runtime, _, _ = fake_runtime(tmp_path, FailingRuntimeSession())
+
+    with pytest.raises(EmbeddingRuntimeUnavailableError) as captured:
+        runtime.embed(checker_regions())
+
+    assert captured.value.code == IMAGE_SEARCH_MODEL_RUNTIME_UNAVAILABLE
+    assert str(captured.value) == IMAGE_SEARCH_MODEL_RUNTIME_UNAVAILABLE
 
 
 def test_preprocessing_uses_every_numeric_value_from_the_lock(tmp_path: Path) -> None:

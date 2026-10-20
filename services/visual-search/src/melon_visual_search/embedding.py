@@ -24,6 +24,7 @@ from .image_io import (
 )
 
 IMAGE_SEARCH_MODEL_INVALID = "IMAGE_SEARCH_MODEL_INVALID"
+IMAGE_SEARCH_MODEL_RUNTIME_UNAVAILABLE = "IMAGE_SEARCH_MODEL_RUNTIME_UNAVAILABLE"
 MODEL_LOCK_SCHEMA_VERSION = 2
 MAX_MODEL_BYTES = 512 * 1024 * 1024
 
@@ -104,6 +105,13 @@ class _InferenceSession(Protocol):
 
 
 SessionFactory = Callable[..., _InferenceSession]
+
+
+class EmbeddingRuntimeUnavailableError(RuntimeError):
+    code = IMAGE_SEARCH_MODEL_RUNTIME_UNAVAILABLE
+
+    def __init__(self) -> None:
+        super().__init__(self.code)
 
 
 def _model_error(detail: str) -> ImageSearchError:
@@ -653,7 +661,7 @@ class EmbeddingRuntime:
                 {self.contract.input_name: model_input},
             )
         except Exception as error:
-            raise _model_error("ONNX inference failed") from error
+            raise EmbeddingRuntimeUnavailableError() from error
         if len(raw_outputs) != 1 or not isinstance(raw_outputs[0], np.ndarray):
             raise _model_error("ONNX inference returned an invalid output")
         output = raw_outputs[0]

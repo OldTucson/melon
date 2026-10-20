@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
-from threading import Event, Lock
+from threading import Event, Lock, current_thread
 from time import monotonic, sleep
 from uuid import UUID, uuid4
 
@@ -19,7 +19,12 @@ from PIL import Image
 from psycopg import sql
 
 from melon_visual_search import cli
-from melon_visual_search.embedding import IMAGE_SEARCH_MODEL_INVALID
+from melon_visual_search.embedding import (
+    IMAGE_SEARCH_MODEL_INVALID,
+    IMAGE_SEARCH_MODEL_RUNTIME_UNAVAILABLE,
+    EmbeddingRuntime,
+    load_model_contract,
+)
 from melon_visual_search.image_io import IMAGE_SEARCH_INVALID_FILE, ImageSearchError
 from melon_visual_search.local_features import deserialize_local_features
 from melon_visual_search.repository import (
@@ -39,6 +44,7 @@ from melon_visual_search.worker import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
+MODEL_LOCK_PATH = Path(__file__).parents[1] / "model-lock.json"
 PREVIEW_BYTES = (FIXTURES / "checker.png").read_bytes()
 
 
@@ -100,6 +106,17 @@ class ModelChecksumFailureEmbedder:
         )
 
 
+class FailingInferenceSession:
+    def get_inputs(self):
+        raise AssertionError("runtime contract is already validated")
+
+    def get_outputs(self):
+        raise AssertionError("runtime contract is already validated")
+
+    def run(self, output_names, input_feed):
+        raise RuntimeError("temporary ONNX execution provider failure")
+
+
 class TemporaryWriteFailureStorage(InMemoryStorage):
     def write_features(self, *args, **kwargs):
         raise OSError("temporary OSS failure")
@@ -118,6 +135,33 @@ class PausingFirstWriteStorage(InMemoryStorage):
             if not self._release.wait(5):
                 raise TimeoutError("first upload barrier timed out")
         return result
+
+
+class BlockingHeartbeatRepository:
+    def __init__(
+        self,
+        repository: Repository,
+        started: Event,
+        release: Event,
+        stopped: Event,
+    ) -> None:
+        self._repository = repository
+        self._started = started
+        self._release = release
+        self._stopped = stopped
+
+    def heartbeat_worker(self, *args, **kwargs) -> None:
+        if current_thread().name != "visual-search-lease-heartbeat":
+            self._repository.heartbeat_worker(*args, **kwargs)
+            return
+        self._started.set()
+        try:
+            self._release.wait(5)
+        finally:
+            self._stopped.set()
+
+    def __getattr__(self, name: str):
+        return getattr(self._repository, name)
 
 
 def small_png_bytes() -> bytes:
@@ -830,6 +874,108 @@ def test_long_inference_renews_lease_and_publishes_with_current_time(
     assert job_time == heartbeat_time
 
 
+def test_locked_heartbeat_statement_times_out_before_worker_shutdown(
+    database_url: str,
+    seeded_job: SeededJob,
+    seed_factory: SeedFactory,
+) -> None:
+    repository = Repository(
+        database_url,
+        min_size=1,
+        max_size=8,
+        statement_timeout_seconds=0.1,
+        pool_timeout_seconds=1.0,
+    )
+    worker_id = "worker-blocked-heartbeat"
+    seed_factory.remember_worker(worker_id)
+    inference_started = Event()
+    release_inference = Event()
+
+    def pause_inference() -> None:
+        inference_started.set()
+        if not release_inference.wait(5):
+            raise TimeoutError("inference test barrier timed out")
+
+    storage = InMemoryStorage()
+    seed_preview(storage, seeded_job)
+    worker = IndexWorker(
+        repository,
+        storage,
+        DeterministicEmbedder(pause_inference),
+        worker_id=worker_id,
+        index_version=INDEX_VERSION,
+        heartbeat_interval_seconds=0.01,
+        heartbeat_shutdown_timeout_seconds=0.5,
+        clock=lambda: NOW,
+    )
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            result = executor.submit(worker.run_once, now=NOW)
+            assert inference_started.wait(5)
+            with psycopg.connect(database_url) as blocker:
+                blocker_pid = blocker.execute("SELECT pg_backend_pid()").fetchone()[0]
+                blocker.execute(
+                    """
+                    SELECT worker_id
+                    FROM visual_search_workers
+                    WHERE worker_id = %s
+                    FOR UPDATE
+                    """,
+                    (worker_id,),
+                )
+                wait_for_lock_waiter(database_url, blocker_pid=blocker_pid)
+                release_inference.set()
+                assert result.result(timeout=1) == "completed"
+    finally:
+        release_inference.set()
+        repository.close()
+
+
+def test_heartbeat_shutdown_timeout_stops_the_worker_process_path(
+    repository: Repository,
+    seeded_job: SeededJob,
+) -> None:
+    started = Event()
+    release = Event()
+    stopped = Event()
+    blocking_repository = BlockingHeartbeatRepository(
+        repository,
+        started,
+        release,
+        stopped,
+    )
+
+    def wait_for_heartbeat() -> None:
+        if not started.wait(5):
+            raise TimeoutError("heartbeat did not enter the test barrier")
+
+    storage = InMemoryStorage()
+    seed_preview(storage, seeded_job)
+    worker = IndexWorker(
+        blocking_repository,
+        storage,
+        DeterministicEmbedder(wait_for_heartbeat),
+        worker_id="worker-fatal-heartbeat-timeout",
+        index_version=INDEX_VERSION,
+        heartbeat_interval_seconds=0.01,
+        heartbeat_shutdown_timeout_seconds=0.05,
+        clock=lambda: NOW,
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        result = executor.submit(worker.run_once, now=NOW)
+        try:
+            with pytest.raises(
+                RuntimeError,
+                match="INDEX_HEARTBEAT_SHUTDOWN_TIMEOUT",
+            ):
+                result.result(timeout=0.5)
+        finally:
+            release.set()
+    assert stopped.wait(1)
+
+
 def test_retry_backoff_uses_failure_time_instead_of_claim_time(
     repository: Repository,
     seeded_job: SeededJob,
@@ -1176,6 +1322,46 @@ def test_temporary_storage_failure_is_retryable(
         "INDEX_TEMPORARY_FAILURE",
     )
     assert storage.object_keys == (seeded_job.preview_object_key,)
+
+
+def test_embedding_runtime_execution_failure_is_retryable(
+    repository: Repository,
+    seeded_job: SeededJob,
+    database_url: str,
+) -> None:
+    storage = InMemoryStorage()
+    seed_preview(storage, seeded_job)
+    runtime = EmbeddingRuntime(
+        load_model_contract(MODEL_LOCK_PATH),
+        FailingInferenceSession(),
+    )
+    worker = IndexWorker(
+        repository,
+        storage,
+        runtime,
+        worker_id="worker-temporary-inference-failure",
+        index_version=INDEX_VERSION,
+        clock=lambda: NOW,
+    )
+
+    outcome = worker.run_once(now=NOW)
+
+    with psycopg.connect(database_url) as connection:
+        row = connection.execute(
+            """
+            SELECT status, available_at, last_error_code
+            FROM visual_search_jobs
+            WHERE id = %s
+            """,
+            (seeded_job.id,),
+        ).fetchone()
+    assert outcome == "retried"
+    assert row == (
+        "pending",
+        NOW + timedelta(seconds=30),
+        IMAGE_SEARCH_MODEL_RUNTIME_UNAVAILABLE,
+    )
+    assert storage.write_count == 0
 
 
 def test_publication_waiting_for_preview_replacement_does_not_deadlock_or_publish(
