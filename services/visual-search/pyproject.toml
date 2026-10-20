@@ -23,6 +23,9 @@ dependencies = [
   "uvicorn",
 ]
 
+[project.scripts]
+melon-visual-search = "melon_visual_search.cli:main"
+
 [dependency-groups]
 dev = [
   "httpx",

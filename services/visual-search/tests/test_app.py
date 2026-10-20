@@ -251,6 +251,10 @@ def test_rejects_invalid_security_and_runtime_values(
         ("oss_endpoint", "oss-cn-shanghai.aliyuncs.com"),
         ("oss_endpoint", "https://user:secret@oss.example.test/private?token=secret"),
         ("active_version", "Visual Search V1"),
+        ("active_version", "visual.search.v1"),
+        ("active_version", "visual_search_v1"),
+        ("active_version", "v" * 65),
+        ("production_database_name", "melon production"),
         ("host", ""),
     ],
 )

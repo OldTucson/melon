@@ -5,7 +5,7 @@ import json
 import math
 import secrets
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -606,9 +606,22 @@ class EmbeddingRuntime:
         lock_path: Path,
         *,
         artifact_root: Path | None = None,
+        artifact_path: Path | None = None,
+        expected_sha256: str | None = None,
         session_factory: SessionFactory | None = None,
     ) -> EmbeddingRuntime:
         contract = load_model_contract(lock_path, artifact_root=artifact_root)
+        if expected_sha256 is not None and (
+            len(expected_sha256) != _SHA256_LENGTH
+            or any(character not in "0123456789abcdef" for character in expected_sha256)
+            or not secrets.compare_digest(
+                expected_sha256,
+                contract.artifact_sha256,
+            )
+        ):
+            raise _model_error("configured checksum does not match the model lock")
+        if artifact_path is not None:
+            contract = replace(contract, artifact_path=artifact_path.resolve())
         model = _read_verified_artifact(contract)
         factory = session_factory or _default_session_factory
         try:

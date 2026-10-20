@@ -22,7 +22,8 @@ Environment = Literal["development", "test", "production"]
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _REGION_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _BUCKET_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$")
-_VERSION_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]{0,62}$")
+_VERSION_PATTERN = re.compile(r"^[a-z0-9-]{1,64}$")
+_DATABASE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,63}$")
 
 
 class Settings(BaseSettings):
@@ -43,6 +44,7 @@ class Settings(BaseSettings):
     active_version: str = "visual-search-v1"
     model_path: Path | None = None
     model_sha256: str | None = None
+    production_database_name: str | None = None
     temp_dir: Path = Path("/tmp/melon-visual-search")
     max_concurrency: int = Field(default=1, gt=0)
     host: str = "127.0.0.1"
@@ -122,6 +124,13 @@ class Settings(BaseSettings):
     def validate_model_sha256(cls, value: str | None) -> str | None:
         if value is not None and not _SHA256_PATTERN.fullmatch(value):
             raise ValueError("model SHA-256 must be 64 lowercase hexadecimal characters")
+        return value
+
+    @field_validator("production_database_name")
+    @classmethod
+    def validate_production_database_name(cls, value: str | None) -> str | None:
+        if value is not None and not _DATABASE_NAME_PATTERN.fullmatch(value):
+            raise ValueError("production database name must be a canonical identifier")
         return value
 
     @field_validator("host")

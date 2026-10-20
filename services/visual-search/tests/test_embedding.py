@@ -222,6 +222,57 @@ def test_artifact_checksum_is_verified_before_session_creation(tmp_path: Path) -
     assert calls == []
 
 
+def test_runtime_loads_the_explicit_deployment_artifact_path(tmp_path: Path) -> None:
+    model_bytes = b"deployed deterministic ONNX model"
+    lock_path, locked_artifact, checksum = write_locked_model(
+        tmp_path,
+        model_bytes=model_bytes,
+    )
+    deployed_directory = tmp_path / "deployed"
+    deployed_directory.mkdir()
+    deployed_artifact = deployed_directory / "dinov2-small.onnx"
+    deployed_artifact.write_bytes(model_bytes)
+    locked_artifact.unlink()
+    initialized_with: list[bytes] = []
+
+    def session_factory(model: bytes, *, providers: list[str]) -> FakeSession:
+        initialized_with.append(model)
+        return FakeSession()
+
+    runtime = EmbeddingRuntime.from_lock(
+        lock_path,
+        artifact_path=deployed_artifact,
+        expected_sha256=checksum,
+        session_factory=session_factory,
+    )
+
+    assert runtime.artifact_path == deployed_artifact.resolve()
+    assert runtime.model_sha256 == checksum
+    assert initialized_with == [model_bytes]
+
+
+def test_runtime_rejects_a_configured_checksum_that_differs_from_the_lock(
+    tmp_path: Path,
+) -> None:
+    lock_path, artifact, _ = write_locked_model(tmp_path)
+    calls: list[bytes] = []
+
+    def session_factory(model: bytes, *, providers: list[str]) -> FakeSession:
+        calls.append(model)
+        return FakeSession()
+
+    with pytest.raises(ImageSearchError) as captured:
+        EmbeddingRuntime.from_lock(
+            lock_path,
+            artifact_path=artifact,
+            expected_sha256="0" * 64,
+            session_factory=session_factory,
+        )
+
+    assert captured.value.code == IMAGE_SEARCH_MODEL_INVALID
+    assert calls == []
+
+
 def test_artifact_parent_traversal_is_rejected_before_session_creation(
     tmp_path: Path,
 ) -> None:
