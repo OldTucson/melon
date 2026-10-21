@@ -7,12 +7,16 @@ import logging
 import os
 import stat
 import threading
+import time
 from collections.abc import AsyncIterator, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from tempfile import SpooledTemporaryFile
 from uuid import UUID, uuid4
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+import starlette.formparsers as starlette_formparsers
+from httpx import ASGITransport, AsyncByteStream, AsyncClient
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile
 
@@ -44,6 +48,7 @@ FIXTURE_DIRECTORY = Path(__file__).parent / "fixtures"
 OWNER_ID = uuid4()
 PATTERN_ID = uuid4()
 REQUEST_ID = uuid4()
+MULTIPART_BOUNDARY = "melon-test-boundary"
 
 
 def make_settings(tmp_path: Path, **overrides: object) -> Settings:
@@ -86,13 +91,19 @@ def production_settings(tmp_path: Path, **overrides: object) -> dict[str, object
 
 @pytest.fixture(autouse=True)
 def isolate_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    search_service_cache = app_module._get_search_service
+    search_limiter_cache = app_module._get_search_limiter
     for name in tuple(os.environ):
         if name.startswith("VISUAL_SEARCH_"):
             monkeypatch.delenv(name, raising=False)
     get_settings.cache_clear()
+    search_service_cache.cache_clear()
+    search_limiter_cache.cache_clear()
     app.dependency_overrides.clear()
     yield
     app.dependency_overrides.clear()
+    search_service_cache.cache_clear()
+    search_limiter_cache.cache_clear()
     get_settings.cache_clear()
 
 
@@ -1168,6 +1179,54 @@ def _search_form(
     }
 
 
+def _multipart_body(
+    *,
+    fields: list[tuple[str, str]],
+    files: list[tuple[str, str, bytes]],
+    boundary: str = MULTIPART_BOUNDARY,
+) -> bytes:
+    chunks: list[bytes] = []
+    for name, value in fields:
+        chunks.extend(
+            [
+                f"--{boundary}\r\n".encode(),
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(),
+                value.encode(),
+                b"\r\n",
+            ]
+        )
+    for name, filename, payload in files:
+        chunks.extend(
+            [
+                f"--{boundary}\r\n".encode(),
+                (
+                    f'Content-Disposition: form-data; name="{name}"; '
+                    f'filename="{filename}"\r\n'
+                ).encode(),
+                b"Content-Type: image/jpeg\r\n\r\n",
+                payload,
+                b"\r\n",
+            ]
+        )
+    chunks.append(f"--{boundary}--\r\n".encode())
+    return b"".join(chunks)
+
+
+def _search_fields() -> list[tuple[str, str]]:
+    return list(_search_form().items())
+
+
+class RecordingAsyncStream(AsyncByteStream):
+    def __init__(self, chunks: list[bytes]) -> None:
+        self.chunks = chunks
+        self.yielded: list[int] = []
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for index, chunk in enumerate(self.chunks):
+            self.yielded.append(index)
+            yield chunk
+
+
 async def _post_search(
     client: AsyncClient,
     auth_headers: dict[str, str],
@@ -1220,6 +1279,37 @@ async def test_internal_search_requires_bearer_auth(
     assert service.calls == []
 
 
+@pytest.mark.parametrize(
+    "authorization",
+    [None, f"Bearer {OTHER_INTERNAL_TOKEN}"],
+    ids=["missing", "invalid"],
+)
+async def test_internal_search_rejects_auth_without_reading_body(
+    search_client: tuple[AsyncClient, StubSearchService],
+    authorization: str | None,
+) -> None:
+    client, service = search_client
+    body = _multipart_body(
+        fields=_search_fields(),
+        files=[("image", "query.jpg", b"query")],
+    )
+    stream = RecordingAsyncStream([body[:32], body[32:]])
+    headers = {"content-type": f"multipart/form-data; boundary={MULTIPART_BOUNDARY}"}
+    if authorization is not None:
+        headers["authorization"] = authorization
+
+    response = await client.post(
+        "/internal/search",
+        headers=headers,
+        content=stream,
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": {"code": "INTERNAL_AUTH_REQUIRED"}}
+    assert stream.yielded == []
+    assert service.calls == []
+
+
 async def test_internal_search_maps_service_initialization_failure_without_detail(
     settings: Settings,
     auth_headers: dict[str, str],
@@ -1239,6 +1329,100 @@ async def test_internal_search_maps_service_initialization_failure_without_detai
     assert response.json() == {"detail": {"code": "UNAVAILABLE"}}
     assert "password" not in response.text
     assert "/secret/model/path" not in response.text
+
+
+def test_search_service_cold_start_is_single_flight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = make_settings(
+        tmp_path,
+        database_url="postgresql://melon:melon@127.0.0.1:5432/melon",
+        oss_region="cn-shanghai",
+        oss_bucket="melon-private-assets",
+        oss_endpoint="https://oss-cn-shanghai.aliyuncs.com",
+    )
+    repository_instances: list[object] = []
+    service_instances: list[object] = []
+
+    class CountingRepository:
+        def __init__(self, database_url: str) -> None:
+            del database_url
+            repository_instances.append(self)
+            time.sleep(0.05)
+
+        def require_pgvector_compatible(self) -> tuple[int, int, int]:
+            return (0, 8, 0)
+
+        def close(self) -> None:
+            return None
+
+    class CountingService:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            del args, kwargs
+            service_instances.append(self)
+
+    monkeypatch.setattr(app_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(app_module, "Repository", CountingRepository)
+    monkeypatch.setattr(app_module, "AlibabaOssStorage", lambda **kwargs: object())
+    monkeypatch.setattr(
+        app_module,
+        "load_embedding_runtime",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(app_module, "SearchService", CountingService)
+    app_module._get_search_service.cache_clear()
+    barrier = threading.Barrier(2)
+
+    def resolve() -> object:
+        barrier.wait(timeout=2)
+        return app_module.get_search_service()
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(resolve)
+            second = executor.submit(resolve)
+            results = (first.result(timeout=2), second.result(timeout=2))
+    finally:
+        app_module._get_search_service.cache_clear()
+
+    assert len(repository_instances) == 1
+    assert len(service_instances) == 1
+    assert results[0] is results[1]
+
+
+def test_search_limiter_cold_start_is_single_flight(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    limiter_instances: list[object] = []
+
+    class CountingLimiter:
+        def __init__(self, limit: int) -> None:
+            assert limit == 1
+            limiter_instances.append(self)
+            time.sleep(0.05)
+
+    monkeypatch.setattr(app_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(app_module, "SearchConcurrencyLimiter", CountingLimiter)
+    cached_limiter = app_module._get_search_limiter
+    cached_limiter.cache_clear()
+    barrier = threading.Barrier(2)
+
+    def resolve() -> object:
+        barrier.wait(timeout=2)
+        return app_module.get_search_limiter()
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(resolve)
+            second = executor.submit(resolve)
+            results = (first.result(timeout=2), second.result(timeout=2))
+    finally:
+        cached_limiter.cache_clear()
+
+    assert len(limiter_instances) == 1
+    assert results[0] is results[1]
 
 
 @pytest.mark.parametrize(
@@ -1277,6 +1461,120 @@ async def test_internal_search_maps_malformed_multipart_to_invalid_file(
 
 
 @pytest.mark.parametrize(
+    "content_length",
+    [None, "128"],
+    ids=["without-content-length", "forged-content-length"],
+)
+async def test_internal_search_stops_stream_at_total_body_limit(
+    search_client: tuple[AsyncClient, StubSearchService],
+    auth_headers: dict[str, str],
+    content_length: str | None,
+) -> None:
+    client, service = search_client
+    boundary = MULTIPART_BOUNDARY
+    prefix = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="image"; filename="query.jpg"\r\n'
+        "Content-Type: image/jpeg\r\n\r\n"
+    ).encode()
+    suffix = b"\r\n" + _multipart_body(
+        fields=_search_fields(),
+        files=[],
+        boundary=boundary,
+    )
+    chunks = [prefix, *([b"x" * (1024 * 1024)] * 22), suffix]
+    stream = RecordingAsyncStream(chunks)
+    headers = {
+        **auth_headers,
+        "content-type": f"multipart/form-data; boundary={boundary}",
+    }
+    if content_length is not None:
+        headers["content-length"] = content_length
+
+    response = await client.post(
+        "/internal/search",
+        headers=headers,
+        content=stream,
+    )
+
+    assert response.status_code == 413
+    assert response.json() == {"detail": {"code": "IMAGE_TOO_LARGE"}}
+    assert len(stream.yielded) < len(chunks)
+    assert service.calls == []
+
+
+async def test_internal_search_rejects_second_file_before_reading_its_payload(
+    search_client: tuple[AsyncClient, StubSearchService],
+    auth_headers: dict[str, str],
+) -> None:
+    client, service = search_client
+    boundary = MULTIPART_BOUNDARY
+    first_chunk = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="image"; filename="first.jpg"\r\n'
+        "Content-Type: image/jpeg\r\n\r\n"
+        "first\r\n"
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="attachment"; filename="second.jpg"\r\n'
+        "Content-Type: image/jpeg\r\n\r\n"
+    ).encode()
+    second_payload = b"second-file-payload-must-not-be-read"
+    suffix = b"\r\n" + _multipart_body(
+        fields=_search_fields(),
+        files=[],
+        boundary=boundary,
+    )
+    stream = RecordingAsyncStream([first_chunk, second_payload, suffix])
+
+    response = await client.post(
+        "/internal/search",
+        headers={
+            **auth_headers,
+            "content-type": f"multipart/form-data; boundary={boundary}",
+        },
+        content=stream,
+    )
+
+    assert response.status_code == 415
+    assert response.json() == {"detail": {"code": "INVALID_FILE"}}
+    assert 1 not in stream.yielded
+    assert service.calls == []
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        [*_search_fields(), ("ownerId", str(OWNER_ID))],
+        [*_search_fields(), ("unexpected", "value")],
+    ],
+    ids=["duplicate-field", "extra-field"],
+)
+async def test_internal_search_requires_exact_text_field_set(
+    search_client: tuple[AsyncClient, StubSearchService],
+    auth_headers: dict[str, str],
+    fields: list[tuple[str, str]],
+) -> None:
+    client, service = search_client
+    body = _multipart_body(
+        fields=fields,
+        files=[("image", "query.jpg", b"query")],
+    )
+
+    response = await client.post(
+        "/internal/search",
+        headers={
+            **auth_headers,
+            "content-type": f"multipart/form-data; boundary={MULTIPART_BOUNDARY}",
+        },
+        content=body,
+    )
+
+    assert response.status_code == 415
+    assert response.json() == {"detail": {"code": "INVALID_FILE"}}
+    assert service.calls == []
+
+
+@pytest.mark.parametrize(
     "files",
     [
         [
@@ -1290,21 +1588,25 @@ async def test_internal_search_maps_malformed_multipart_to_invalid_file(
     ],
     ids=["duplicate-image", "extra-named-file"],
 )
-async def test_internal_search_requires_exactly_one_image_file_and_closes_all(
+async def test_internal_search_rejects_additional_file_and_closes_open_spool(
     search_client: tuple[AsyncClient, StubSearchService],
     auth_headers: dict[str, str],
     monkeypatch: pytest.MonkeyPatch,
     files: list[tuple[str, tuple[str, bytes, str]]],
 ) -> None:
     client, service = search_client
-    closed: list[str | None] = []
-    original_close = UploadFile.close
+    spools: list[SpooledTemporaryFile[bytes]] = []
 
-    async def recording_close(upload: UploadFile) -> None:
-        closed.append(upload.filename)
-        await original_close(upload)
+    def recording_spooled_file(*, max_size: int) -> SpooledTemporaryFile[bytes]:
+        spool = SpooledTemporaryFile(max_size=max_size)
+        spools.append(spool)
+        return spool
 
-    monkeypatch.setattr(UploadFile, "close", recording_close)
+    monkeypatch.setattr(
+        starlette_formparsers,
+        "SpooledTemporaryFile",
+        recording_spooled_file,
+    )
 
     response = await client.post(
         "/internal/search",
@@ -1316,7 +1618,8 @@ async def test_internal_search_requires_exactly_one_image_file_and_closes_all(
     assert response.status_code == 415
     assert response.json() == {"detail": {"code": "INVALID_FILE"}}
     assert service.calls == []
-    assert {item[1][0] for item in files} <= set(closed)
+    assert len(spools) == 1
+    assert spools[0].closed
 
 
 async def test_internal_search_validates_and_returns_ranked_diagnostics(

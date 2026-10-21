@@ -6,22 +6,22 @@ import json
 import os
 import secrets
 import tempfile
-from collections.abc import AsyncIterator
+import threading
+from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.exception_handlers import http_exception_handler
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
-from starlette.datastructures import UploadFile as StarletteUploadFile
-from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.datastructures import FormData, UploadFile
+from starlette.formparsers import MultiPartException, MultiPartParser
 from starlette.requests import Request
-from starlette.responses import Response
 
 from .auth import require_internal_token
 from .cli import MODEL_LOCK_PATH, CliConfigurationError, load_embedding_runtime
@@ -38,6 +38,26 @@ from .storage import AlibabaOssStorage
 
 SEARCH_TIMEOUT_SECONDS = 11.0
 UPLOAD_CHUNK_BYTES = 1024 * 1024
+MAX_MULTIPART_BYTES = MAX_ENCODED_BYTES + 1024 * 1024
+MAX_MULTIPART_FIELD_BYTES = 512 * 1024
+_SEARCH_FORM_FIELDS = frozenset(
+    {"image", "ownerId", "allowedPatternIds", "requestId"}
+)
+_SEARCH_SERVICE_LOCK = threading.Lock()
+_SEARCH_LIMITER_LOCK = threading.Lock()
+
+
+class MultipartBodyTooLargeError(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class SearchMultipart:
+    form: FormData
+    image: UploadFile
+    owner_id: str
+    allowed_pattern_ids: str
+    request_id: str
 
 
 class HealthResponse(BaseModel):
@@ -137,23 +157,36 @@ def _get_search_service() -> SearchService:
 
 def get_search_service() -> SearchService:
     try:
-        return _get_search_service()
+        with _SEARCH_SERVICE_LOCK:
+            return _get_search_service()
     except Exception as error:
         raise _error(503, "UNAVAILABLE") from error
 
 
 @lru_cache(maxsize=1)
-def get_search_limiter() -> SearchConcurrencyLimiter:
+def _get_search_limiter() -> SearchConcurrencyLimiter:
     return SearchConcurrencyLimiter(get_settings().max_concurrency)
+
+
+def get_search_limiter() -> SearchConcurrencyLimiter:
+    try:
+        with _SEARCH_LIMITER_LOCK:
+            return _get_search_limiter()
+    except Exception as error:
+        raise _error(503, "UNAVAILABLE") from error
 
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
-    if _get_search_service.cache_info().currsize:
-        _get_search_service().close()
-    _get_search_service.cache_clear()
-    get_search_limiter.cache_clear()
+    with _SEARCH_SERVICE_LOCK:
+        try:
+            if _get_search_service.cache_info().currsize:
+                _get_search_service().close()
+        finally:
+            _get_search_service.cache_clear()
+    with _SEARCH_LIMITER_LOCK:
+        _get_search_limiter.cache_clear()
 
 
 app = FastAPI(
@@ -256,41 +289,59 @@ async def _await_search(task: asyncio.Task[SearchResult]) -> SearchResult:
     return await asyncio.wait_for(shielded, timeout=SEARCH_TIMEOUT_SECONDS)
 
 
-async def _multipart_uploads(
-    request: Request,
-) -> tuple[tuple[str, StarletteUploadFile], ...]:
-    form = await request.form()
-    return tuple(
-        (name, value)
-        for name, value in form.multi_items()
-        if isinstance(value, StarletteUploadFile)
+async def _bounded_request_stream(request: Request) -> AsyncGenerator[bytes, None]:
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > MAX_MULTIPART_BYTES:
+            raise MultipartBodyTooLargeError()
+        yield chunk
+
+
+async def _parse_search_multipart(request: Request) -> SearchMultipart:
+    parser = MultiPartParser(
+        request.headers,
+        _bounded_request_stream(request),
+        max_files=1,
+        max_fields=3,
+        max_part_size=MAX_MULTIPART_FIELD_BYTES,
     )
+    try:
+        form = await parser.parse()
+    except MultipartBodyTooLargeError as error:
+        raise _error(413, "IMAGE_TOO_LARGE") from error
+    except (KeyError, MultiPartException) as error:
+        raise _error(415, "INVALID_FILE") from error
 
+    try:
+        items = tuple(form.multi_items())
+        if len(items) != len(_SEARCH_FORM_FIELDS):
+            raise _error(415, "INVALID_FILE")
+        if {name for name, _ in items} != _SEARCH_FORM_FIELDS:
+            raise _error(415, "INVALID_FILE")
 
-async def _close_uploads(uploads: tuple[StarletteUploadFile, ...]) -> None:
-    seen: set[int] = set()
-    for upload in uploads:
-        identity = id(upload)
-        if identity in seen:
-            continue
-        seen.add(identity)
-        try:
-            await upload.close()
-        except Exception:
-            continue
-
-
-@app.exception_handler(StarletteHTTPException)
-async def _http_error_handler(
-    request: Request,
-    error: StarletteHTTPException,
-) -> Response:
-    if request.url.path == "/internal/search" and error.status_code == 400:
-        return JSONResponse(
-            status_code=415,
-            content={"detail": {"code": "INVALID_FILE"}},
+        values = dict(items)
+        image = values["image"]
+        owner_id = values["ownerId"]
+        allowed_pattern_ids = values["allowedPatternIds"]
+        request_id = values["requestId"]
+        if (
+            not isinstance(image, UploadFile)
+            or not isinstance(owner_id, str)
+            or not isinstance(allowed_pattern_ids, str)
+            or not isinstance(request_id, str)
+        ):
+            raise _error(415, "INVALID_FILE")
+        return SearchMultipart(
+            form=form,
+            image=image,
+            owner_id=owner_id,
+            allowed_pattern_ids=allowed_pattern_ids,
+            request_id=request_id,
         )
-    return await http_exception_handler(request, error)
+    except BaseException:
+        await form.close()
+        raise
 
 
 @app.exception_handler(RequestValidationError)
@@ -325,10 +376,6 @@ async def health(
 )
 async def internal_search(
     request: Request,
-    image: Annotated[UploadFile, File()],
-    owner_id_value: Annotated[str, Form(alias="ownerId")],
-    allowed_ids_value: Annotated[str, Form(alias="allowedPatternIds")],
-    request_id_value: Annotated[str, Form(alias="requestId")],
     settings: Annotated[Settings, Depends(get_settings)],
     service: Annotated[SearchService, Depends(get_search_service)],
     limiter: Annotated[SearchConcurrencyLimiter, Depends(get_search_limiter)],
@@ -336,19 +383,13 @@ async def internal_search(
     temp_path: Path | None = None
     acquired = False
     work_task: asyncio.Task[SearchResult] | None = None
-    multipart_uploads: tuple[tuple[str, StarletteUploadFile], ...] = ()
+    multipart: SearchMultipart | None = None
     try:
-        multipart_uploads = await _multipart_uploads(request)
-        if (
-            len(multipart_uploads) != 1
-            or multipart_uploads[0][0] != "image"
-            or multipart_uploads[0][1] is not image
-        ):
-            raise _error(415, "INVALID_FILE")
-        owner_id = _canonical_uuid(owner_id_value)
-        allowed_ids = _allowed_pattern_ids(allowed_ids_value)
-        request_id = _canonical_uuid(request_id_value)
-        temp_path = await _save_upload(image, settings.temp_dir)
+        multipart = await _parse_search_multipart(request)
+        owner_id = _canonical_uuid(multipart.owner_id)
+        allowed_ids = _allowed_pattern_ids(multipart.allowed_pattern_ids)
+        request_id = _canonical_uuid(multipart.request_id)
+        temp_path = await _save_upload(multipart.image, settings.temp_dir)
         encoded = temp_path.read_bytes()
 
         acquired = await limiter.try_acquire()
@@ -388,9 +429,8 @@ async def internal_search(
         if acquired and work_task is None:
             limiter.release()
         try:
-            await _close_uploads(
-                (image, *(upload for _, upload in multipart_uploads))
-            )
+            if multipart is not None:
+                await multipart.form.close()
         finally:
             if temp_path is not None:
                 temp_path.unlink(missing_ok=True)
