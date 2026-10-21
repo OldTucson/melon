@@ -2,6 +2,8 @@
 
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
+  forwardRef,
+  useImperativeHandle,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -16,18 +18,12 @@ import type { SelectionModifiers } from "./selection-store";
 
 const getRowKey = (index: number) => index;
 
-export function PatternGrid({
-  hasNextPage,
-  isFetchingNextPage,
-  items,
-  mode,
-  onFavorite,
-  onInspect,
-  onLoadMore,
-  onOpenPreview,
-  onSelect,
-  selectedIds,
-}: {
+export type PatternGridHandle = {
+  getScrollOffset(): number;
+  restoreScrollOffset(offset: number): void;
+};
+
+type PatternGridProps = {
   hasNextPage: boolean;
   isFetchingNextPage: boolean;
   items: PatternItem[];
@@ -38,76 +34,107 @@ export function PatternGrid({
   onOpenPreview: (id: string) => void;
   onSelect: (id: string, modifiers: SelectionModifiers) => void;
   selectedIds: ReadonlySet<string>;
-}) {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(900);
+};
 
-  useLayoutEffect(() => {
-    const element = scrollRef.current;
-    if (!element || typeof ResizeObserver === "undefined") return;
-    const styles = getComputedStyle(element);
-    const initialWidth =
-      element.clientWidth -
-      Number.parseFloat(styles.paddingLeft || "0") -
-      Number.parseFloat(styles.paddingRight || "0");
-    setWidth(Math.max(280, initialWidth));
-    const observer = new ResizeObserver(([entry]) => {
-      if (entry) setWidth(Math.max(280, entry.contentRect.width));
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
+export const PatternGrid = forwardRef<PatternGridHandle, PatternGridProps>(
+  function PatternGrid(
+    {
+      hasNextPage,
+      isFetchingNextPage,
+      items,
+      mode,
+      onFavorite,
+      onInspect,
+      onLoadMore,
+      onOpenPreview,
+      onSelect,
+      selectedIds,
+    },
+    ref,
+  ) {
+    const scrollRef = useRef<HTMLDivElement>(null);
+    const [width, setWidth] = useState(900);
 
-  const columns = useMemo(() => {
-    if (mode === "list") return 1;
-    return Math.max(1, Math.min(6, Math.floor((width + 12) / 196)));
-  }, [mode, width]);
-  const rowCount = Math.ceil(items.length / columns);
-  const rowHeight =
-    mode === "list"
-      ? 88
-      : Math.max(196, (width - (columns - 1) * 12) / columns) + 86;
+    useImperativeHandle(
+      ref,
+      () => ({
+        getScrollOffset: () => scrollRef.current?.scrollTop ?? 0,
+        restoreScrollOffset: (offset) => {
+          if (scrollRef.current) {
+            scrollRef.current.scrollTop = Math.max(0, offset);
+          }
+        },
+      }),
+      [],
+    );
 
-  return (
-    <div
-      className="pattern-results"
-      data-virtualized="true"
-      ref={scrollRef}
-      role="region"
-      aria-label="图案结果"
-      onScroll={(event) => {
-        const element = event.currentTarget;
-        if (
-          hasNextPage &&
-          !isFetchingNextPage &&
-          element.scrollHeight - element.scrollTop - element.clientHeight < 480
-        ) {
-          onLoadMore();
-        }
-      }}
-    >
-      <VirtualPatternCanvas
-        columns={columns}
-        items={items}
-        key={`${mode}:${columns}:${rowHeight}`}
-        mode={mode}
-        onFavorite={onFavorite}
-        onInspect={onInspect}
-        onOpenPreview={onOpenPreview}
-        onSelect={onSelect}
-        rowCount={rowCount}
-        rowHeight={rowHeight}
-        scrollRef={scrollRef}
-        selectedIds={selectedIds}
-      />
-      {isFetchingNextPage ? (
-        <p className="load-more-status" aria-live="polite">
-          正在载入更多图案...
-        </p>
-      ) : null}
-    </div>
-  );
-}
+    useLayoutEffect(() => {
+      const element = scrollRef.current;
+      if (!element || typeof ResizeObserver === "undefined") return;
+      const styles = getComputedStyle(element);
+      const initialWidth =
+        element.clientWidth -
+        Number.parseFloat(styles.paddingLeft || "0") -
+        Number.parseFloat(styles.paddingRight || "0");
+      setWidth(Math.max(280, initialWidth));
+      const observer = new ResizeObserver(([entry]) => {
+        if (entry) setWidth(Math.max(280, entry.contentRect.width));
+      });
+      observer.observe(element);
+      return () => observer.disconnect();
+    }, []);
+
+    const columns = useMemo(() => {
+      if (mode === "list") return 1;
+      return Math.max(1, Math.min(6, Math.floor((width + 12) / 196)));
+    }, [mode, width]);
+    const rowCount = Math.ceil(items.length / columns);
+    const rowHeight =
+      mode === "list"
+        ? 88
+        : Math.max(196, (width - (columns - 1) * 12) / columns) + 86;
+
+    return (
+      <div
+        className="pattern-results"
+        data-virtualized="true"
+        ref={scrollRef}
+        role="region"
+        aria-label="图案结果"
+        onScroll={(event) => {
+          const element = event.currentTarget;
+          if (
+            hasNextPage &&
+            !isFetchingNextPage &&
+            element.scrollHeight - element.scrollTop - element.clientHeight < 480
+          ) {
+            onLoadMore();
+          }
+        }}
+      >
+        <VirtualPatternCanvas
+          columns={columns}
+          items={items}
+          key={`${mode}:${columns}:${rowHeight}`}
+          mode={mode}
+          onFavorite={onFavorite}
+          onInspect={onInspect}
+          onOpenPreview={onOpenPreview}
+          onSelect={onSelect}
+          rowCount={rowCount}
+          rowHeight={rowHeight}
+          scrollRef={scrollRef}
+          selectedIds={selectedIds}
+        />
+        {isFetchingNextPage ? (
+          <p className="load-more-status" aria-live="polite">
+            正在载入更多图案...
+          </p>
+        ) : null}
+      </div>
+    );
+  },
+);
 
 function VirtualPatternCanvas({
   columns,

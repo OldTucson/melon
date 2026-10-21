@@ -1,4 +1,5 @@
 import type { PatternQuery } from "@/features/patterns/contracts";
+import type { ImageSearchMatchKind } from "@/features/image-search/contracts";
 import type { TagColorToken } from "@/features/tags/contracts";
 import type { patterns } from "@/lib/db/schema";
 
@@ -37,6 +38,7 @@ export type PatternItem = {
   changeSeq: string;
   createdAt: string;
   updatedAt: string;
+  matchKind?: ImageSearchMatchKind;
 };
 
 export type PatternPage = {

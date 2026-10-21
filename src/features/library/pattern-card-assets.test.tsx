@@ -115,4 +115,37 @@ describe("pattern card assets", () => {
       `/api/assets/${replacementAssetId}/view`,
     );
   });
+
+  it("shows a match label only when the item came from image search", () => {
+    const { rerender } = render(
+      <Tooltip.Provider>
+        <PatternCard
+          item={{ ...item, matchKind: "possible_source" }}
+          mode="grid"
+          onFavorite={vi.fn()}
+          onInspect={vi.fn()}
+          onOpenPreview={vi.fn()}
+          onSelect={vi.fn()}
+          selected={false}
+        />
+      </Tooltip.Provider>,
+    );
+
+    expect(screen.getByText("可能是原图")).toBeVisible();
+
+    rerender(
+      <Tooltip.Provider>
+        <PatternCard
+          item={item}
+          mode="grid"
+          onFavorite={vi.fn()}
+          onInspect={vi.fn()}
+          onOpenPreview={vi.fn()}
+          onSelect={vi.fn()}
+          selected={false}
+        />
+      </Tooltip.Provider>,
+    );
+    expect(screen.queryByText("可能是原图")).not.toBeInTheDocument();
+  });
 });

@@ -929,6 +929,328 @@ describe("Mac-first workspace", () => {
     expect(requestSignal?.aborted).toBe(true);
   });
 
+  it("isolates result selection and restores the normal workspace after exit", async () => {
+    const user = userEvent.setup();
+    const normalItems = [makePattern(1), makePattern(2)];
+    const result = { ...makePattern(3), matchKind: "probable_source" as const };
+    const createObjectURL = vi
+      .fn()
+      .mockReturnValueOnce("blob:dialog-query")
+      .mockReturnValueOnce("blob:library-query");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) => {
+        if (input === "/api/image-search") {
+          return Response.json({
+            query: { width: 640, height: 480 },
+            groups: [{ kind: "probable_source", items: [result] }],
+            timing: { totalMs: 25 },
+          });
+        }
+        return new Promise(() => {});
+      }),
+    );
+    const view = renderLibrary(normalItems);
+
+    await user.click(screen.getByRole("button", { name: "列表视图" }));
+    selectPattern("Pattern 1");
+    inspectPattern("Pattern 1");
+    const normalScroller = screen.getByRole("region", { name: "图案结果" });
+    normalScroller.scrollTop = 137;
+
+    act(() => useImageSearchStore.getState().requestOpen());
+    await user.upload(
+      screen.getByLabelText("选择搜索图片"),
+      new File(["jpeg"], "query.jpg", { type: "image/jpeg" }),
+    );
+    await user.click(screen.getByRole("button", { name: "开始搜索" }));
+
+    expect(await screen.findByLabelText("以图搜图结果")).toBeVisible();
+    expect(screen.queryByText("这里还没有图案")).not.toBeInTheDocument();
+    expect(useSelectionStore.getState()).toMatchObject({
+      selectedIds: [normalItems[0]!.id],
+      inspectorIds: [normalItems[0]!.id],
+    });
+    expect(
+      screen.queryByRole("complementary", { name: "图案检查器" }),
+    ).not.toBeInTheDocument();
+
+    const resultCard = screen.getByRole("listitem", { name: /Pattern 3/ });
+    fireEvent.click(within(resultCard).getByRole("checkbox"));
+    expect(within(resultCard).getByRole("checkbox")).toBeChecked();
+    expect(useSelectionStore.getState().selectedIds).toEqual([
+      normalItems[0]!.id,
+    ]);
+    fireEvent.click(
+      within(resultCard).getByRole("button", {
+        name: "打开 Pattern 3 检查器",
+      }),
+      { detail: 0 },
+    );
+    expect(
+      screen.getByRole("complementary", { name: "图案检查器" }),
+    ).toHaveTextContent("Pattern 3");
+    await user.click(screen.getByRole("button", { name: "网格视图" }));
+
+    await user.click(screen.getByRole("button", { name: "退出搜图" }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("region", { name: "图案结果" }),
+      ).toHaveProperty("scrollTop", 137),
+    );
+    expect(screen.getByRole("button", { name: "列表视图" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(
+      screen.getByRole("checkbox", { name: "选择 Pattern 1" }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("complementary", { name: "图案检查器" }),
+    ).toHaveTextContent("Pattern 1");
+    expect(navigation.replace).toHaveBeenLastCalledWith("/library");
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:library-query");
+    view.unmount();
+  });
+
+  it("reruns active image search when filters change and fixes sorting to match rank", async () => {
+    const user = userEvent.setup();
+    const first = { ...makePattern(1), matchKind: "possible_source" as const };
+    const second = { ...makePattern(2), matchKind: "visually_similar" as const };
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL: vi
+        .fn()
+        .mockReturnValueOnce("blob:dialog-query")
+        .mockReturnValueOnce("blob:library-query"),
+      revokeObjectURL: vi.fn(),
+    });
+    const responses = [
+      {
+        query: { width: 640, height: 480 },
+        groups: [{ kind: "possible_source", items: [first] }],
+        timing: { totalMs: 20 },
+      },
+      {
+        query: { width: 640, height: 480 },
+        groups: [{ kind: "visually_similar", items: [second] }],
+        timing: { totalMs: 21 },
+      },
+    ];
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      if (input === "/api/image-search") {
+        return Response.json(responses.shift());
+      }
+      return new Promise(() => {});
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const view = renderLibrary([first, second]);
+
+    act(() => useImageSearchStore.getState().requestOpen());
+    await user.upload(
+      screen.getByLabelText("选择搜索图片"),
+      new File(["jpeg"], "query.jpg", { type: "image/jpeg" }),
+    );
+    await user.click(screen.getByRole("button", { name: "开始搜索" }));
+    expect(
+      await screen.findByRole("heading", { name: "可能是原图" }),
+    ).toBeVisible();
+
+    expect(
+      screen.getByRole("combobox", { name: "以图搜图按匹配度排序" }),
+    ).toBeDisabled();
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "按格式筛选" }),
+      "png",
+    );
+    const nextQuery: PatternQuery = { ...query, formats: ["png"] };
+    act(() => {
+      view.client.setQueryData(queryKeys.patterns(ownerId, nextQuery), {
+        pages: [{ items: [first, second], nextCursor: null }],
+        pageParams: [null],
+      });
+      view.rerender(libraryTree(view.client, nextQuery));
+    });
+
+    await waitFor(() =>
+      expect(
+        fetcher.mock.calls.filter(([url]) => url === "/api/image-search"),
+      ).toHaveLength(2),
+    );
+    const rerun = fetcher.mock.calls.filter(
+      ([url]) => url === "/api/image-search",
+    )[1]!;
+    expect(JSON.parse(String((rerun[1]!.body as FormData).get("filters")))).toMatchObject({
+      formats: ["png"],
+    });
+    expect(
+      await screen.findByRole("heading", { name: "视觉相似" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("heading", { name: "可能是原图" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("patches successful result mutations and reruns membership-sensitive filters", async () => {
+    const user = userEvent.setup();
+    const favoriteResult = {
+      ...makePattern(1),
+      isFavorite: true,
+      matchKind: "probable_source" as const,
+    };
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL: vi
+        .fn()
+        .mockReturnValueOnce("blob:dialog-query")
+        .mockReturnValueOnce("blob:library-query"),
+      revokeObjectURL: vi.fn(),
+    });
+    let imageSearchCount = 0;
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      if (input === "/api/image-search") {
+        imageSearchCount += 1;
+        return Response.json({
+          query: { width: 640, height: 480 },
+          groups:
+            imageSearchCount === 1
+              ? [{ kind: "probable_source", items: [favoriteResult] }]
+              : [],
+          timing: { totalMs: 20 },
+        });
+      }
+      if (String(input) === `/api/patterns/${favoriteResult.id}` && init?.method === "PATCH") {
+        return Response.json({
+          ...favoriteResult,
+          isFavorite: false,
+          version: 1,
+        });
+      }
+      if (String(input).startsWith("/api/patterns?")) {
+        return Response.json({ items: [], nextCursor: null });
+      }
+      return new Promise(() => {});
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const scopedQuery: PatternQuery = { ...query, favorite: true };
+    const client = createClient([favoriteResult]);
+    client.setQueryData(queryKeys.patterns(ownerId, scopedQuery), {
+      pages: [{ items: [favoriteResult], nextCursor: null }],
+      pageParams: [null],
+    });
+    render(libraryTree(client, scopedQuery));
+
+    act(() => useImageSearchStore.getState().requestOpen());
+    await user.upload(
+      screen.getByLabelText("选择搜索图片"),
+      new File(["jpeg"], "query.jpg", { type: "image/jpeg" }),
+    );
+    await user.click(screen.getByRole("button", { name: "开始搜索" }));
+    const card = await screen.findByRole("listitem", { name: /Pattern 1/ });
+    await user.click(within(card).getByRole("button", { name: "取消收藏" }));
+
+    await waitFor(() => expect(imageSearchCount).toBe(2));
+    expect(await screen.findByText("没有找到相似图案")).toBeVisible();
+  });
+
+  it("removes trashed results immediately and does not restore deleted normal selections", async () => {
+    const user = userEvent.setup();
+    const items = [makePattern(1), makePattern(2)];
+    const results = items.map((item, index) => ({
+      ...item,
+      matchKind: index === 0 ? "probable_source" as const : "possible_source" as const,
+    }));
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL: vi
+        .fn()
+        .mockReturnValueOnce("blob:dialog-query")
+        .mockReturnValueOnce("blob:library-query"),
+      revokeObjectURL: vi.fn(),
+    });
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      if (input === "/api/image-search") {
+        return Response.json({
+          query: { width: 640, height: 480 },
+          groups: [
+            { kind: "probable_source", items: [results[0]] },
+            { kind: "possible_source", items: [results[1]] },
+          ],
+          timing: { totalMs: 20 },
+        });
+      }
+      if (input === "/api/patterns/deletion-impact") {
+        return Response.json(deletionImpact);
+      }
+      if (input === "/api/patterns/batch" && init?.method === "POST") {
+        const body = JSON.parse(String(init.body));
+        return Response.json({
+          patterns: items.map((item) => ({
+            ...item,
+            previewAssetId: null,
+            thumbnailAssetId: null,
+            sourceAssetId: null,
+            status: "trashed",
+            preTrashStatus: item.status,
+            trashBatchId: body.operationId,
+            trashedAt: "2026-10-21T00:00:00.000Z",
+            version: item.version + 1,
+          })),
+        });
+      }
+      if (String(input).startsWith("/api/patterns?")) {
+        return Response.json({ items: [], nextCursor: null });
+      }
+      return new Promise(() => {});
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const view = renderLibrary(items);
+    selectPattern("Pattern 1");
+
+    act(() => useImageSearchStore.getState().requestOpen());
+    await user.upload(
+      screen.getByLabelText("选择搜索图片"),
+      new File(["jpeg"], "query.jpg", { type: "image/jpeg" }),
+    );
+    await user.click(screen.getByRole("button", { name: "开始搜索" }));
+    const first = await screen.findByRole("listitem", { name: /Pattern 1/ });
+    const second = screen.getByRole("listitem", { name: /Pattern 2/ });
+    fireEvent.click(within(first).getByRole("checkbox"));
+    fireEvent.click(within(second).getByRole("checkbox"), { metaKey: true });
+    fireEvent.click(
+      within(first).getByRole("button", { name: "打开 Pattern 1 检查器" }),
+      { detail: 0 },
+    );
+    const inspector = screen.getByRole("complementary", {
+      name: "图案检查器",
+    });
+    fireEvent.click(within(inspector).getByRole("button", { name: "移入回收站" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "确认移入回收站" }),
+      ).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "确认移入回收站" }));
+
+    await waitFor(() =>
+      expect(fetcher).toHaveBeenCalledWith(
+        "/api/patterns/batch",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+    expect(await screen.findByText("没有找到相似图案")).toBeVisible();
+    expect(screen.queryByRole("listitem", { name: /Pattern/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "退出搜图" }));
+    expect(useSelectionStore.getState().selectedIds).toEqual([]);
+    expect(
+      screen.queryByRole("checkbox", { name: "选择 Pattern 1" }),
+    ).not.toBeInTheDocument();
+    view.unmount();
+  });
+
   it("uses one shell folders GET for the tree, heading and bulk move menu", async () => {
     const fetcher = vi.fn<typeof fetch>(
       async () => new Response(JSON.stringify([folder])),

@@ -55,6 +55,7 @@ async function loadTags() {
 }
 
 export function LibraryToolbar({
+  imageSearchActive = false,
   inspectorAvailable,
   inspectorHidden,
   onQueryChange,
@@ -65,6 +66,7 @@ export function LibraryToolbar({
   selectedCount,
   viewMode,
 }: {
+  imageSearchActive?: boolean;
   inspectorAvailable: boolean;
   inspectorHidden: boolean;
   onQueryChange: (query: PatternQuery) => void;
@@ -290,17 +292,24 @@ export function LibraryToolbar({
         <label className="compact-field">
           <span>排序</span>
           <select
-            aria-label="排序图案"
-            value={pendingQuery.sort}
+            aria-label={
+              imageSearchActive ? "以图搜图按匹配度排序" : "排序图案"
+            }
+            disabled={imageSearchActive}
+            value={imageSearchActive ? "match" : pendingQuery.sort}
             onChange={(event) =>
               patchQuery({ sort: event.target.value as PatternQuery["sort"] })
             }
           >
-            {patternSorts.map((sort) => (
-              <option key={sort} value={sort}>
-                {sortLabels[sort]}
-              </option>
-            ))}
+            {imageSearchActive ? (
+              <option value="match">匹配度</option>
+            ) : (
+              patternSorts.map((sort) => (
+                <option key={sort} value={sort}>
+                  {sortLabels[sort]}
+                </option>
+              ))
+            )}
           </select>
         </label>
         {(pendingQuery.formats.length > 0 ||

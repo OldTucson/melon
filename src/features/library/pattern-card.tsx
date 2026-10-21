@@ -27,6 +27,12 @@ const commercialStateLabels = {
   global_buyout: "全局买断",
 } as const;
 
+const imageSearchMatchLabels = {
+  probable_source: "高概率原图",
+  possible_source: "可能是原图",
+  visually_similar: "视觉相似",
+} as const;
+
 const inspectGestureThresholdMs = 400;
 
 export function FormatPlaceholder({
@@ -124,6 +130,14 @@ export function PatternCard({
           <Check aria-hidden="true" />
         </Checkbox.Indicator>
       </Checkbox.Root>
+      {item.matchKind ? (
+        <span
+          className="pattern-match-label"
+          data-match-kind={item.matchKind}
+        >
+          {imageSearchMatchLabels[item.matchKind]}
+        </span>
+      ) : null}
       <button
         aria-label={`打开 ${item.name} 检查器`}
         className="pattern-media"
