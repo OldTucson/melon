@@ -32,6 +32,7 @@ import type {
 import { queryKeys } from "@/lib/query/keys";
 import { QueryOwnerProvider } from "@/lib/query/provider";
 import { authorizationKeys } from "@/features/authorizations/query-keys";
+import type { PatternQuery } from "@/features/patterns/contracts";
 
 import { LibraryView } from "./library-view";
 import { usePatternPatchMutation } from "./pattern-mutations";
@@ -39,6 +40,7 @@ import { WorkspaceShell } from "./workspace-shell";
 import { useSelectionStore } from "./selection-store";
 import type { FolderDto } from "@/features/folders/folder-client";
 import { useUploadStore } from "@/features/uploads/upload-store";
+import { useImageSearchStore } from "@/features/image-search/image-search-store";
 
 const navigation = vi.hoisted(() => ({
   pathname: "/library",
@@ -699,8 +701,10 @@ describe("Mac-first workspace", () => {
     });
   });
   beforeEach(() => {
+    navigation.pathname = "/library";
     navigation.replace.mockReset();
     navigation.searchParams = new URLSearchParams();
+    useImageSearchStore.setState({ dialogOpen: false, openRequest: 0 });
     vi.stubGlobal(
       "ResizeObserver",
       class ResizeObserver {
@@ -727,6 +731,7 @@ describe("Mac-first workspace", () => {
   });
 
   afterEach(() => {
+    useImageSearchStore.setState({ dialogOpen: false, openRequest: 0 });
     useUploadStore.setState({ tasks: [] });
     focusManager.setFocused(true);
     onlineManager.setOnline(true);
@@ -794,6 +799,134 @@ describe("Mac-first workspace", () => {
     expect(css).toMatch(
       /@media\s*\(max-width:\s*720px\)[\s\S]*?\.folder-tree-content\[role="dialog"\]\s*\{[^}]*left:\s*8px[^}]*right:\s*8px[^}]*bottom:\s*60px[^}]*width:\s*auto/,
     );
+  });
+
+  it("opens image search from the library search bar and hides the trigger elsewhere", async () => {
+    const user = userEvent.setup();
+    const client = createClient([]);
+    client.setQueryData(queryKeys.folders(ownerId), []);
+    const view = render(
+      <QueryClientProvider client={client}>
+        <QueryOwnerProvider ownerId={ownerId}>
+          <WorkspaceShell user={{ displayName: "Lin", email: "lin@example.test" }}>
+            <LibraryView initialQuery={query} />
+          </WorkspaceShell>
+        </QueryOwnerProvider>
+      </QueryClientProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "以图搜图" }));
+    expect(screen.getByRole("dialog", { name: "以图搜图" })).toBeVisible();
+
+    view.unmount();
+    useImageSearchStore.setState({ dialogOpen: false, openRequest: 0 });
+    navigation.pathname = "/dashboard";
+    render(
+      <QueryClientProvider client={client}>
+        <QueryOwnerProvider ownerId={ownerId}>
+          <WorkspaceShell user={{ displayName: "Lin", email: "lin@example.test" }}>
+            <p>Dashboard</p>
+          </WorkspaceShell>
+        </QueryOwnerProvider>
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByRole("button", { name: "以图搜图" })).not.toBeInTheDocument();
+  });
+
+  it("searches in the current library scope without adding an upload task", async () => {
+    const user = userEvent.setup();
+    const createObjectURL = vi
+      .fn()
+      .mockReturnValueOnce("blob:dialog-query")
+      .mockReturnValueOnce("blob:library-query");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL });
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      if (input === "/api/image-search") {
+        return Response.json({
+          query: { width: 640, height: 480 },
+          groups: [],
+          timing: { totalMs: 40 },
+        });
+      }
+      return new Promise(() => {});
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const scopedQuery: PatternQuery = {
+      ...query,
+      favorite: true,
+      formats: ["png"],
+    };
+    const client = createClient([]);
+    client.setQueryData(queryKeys.folders(ownerId), []);
+    client.setQueryData(queryKeys.patterns(ownerId, scopedQuery), {
+      pages: [{ items: [], nextCursor: null }],
+      pageParams: [null],
+    });
+    const view = render(libraryTree(client, scopedQuery));
+
+    act(() => useImageSearchStore.getState().requestOpen());
+    const file = new File(["jpeg"], "query.jpg", { type: "image/jpeg" });
+    await user.upload(screen.getByLabelText("选择搜索图片"), file);
+    await user.click(screen.getByRole("button", { name: "开始搜索" }));
+
+    await waitFor(() =>
+      expect(fetcher).toHaveBeenCalledWith(
+        "/api/image-search",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+    const imageSearchCall = fetcher.mock.calls.find(
+      ([url]) => url === "/api/image-search",
+    )!;
+    const body = imageSearchCall[1]!.body as FormData;
+    expect(JSON.parse(String(body.get("filters")))).toMatchObject({
+      favorite: true,
+      formats: ["png"],
+    });
+    expect(useUploadStore.getState().tasks).toEqual([]);
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "以图搜图" })).not.toBeInTheDocument(),
+    );
+
+    view.unmount();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:library-query");
+  });
+
+  it("aborts an active image search when the library unmounts", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL: vi.fn(() => "blob:pending-query"),
+      revokeObjectURL: vi.fn(),
+    });
+    let requestSignal: AbortSignal | undefined;
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      if (input !== "/api/image-search") return new Promise(() => {});
+      requestSignal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        requestSignal?.addEventListener(
+          "abort",
+          () => reject(requestSignal?.reason),
+          { once: true },
+        );
+      });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const client = createClient([]);
+    client.setQueryData(queryKeys.folders(ownerId), []);
+    const view = render(libraryTree(client));
+
+    act(() => useImageSearchStore.getState().requestOpen());
+    await user.upload(
+      screen.getByLabelText("选择搜索图片"),
+      new File(["jpeg"], "query.jpg", { type: "image/jpeg" }),
+    );
+    await user.click(screen.getByRole("button", { name: "开始搜索" }));
+    await waitFor(() => expect(requestSignal).toBeDefined());
+
+    view.unmount();
+    expect(requestSignal?.aborted).toBe(true);
   });
 
   it("uses one shell folders GET for the tree, heading and bulk move menu", async () => {

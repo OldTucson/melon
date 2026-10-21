@@ -11,8 +11,20 @@ import {
 } from "@tanstack/react-query";
 import { Download, X } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { cropImage } from "@/features/image-search/crop-image";
+import {
+  ImageSearchDialog,
+  type ImageSearchDialogPhase,
+  type ImageSearchDialogSubmit,
+} from "@/features/image-search/image-search-dialog";
+import {
+  ImageSearchFileError,
+  searchPatternsByImage,
+  type ImageSearchResponse,
+} from "@/features/image-search/image-search-client";
+import { useImageSearchStore } from "@/features/image-search/image-search-store";
 import {
   patternQuerySchema,
   type PatternQuery,
@@ -72,6 +84,50 @@ const blocksLibraryShortcut = (target: EventTarget | null) => {
   );
 };
 
+function toImageSearchFilters(query: PatternQuery) {
+  return {
+    q: query.q,
+    formats: query.formats,
+    tagIds: query.tagIds,
+    tagMode: query.tagMode,
+    untagged: query.untagged,
+    favorite: query.favorite,
+    previewStatus: query.previewStatus,
+    commercialState: query.commercialState,
+    authorizationField: query.authorizationField,
+    folderId: query.folderId,
+    unfiled: query.unfiled,
+    includeDescendants: query.includeDescendants,
+  };
+}
+
+function imageSearchErrorMessage(error: unknown) {
+  if (error instanceof ImageSearchFileError) {
+    return error.code === "too_large"
+      ? "裁剪后的图片超过 20 MB，请缩小裁剪范围"
+      : "无法处理这张图片，请重新选择";
+  }
+  if (error instanceof ApiResponseError) {
+    const messages: Record<string, string> = {
+      IMAGE_SEARCH_BUSY: "图像搜索正忙，请稍后重试",
+      IMAGE_SEARCH_IMAGE_TOO_LARGE: "图片尺寸过大，请选择较小的图片",
+      IMAGE_SEARCH_INVALID_FILE: "图片无法识别，请重新选择",
+      IMAGE_SEARCH_NO_INDEX: "当前范围还没有可搜索的图像索引",
+      IMAGE_SEARCH_SCOPE_TOO_LARGE: "当前筛选范围过大，请先缩小范围",
+      IMAGE_SEARCH_TIMEOUT: "搜索超时，请重试",
+      IMAGE_SEARCH_UNAVAILABLE: "图像搜索暂时不可用，其他图库功能不受影响",
+    };
+    return messages[error.code] ?? "图像搜索失败，请检查网络后重试";
+  }
+  return "图像搜索失败，请检查网络后重试";
+}
+
+type PendingImageSearchSession = {
+  file: File;
+  response: ImageSearchResponse | null;
+  thumbnailUrl: string;
+};
+
 export function LibraryView({
   initialQuery,
   initialSelectedId,
@@ -93,6 +149,24 @@ export function LibraryView({
       )
     : undefined;
   const [viewMode, setViewMode] = useState<LibraryViewMode>("grid");
+  const imageSearchDialogOpen = useImageSearchStore(
+    (state) => state.dialogOpen,
+  );
+  const imageSearchOpenRequest = useImageSearchStore(
+    (state) => state.openRequest,
+  );
+  const resetImageSearchForOwner = useImageSearchStore(
+    (state) => state.resetForOwner,
+  );
+  const setImageSearchDialogOpen = useImageSearchStore(
+    (state) => state.setDialogOpen,
+  );
+  const [imageSearchPhase, setImageSearchPhase] =
+    useState<ImageSearchDialogPhase>("idle");
+  const [imageSearchError, setImageSearchError] = useState<string | null>(null);
+  const imageSearchAbort = useRef<AbortController | null>(null);
+  const imageSearchRun = useRef(0);
+  const imageSearchSession = useRef<PendingImageSearchSession | null>(null);
   const [collapsedInspectorKey, setCollapsedInspectorKey] = useState<
     string | null
   >(null);
@@ -246,6 +320,36 @@ export function LibraryView({
           !libraryStatuses.has(inspectedPatternQuery.data.status))),
   );
 
+  const releaseImageSearchSession = useCallback(() => {
+    const session = imageSearchSession.current;
+    if (!session) return;
+    URL.revokeObjectURL(session.thumbnailUrl);
+    imageSearchSession.current = null;
+  }, []);
+
+  const cancelImageSearch = useCallback(() => {
+    imageSearchRun.current += 1;
+    imageSearchAbort.current?.abort(
+      new DOMException("Image search cancelled", "AbortError"),
+    );
+    imageSearchAbort.current = null;
+    releaseImageSearchSession();
+    setImageSearchPhase("idle");
+    setImageSearchError(null);
+  }, [releaseImageSearchSession]);
+
+  useEffect(() => {
+    resetImageSearchForOwner(ownerId);
+    return () => {
+      imageSearchRun.current += 1;
+      imageSearchAbort.current?.abort(
+        new DOMException("Library closed", "AbortError"),
+      );
+      imageSearchAbort.current = null;
+      releaseImageSearchSession();
+    };
+  }, [ownerId, releaseImageSearchSession, resetImageSearchForOwner]);
+
   useEffect(() => {
     clearSelection();
     closePreview();
@@ -354,6 +458,58 @@ export function LibraryView({
     const parsed = patternQuerySchema.parse(nextQuery);
     const next = serializeLibrarySearchParams(parsed).toString();
     router.replace(`${pathname}${next ? `?${next}` : ""}`);
+  };
+
+  const runImageSearch = async (input: ImageSearchDialogSubmit) => {
+    const run = imageSearchRun.current + 1;
+    imageSearchRun.current = run;
+    imageSearchAbort.current?.abort(
+      new DOMException("Image search replaced", "AbortError"),
+    );
+    releaseImageSearchSession();
+    setImageSearchError(null);
+    setImageSearchPhase("analyzing");
+    const controller = new AbortController();
+    imageSearchAbort.current = controller;
+
+    try {
+      let submittedFile = input.file;
+      if (input.crop) {
+        const { displayHeight, displayWidth, ...selectedCrop } = input.crop;
+        submittedFile = await cropImage({
+          crop: selectedCrop,
+          displayHeight,
+          displayWidth,
+          file: input.file,
+        });
+      }
+      if (controller.signal.aborted || imageSearchRun.current !== run) return;
+
+      imageSearchSession.current = {
+        file: submittedFile,
+        response: null,
+        thumbnailUrl: URL.createObjectURL(submittedFile),
+      };
+      setImageSearchPhase("processing");
+      const response = await searchPatternsByImage({
+        file: submittedFile,
+        filters: toImageSearchFilters(initialQuery),
+        requestId: crypto.randomUUID(),
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted || imageSearchRun.current !== run) return;
+      imageSearchSession.current.response = response;
+      setImageSearchDialogOpen(false);
+    } catch (cause) {
+      if (controller.signal.aborted || imageSearchRun.current !== run) return;
+      releaseImageSearchSession();
+      setImageSearchError(imageSearchErrorMessage(cause));
+    } finally {
+      if (imageSearchRun.current === run) {
+        imageSearchAbort.current = null;
+        setImageSearchPhase("idle");
+      }
+    }
   };
 
   const showInspector = inspectorPatterns.length > 0 && !inspectorCollapsed;
@@ -489,6 +645,22 @@ export function LibraryView({
           activeQuery={initialQuery}
           patterns={inspectorPatterns}
           onCollapse={() => setCollapsedInspectorKey(inspectorKey)}
+        />
+      ) : null}
+
+      {imageSearchDialogOpen ? (
+        <ImageSearchDialog
+          key={`${ownerId}:${imageSearchOpenRequest}`}
+          error={imageSearchError}
+          onCancel={cancelImageSearch}
+          onOpenChange={(open) => {
+            if (!open && imageSearchPhase !== "idle") cancelImageSearch();
+            if (!open) setImageSearchError(null);
+            setImageSearchDialogOpen(open);
+          }}
+          onSearch={(input) => void runImageSearch(input)}
+          open
+          phase={imageSearchPhase}
         />
       ) : null}
 

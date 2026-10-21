@@ -1,10 +1,13 @@
 "use client";
 
-import { Cloud, Search, Upload, UserRound } from "lucide-react";
+import { Cloud, ScanSearch, Search, Upload, UserRound } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import { useUploadManager } from "@/features/uploads/upload-manager";
+import { useImageSearchStore } from "@/features/image-search/image-search-store";
+
+import { IconButton } from "./icon-button";
 
 export function Topbar({
   user,
@@ -15,6 +18,7 @@ export function Topbar({
   const router = useRouter();
   const searchParams = useSearchParams();
   const upload = useUploadManager();
+  const requestImageSearch = useImageSearchStore((state) => state.requestOpen);
 
   const submitSearch = (event: React.FormEvent) => {
     event.preventDefault();
@@ -47,6 +51,15 @@ export function Topbar({
           name="q"
           placeholder="搜索名称或文件名"
         />
+        {pathname === "/library" ? (
+          <IconButton
+            className="image-search-trigger"
+            label="以图搜图"
+            onClick={requestImageSearch}
+          >
+            <ScanSearch aria-hidden="true" />
+          </IconButton>
+        ) : null}
       </form>
       <div className="topbar-actions">
         <span className="online-status" title="服务器连接正常">
