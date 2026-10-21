@@ -3567,6 +3567,57 @@ textarea:focus-visible,
   min-width: 0;
 }
 
+.image-search-index-settings {
+  min-width: 0;
+}
+
+.image-search-index-summary,
+.image-search-index-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.image-search-index-summary {
+  justify-content: space-between;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.image-search-index-version {
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.image-search-index-summary [data-worker-state="online"] {
+  color: var(--status-standard);
+}
+
+.image-search-index-summary [data-worker-state="stale"],
+.image-search-index-summary [data-worker-state="offline"] {
+  color: var(--danger);
+}
+
+.image-search-index-counts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 16px;
+  margin: 18px 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.image-search-index-actions .primary-button,
+.image-search-index-actions .secondary-button {
+  min-height: 36px;
+}
+
+.image-search-index-actions svg {
+  width: 15px;
+  height: 15px;
+}
+
 .authorization-field-create {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -4149,6 +4200,10 @@ textarea:focus-visible,
 
   .authorization-field-create .primary-button {
     width: 100%;
+  }
+
+  .image-search-index-counts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

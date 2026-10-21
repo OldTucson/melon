@@ -10,4 +10,6 @@ export const queryKeys = {
     ["owner", ownerId, "pattern", id, "tags"] as const,
   tags: (ownerId: string) => ["owner", ownerId, "tags"] as const,
   trash: (ownerId: string) => ["owner", ownerId, "trash"] as const,
+  imageSearchIndex: (ownerId: string) =>
+    ["owner", ownerId, "image-search-index"] as const,
 };

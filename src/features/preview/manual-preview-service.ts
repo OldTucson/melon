@@ -5,8 +5,8 @@ import { and, asc, eq, inArray, like, sql } from "drizzle-orm";
 
 import { createAlibabaBrowserCredentialIssuer } from "@/features/storage/cloud-credentials";
 import {
-  ACTIVE_VISUAL_SEARCH_INDEX_VERSION,
   enqueueVisualSearchIndexJob,
+  getActiveVisualSearchIndexVersion,
 } from "@/features/image-search/index-service";
 import type {
   BrowserCredentialIssuer,
@@ -870,7 +870,7 @@ export function createManualPreviewService(dependencies: Dependencies) {
             ownerId: identity.ownerId,
             patternId: identity.patternId,
             previewAssetId: previewAsset.id,
-            indexVersion: ACTIVE_VISUAL_SEARCH_INDEX_VERSION,
+            indexVersion: getActiveVisualSearchIndexVersion(),
             now: timestamp,
           });
           const seq = await nextChangeSeq(tx, identity.ownerId);

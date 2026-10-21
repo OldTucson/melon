@@ -5,8 +5,8 @@ import { and, eq, inArray, ne, sql } from "drizzle-orm";
 
 import { createAlibabaBrowserCredentialIssuer } from "@/features/storage/cloud-credentials";
 import {
-  ACTIVE_VISUAL_SEARCH_INDEX_VERSION,
   enqueueVisualSearchIndexJob,
+  getActiveVisualSearchIndexVersion,
 } from "@/features/image-search/index-service";
 import { lockFolderHierarchy } from "@/features/folders/folder-repository";
 import type {
@@ -1215,7 +1215,7 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
               ownerId,
               patternId: session.patternId,
               previewAssetId: previewAsset.id,
-              indexVersion: ACTIVE_VISUAL_SEARCH_INDEX_VERSION,
+              indexVersion: getActiveVisualSearchIndexVersion(),
               now: timestamp,
             });
           }

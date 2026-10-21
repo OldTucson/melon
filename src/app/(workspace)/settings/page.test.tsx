@@ -25,12 +25,21 @@ describe("settings page", () => {
     } as unknown as ReturnType<typeof useTheme>);
     vi.stubGlobal(
       "fetch",
-      vi.fn(() =>
+      vi.fn((input: RequestInfo | URL) =>
         Promise.resolve(
-          new Response("[]", {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          }),
+          Response.json(
+            String(input) === "/api/settings/image-search"
+              ? {
+                  indexVersion: "visual-search-v1",
+                  eligible: 4,
+                  ready: 2,
+                  pending: 1,
+                  indexing: 0,
+                  failed: 1,
+                  worker: "online",
+                }
+              : [],
+          ),
         ),
       ),
     );
@@ -64,6 +73,9 @@ describe("settings page", () => {
 
     expect(requireUser).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("heading", { name: "设置" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "图像搜索索引" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "夜间" })).toBeChecked();
     expect(setTheme).toHaveBeenCalledWith("dark");
     expect(fetch).toHaveBeenCalledWith(

@@ -77,9 +77,31 @@ export const internalImageSearchResponseSchema = z
     }
   });
 
+export const imageSearchIndexStatusSchema = z.object({
+  indexVersion: z.string().regex(/^[a-z0-9-]{1,64}$/),
+  eligible: z.number().int().nonnegative(),
+  ready: z.number().int().nonnegative(),
+  pending: z.number().int().nonnegative(),
+  indexing: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  worker: z.enum(["online", "stale", "offline"]),
+});
+
+export const imageSearchRetryResultSchema = z.object({
+  enqueued: z.number().int().nonnegative(),
+});
+
+export const imageSearchRebuildResultSchema = imageSearchRetryResultSchema
+  .extend({
+    alreadyExisting: z.number().int().nonnegative(),
+  });
+
 export type ImageSearchFilters = z.output<typeof imageSearchFiltersSchema>;
 export type ImageSearchFiltersInput = z.input<typeof imageSearchFiltersSchema>;
 export type ImageSearchMatchKind = z.output<typeof imageSearchMatchKindSchema>;
 export type InternalImageSearchResponse = z.output<
   typeof internalImageSearchResponseSchema
+>;
+export type ImageSearchIndexStatus = z.output<
+  typeof imageSearchIndexStatusSchema
 >;

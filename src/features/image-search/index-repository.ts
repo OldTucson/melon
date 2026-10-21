@@ -37,6 +37,7 @@ const backfillCursorSchema = z.object({
   previewAssetId: normalizedUuidSchema,
 });
 const backfillPageSchema = z.object({
+  ownerId: normalizedUuidSchema.optional(),
   cursor: backfillCursorSchema.optional(),
   limit: z.number().int().min(1).max(500),
 });
@@ -109,6 +110,10 @@ export async function selectVisualSearchBackfillCandidates(
     inArray(patterns.previewStatus, ["ready", "manual"]),
     notInArray(patterns.status, ["deleting", "deleted"]),
   ];
+
+  if (input.ownerId) {
+    predicates.push(eq(assets.ownerId, input.ownerId));
+  }
 
   if (input.cursor) {
     predicates.push(
