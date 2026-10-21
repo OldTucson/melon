@@ -7,7 +7,7 @@ import os
 import secrets
 import tempfile
 import threading
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import lru_cache
@@ -45,6 +45,10 @@ _SEARCH_FORM_FIELDS = frozenset(
 )
 _SEARCH_SERVICE_LOCK = threading.Lock()
 _SEARCH_LIMITER_LOCK = threading.Lock()
+_SEARCH_STATE = threading.Condition()
+_ACTIVE_SEARCH_TASKS: set[asyncio.Task[SearchResult]] = set()
+_SEARCH_ADMISSIONS = 0
+_SEARCH_STOPPING = False
 
 
 class MultipartBodyTooLargeError(Exception):
@@ -176,17 +180,47 @@ def get_search_limiter() -> SearchConcurrencyLimiter:
         raise _error(503, "UNAVAILABLE") from error
 
 
+def _start_accepting_searches() -> None:
+    global _SEARCH_STOPPING
+    with _SEARCH_STATE:
+        if _SEARCH_ADMISSIONS or _ACTIVE_SEARCH_TASKS:
+            raise RuntimeError("cannot start while searches are active")
+        _SEARCH_STOPPING = False
+
+
+def _wait_for_searches_to_quiesce() -> None:
+    with _SEARCH_STATE:
+        _SEARCH_STATE.wait_for(
+            lambda: _SEARCH_ADMISSIONS == 0 and not _ACTIVE_SEARCH_TASKS
+        )
+
+
+async def _stop_and_wait_for_searches() -> None:
+    global _SEARCH_STOPPING
+    with _SEARCH_STATE:
+        _SEARCH_STOPPING = True
+        if _SEARCH_ADMISSIONS == 0 and not _ACTIVE_SEARCH_TASKS:
+            return
+    await asyncio.to_thread(_wait_for_searches_to_quiesce)
+
+
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
-    yield
-    with _SEARCH_SERVICE_LOCK:
+    _start_accepting_searches()
+    try:
+        yield
+    finally:
+        await _stop_and_wait_for_searches()
         try:
-            if _get_search_service.cache_info().currsize:
-                _get_search_service().close()
+            with _SEARCH_SERVICE_LOCK:
+                try:
+                    if _get_search_service.cache_info().currsize:
+                        _get_search_service().close()
+                finally:
+                    _get_search_service.cache_clear()
         finally:
-            _get_search_service.cache_clear()
-    with _SEARCH_LIMITER_LOCK:
-        _get_search_limiter.cache_clear()
+            with _SEARCH_LIMITER_LOCK:
+                _get_search_limiter.cache_clear()
 
 
 app = FastAPI(
@@ -200,6 +234,20 @@ app = FastAPI(
 
 def _error(status_code: int, code: str) -> HTTPException:
     return HTTPException(status_code=status_code, detail={"code": code})
+
+
+def _require_search_running() -> Iterator[None]:
+    global _SEARCH_ADMISSIONS
+    with _SEARCH_STATE:
+        if _SEARCH_STOPPING:
+            raise _error(503, "UNAVAILABLE")
+        _SEARCH_ADMISSIONS += 1
+    try:
+        yield
+    finally:
+        with _SEARCH_STATE:
+            _SEARCH_ADMISSIONS -= 1
+            _SEARCH_STATE.notify_all()
 
 
 def _canonical_uuid(value: object) -> UUID:
@@ -260,9 +308,35 @@ def _release_when_done(
     task: asyncio.Task[SearchResult],
     limiter: SearchConcurrencyLimiter,
 ) -> None:
+    with _SEARCH_STATE:
+        _ACTIVE_SEARCH_TASKS.discard(task)
+        _SEARCH_STATE.notify_all()
     limiter.release()
     if not task.cancelled():
         task.exception()
+
+
+def _create_search_task(
+    service: SearchService,
+    limiter: SearchConcurrencyLimiter,
+    owner_id: UUID,
+    allowed_ids: tuple[UUID, ...],
+    encoded: bytes,
+) -> asyncio.Task[SearchResult]:
+    with _SEARCH_STATE:
+        if _SEARCH_STOPPING:
+            raise _error(503, "UNAVAILABLE")
+        task = asyncio.create_task(
+            asyncio.to_thread(
+                service.search_encoded,
+                owner_id,
+                allowed_ids,
+                encoded,
+            )
+        )
+        _ACTIVE_SEARCH_TASKS.add(task)
+        task.add_done_callback(lambda done: _release_when_done(done, limiter))
+        return task
 
 
 def _response(request_id: UUID, result: SearchResult) -> InternalSearchResponse:
@@ -371,7 +445,7 @@ async def health(
 
 @app.post(
     "/internal/search",
-    dependencies=[Depends(require_internal_token)],
+    dependencies=[Depends(require_internal_token), Depends(_require_search_running)],
     response_model=InternalSearchResponse,
 )
 async def internal_search(
@@ -395,15 +469,13 @@ async def internal_search(
         acquired = await limiter.try_acquire()
         if not acquired:
             raise _error(429, "BUSY")
-        work_task = asyncio.create_task(
-            asyncio.to_thread(
-                service.search_encoded,
-                owner_id,
-                allowed_ids,
-                encoded,
-            )
+        work_task = _create_search_task(
+            service,
+            limiter,
+            owner_id,
+            allowed_ids,
+            encoded,
         )
-        work_task.add_done_callback(lambda task: _release_when_done(task, limiter))
         try:
             result = await _await_search(work_task)
         except (TimeoutError, asyncio.TimeoutError) as error:

@@ -10,6 +10,7 @@ import threading
 import time
 from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from pathlib import Path
 from tempfile import SpooledTemporaryFile
 from uuid import UUID, uuid4
@@ -93,6 +94,7 @@ def production_settings(tmp_path: Path, **overrides: object) -> dict[str, object
 def isolate_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     search_service_cache = app_module._get_search_service
     search_limiter_cache = app_module._get_search_limiter
+    app_module._start_accepting_searches()
     for name in tuple(os.environ):
         if name.startswith("VISUAL_SEARCH_"):
             monkeypatch.delenv(name, raising=False)
@@ -1149,6 +1151,30 @@ class BlockingSearchService(StubSearchService):
         return self.result
 
 
+class ClosableBlockingSearchService(BlockingSearchService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.closed = threading.Event()
+
+    def close(self) -> None:
+        self.closed.set()
+
+
+class PausingSecondAcquireLimiter(SearchConcurrencyLimiter):
+    def __init__(self) -> None:
+        super().__init__(2)
+        self.acquire_calls = 0
+        self.second_waiting = asyncio.Event()
+        self.allow_second = asyncio.Event()
+
+    async def try_acquire(self) -> bool:
+        self.acquire_calls += 1
+        if self.acquire_calls == 2:
+            self.second_waiting.set()
+            await self.allow_second.wait()
+        return await super().try_acquire()
+
+
 def _search_result() -> SearchResult:
     return SearchResult(
         width=400,
@@ -1845,3 +1871,211 @@ async def test_internal_search_cancellation_closes_upload_and_deletes_temp_file(
                 break
             await asyncio.sleep(0.01)
         assert not limiter.locked
+
+
+async def test_lifespan_waits_for_timed_out_worker_before_closing_service(
+    settings: Settings,
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = ClosableBlockingSearchService()
+    limiter = PausingSecondAcquireLimiter()
+
+    @lru_cache(maxsize=1)
+    def cached_service() -> ClosableBlockingSearchService:
+        return service
+
+    monkeypatch.setattr(app_module, "SEARCH_TIMEOUT_SECONDS", 0.02)
+    monkeypatch.setattr(app_module, "_get_search_service", cached_service)
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_search_limiter] = lambda: limiter
+    lifespan = app_module._lifespan(app)
+    await lifespan.__aenter__()
+    shutdown_task: asyncio.Task[bool | None] | None = None
+    racing_request: asyncio.Task[object] | None = None
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            timed_out = await _post_search(client, auth_headers)
+            assert timed_out.status_code == 504
+            assert timed_out.json() == {"detail": {"code": "TIMEOUT"}}
+
+            racing_request = asyncio.create_task(_post_search(client, auth_headers))
+            await asyncio.wait_for(limiter.second_waiting.wait(), timeout=2)
+            shutdown_task = asyncio.create_task(
+                lifespan.__aexit__(None, None, None)
+            )
+            await asyncio.sleep(0)
+            closed_before_release = service.closed.is_set()
+            shutdown_done_before_release = shutdown_task.done()
+
+            limiter.allow_second.set()
+            racing_response = await racing_request
+            calls_before_release = len(service.calls)
+    finally:
+        limiter.allow_second.set()
+        service.release.set()
+        if racing_request is not None and not racing_request.done():
+            await asyncio.gather(racing_request, return_exceptions=True)
+        if shutdown_task is None:
+            await lifespan.__aexit__(None, None, None)
+        else:
+            await shutdown_task
+
+    assert not closed_before_release
+    assert not shutdown_done_before_release
+    assert racing_response.status_code == 503
+    assert racing_response.json() == {"detail": {"code": "UNAVAILABLE"}}
+    assert calls_before_release == 1
+    assert service.closed.is_set()
+
+
+async def test_lifespan_waits_for_cancelled_worker_before_closing_service(
+    settings: Settings,
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = ClosableBlockingSearchService()
+    limiter = SearchConcurrencyLimiter(1)
+
+    @lru_cache(maxsize=1)
+    def cached_service() -> ClosableBlockingSearchService:
+        return service
+
+    monkeypatch.setattr(app_module, "_get_search_service", cached_service)
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_search_limiter] = lambda: limiter
+    lifespan = app_module._lifespan(app)
+    await lifespan.__aenter__()
+    shutdown_task: asyncio.Task[bool | None] | None = None
+    request: asyncio.Task[object] | None = None
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            request = asyncio.create_task(_post_search(client, auth_headers))
+            assert await asyncio.to_thread(service.started.wait, 2)
+            request.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await request
+
+            shutdown_task = asyncio.create_task(
+                lifespan.__aexit__(None, None, None)
+            )
+            await asyncio.sleep(0)
+            closed_before_release = service.closed.is_set()
+            shutdown_done_before_release = shutdown_task.done()
+            stopping_response = await _post_search(client, auth_headers)
+            calls_before_release = len(service.calls)
+    finally:
+        service.release.set()
+        if request is not None and not request.done():
+            request.cancel()
+            await asyncio.gather(request, return_exceptions=True)
+        if shutdown_task is None:
+            await lifespan.__aexit__(None, None, None)
+        else:
+            await shutdown_task
+
+    assert not closed_before_release
+    assert not shutdown_done_before_release
+    assert stopping_response.status_code == 503
+    assert stopping_response.json() == {"detail": {"code": "UNAVAILABLE"}}
+    assert calls_before_release == 1
+    assert service.closed.is_set()
+
+
+async def test_lifespan_waits_for_admitted_request_before_clearing_cold_caches(
+    settings: Settings,
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = ClosableBlockingSearchService()
+    service_factory_calls = 0
+    admitted = asyncio.Event()
+    allow_request = asyncio.Event()
+    original_admission = app_module._require_search_running
+
+    @lru_cache(maxsize=1)
+    def cached_service() -> ClosableBlockingSearchService:
+        nonlocal service_factory_calls
+        service_factory_calls += 1
+        return service
+
+    async def paused_admission() -> AsyncIterator[None]:
+        admission = original_admission()
+        admission_iterator = admission if isinstance(admission, Iterator) else None
+        if admission_iterator is not None:
+            next(admission_iterator)
+        admitted.set()
+        try:
+            await allow_request.wait()
+            yield
+        finally:
+            if admission_iterator is not None:
+                try:
+                    next(admission_iterator)
+                except StopIteration:
+                    pass
+
+    monkeypatch.setattr(app_module, "_get_search_service", cached_service)
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[original_admission] = paused_admission
+    lifespan = app_module._lifespan(app)
+    await lifespan.__aenter__()
+    shutdown_task: asyncio.Task[bool | None] | None = None
+    request: asyncio.Task[object] | None = None
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            request = asyncio.create_task(_post_search(client, auth_headers))
+            await asyncio.wait_for(admitted.wait(), timeout=2)
+            shutdown_task = asyncio.create_task(
+                lifespan.__aexit__(None, None, None)
+            )
+            await asyncio.sleep(0)
+            shutdown_done_while_admitted = shutdown_task.done()
+
+            allow_request.set()
+            response = await request
+    finally:
+        allow_request.set()
+        service.release.set()
+        if request is not None and not request.done():
+            await asyncio.gather(request, return_exceptions=True)
+        if shutdown_task is None:
+            await lifespan.__aexit__(None, None, None)
+        else:
+            await shutdown_task
+
+    assert not shutdown_done_while_admitted
+    assert response.status_code == 503
+    assert response.json() == {"detail": {"code": "UNAVAILABLE"}}
+    assert service.calls == []
+    assert service_factory_calls == 1
+    assert service.closed.is_set()
+    assert cached_service.cache_info().currsize == 0
+    assert app_module._get_search_limiter.cache_info().currsize == 0
+
+
+async def test_service_initialization_failure_releases_search_admission(
+    settings: Settings,
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    @lru_cache(maxsize=1)
+    def unavailable_service() -> ClosableBlockingSearchService:
+        raise RuntimeError("service initialization failed")
+
+    monkeypatch.setattr(app_module, "_get_search_service", unavailable_service)
+    app.dependency_overrides[get_settings] = lambda: settings
+    lifespan = app_module._lifespan(app)
+    await lifespan.__aenter__()
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await _post_search(client, auth_headers)
+
+    await asyncio.wait_for(lifespan.__aexit__(None, None, None), timeout=2)
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": {"code": "UNAVAILABLE"}}
+    assert unavailable_service.cache_info().currsize == 0
