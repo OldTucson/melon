@@ -15,6 +15,14 @@ const validEnv = {
     "acs:ram::123456789012:role/melon-browser-upload",
 };
 
+const enabledImageSearchEnv = {
+  IMAGE_SEARCH_ENABLED: "true",
+  IMAGE_SEARCH_SERVICE_URL: "http://127.0.0.1:8091",
+  IMAGE_SEARCH_INTERNAL_TOKEN: "x".repeat(32),
+  IMAGE_SEARCH_ACTIVE_VERSION: "visual-search-v1",
+  IMAGE_SEARCH_MODEL_SHA256: "a".repeat(64),
+};
+
 describe("parseServerEnv", () => {
   it("parses a valid server environment", () => {
     expect(parseServerEnv(validEnv).ALIYUN_OSS_CNAME).toBe(true);
@@ -130,6 +138,95 @@ describe("parseServerEnv", () => {
       expect(() =>
         parseServerEnv({ ...validEnv, NODE_ENV, OSS_ADAPTER: "fake" }),
       ).toThrow(/test-only/);
+    },
+  );
+
+  it("requires the complete image-search configuration when enabled", () => {
+    expect(() =>
+      parseServerEnv({ ...validEnv, IMAGE_SEARCH_ENABLED: "true" }),
+    ).toThrow();
+
+    const parsed = parseServerEnv({
+      ...validEnv,
+      ...enabledImageSearchEnv,
+    });
+
+    expect(parsed.IMAGE_SEARCH_ENABLED).toBe(true);
+  });
+
+  it.each([
+    "https://127.0.0.1:8091",
+    "http://visual-search:8091",
+  ])("rejects a non-loopback HTTP origin in production: %s", (url) => {
+    expect(() =>
+      parseServerEnv({
+        ...validEnv,
+        ...enabledImageSearchEnv,
+        NODE_ENV: "production",
+        IMAGE_SEARCH_SERVICE_URL: url,
+      }),
+    ).toThrow(/loopback/i);
+  });
+
+  it.each([
+    "ftp://127.0.0.1:8091",
+    "http://user:secret@127.0.0.1:8091",
+    "http://127.0.0.1:8091/internal",
+    "http://127.0.0.1:8091?unsafe=true",
+    "http://127.0.0.1:8091#fragment",
+  ])("requires an HTTP(S) origin in every environment: %s", (url) => {
+    expect(() =>
+      parseServerEnv({
+        ...validEnv,
+        ...enabledImageSearchEnv,
+        IMAGE_SEARCH_SERVICE_URL: url,
+      }),
+    ).toThrow(/origin/i);
+  });
+
+  it("accepts a non-loopback HTTPS origin outside production", () => {
+    expect(
+      parseServerEnv({
+        ...validEnv,
+        ...enabledImageSearchEnv,
+        IMAGE_SEARCH_SERVICE_URL: "https://visual-search.example.test:8443",
+      }).IMAGE_SEARCH_SERVICE_URL,
+    ).toBe("https://visual-search.example.test:8443");
+  });
+
+  it.each(["Visual-search-v1", "visual_search_v1", "x".repeat(65)])(
+    "rejects an invalid image-search version: %s",
+    (version) => {
+      expect(() =>
+        parseServerEnv({
+          ...validEnv,
+          ...enabledImageSearchEnv,
+          IMAGE_SEARCH_ACTIVE_VERSION: version,
+        }),
+      ).toThrow();
+    },
+  );
+
+  it("requires a lowercase SHA-256 model checksum", () => {
+    expect(() =>
+      parseServerEnv({
+        ...validEnv,
+        ...enabledImageSearchEnv,
+        IMAGE_SEARCH_MODEL_SHA256: "A".repeat(64),
+      }),
+    ).toThrow(/SHA-256/i);
+  });
+
+  it.each([" ".repeat(32), "x".repeat(31), `${"x".repeat(31)}\u00e9`])(
+    "rejects a non-ASCII, blank, or short internal token",
+    (token) => {
+      expect(() =>
+        parseServerEnv({
+          ...validEnv,
+          ...enabledImageSearchEnv,
+          IMAGE_SEARCH_INTERNAL_TOKEN: token,
+        }),
+      ).toThrow(/token/i);
     },
   );
 });

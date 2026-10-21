@@ -35,6 +35,7 @@ import {
   updatePatternRow,
   type PatternRow,
   type PatternRowWithAssets,
+  type PatternRowWithAssetsAndCommercial,
 } from "./pattern-repository";
 
 const mutationIdentitySchema = z.object({
@@ -96,7 +97,7 @@ function normalizePatternReplayResult(
   return parsed.data;
 }
 
-function toPatternDto(row: PatternRow | PatternRowWithAssets) {
+export function toPatternDto(row: PatternRow | PatternRowWithAssets) {
   return {
     id: row.id,
     ownerId: row.ownerId,
@@ -123,6 +124,23 @@ function toPatternDto(row: PatternRow | PatternRowWithAssets) {
     changeSeq: row.changeSeq.toString(),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+export function toPatternListItemDto(row: PatternRowWithAssetsAndCommercial) {
+  return {
+    ...toPatternDto(row),
+    commercialSummary: {
+      state: row.hasActiveBuyout
+        ? ("global_buyout" as const)
+        : row.hasActiveExclusive
+          ? ("field_exclusive" as const)
+          : row.authorizationCount > 0
+            ? ("standard" as const)
+            : ("unlicensed" as const),
+      activeCount: row.authorizationCount,
+      revenueFen: row.authorizationRevenueFen,
+    },
   };
 }
 
@@ -156,20 +174,7 @@ export async function listPatterns(input: {
   const last = page.at(-1);
 
   return {
-    items: page.map((row) => ({
-      ...toPatternDto(row),
-      commercialSummary: {
-        state: row.hasActiveBuyout
-          ? ("global_buyout" as const)
-          : row.hasActiveExclusive
-            ? ("field_exclusive" as const)
-            : row.authorizationCount > 0
-              ? ("standard" as const)
-              : ("unlicensed" as const),
-        activeCount: row.authorizationCount,
-        revenueFen: row.authorizationRevenueFen,
-      },
-    })),
+    items: page.map(toPatternListItemDto),
     nextCursor:
       hasMore && last ? encodePatternCursor(last, query.sort) : null,
   };

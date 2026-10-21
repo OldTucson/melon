@@ -28,6 +28,7 @@ import {
   patterns,
   patternTags,
 } from "@/lib/db/schema";
+import { AppError } from "@/lib/http/app-error";
 
 import type { PatternPatch, PatternQuery } from "./contracts";
 import type { PatternCursor } from "./pattern-cursor";
@@ -37,6 +38,14 @@ export type PatternRowWithAssets = PatternRow & {
   previewAssetId: string | null;
   thumbnailAssetId: string | null;
   sourceAssetId: string | null;
+};
+export type PatternRowWithAssetsAndCommercial = PatternRowWithAssets & {
+  authorizationCount: number;
+  authorizationRevenueFen: string;
+  hasActiveBuyout: boolean;
+  hasActiveExclusive: boolean;
+  updatedCursorValue: string;
+  createdCursorValue: string;
 };
 
 const previewAssets = alias(assets, "preview_assets");
@@ -104,12 +113,8 @@ function sortOrder(sort: PatternQuery["sort"]) {
   return [desc(patterns.updatedAt), desc(patterns.id)] as const;
 }
 
-export async function listPatternRows(
-  ownerId: string,
-  query: PatternQuery,
-  cursor: PatternCursor | undefined,
-) {
-  const commercialSummary = db
+function buildCommercialSummary(ownerId: string) {
+  return db
     .select({
       ownerId: authorizations.ownerId,
       patternId: authorizations.patternId,
@@ -140,6 +145,16 @@ export async function listPatternRows(
     )
     .groupBy(authorizations.ownerId, authorizations.patternId)
     .as("commercial_summary");
+}
+
+type CommercialSummary = ReturnType<typeof buildCommercialSummary>;
+
+function buildPatternFilterPredicates(
+  ownerId: string,
+  query: PatternQuery,
+  commercialSummary: CommercialSummary,
+  cursor?: PatternCursor,
+) {
   const folderStatuses =
     query.scope === "trash" ? trashFolderStatuses : libraryFolderStatuses;
   const predicates: SQL[] = [
@@ -261,7 +276,6 @@ export async function listPatternRows(
       eq(patternTags.isActive, true),
       inArray(patternTags.tagId, query.tagIds),
     );
-
     if (query.tagMode === "any") {
       predicates.push(
         exists(
@@ -284,6 +298,21 @@ export async function listPatternRows(
     }
   }
   if (cursor) predicates.push(cursorPredicate(cursor));
+  return predicates;
+}
+
+export async function listPatternRows(
+  ownerId: string,
+  query: PatternQuery,
+  cursor: PatternCursor | undefined,
+) {
+  const commercialSummary = buildCommercialSummary(ownerId);
+  const predicates = buildPatternFilterPredicates(
+    ownerId,
+    query,
+    commercialSummary,
+    cursor,
+  );
 
   return db
     .select({
@@ -333,6 +362,120 @@ export async function listPatternRows(
     .where(and(...predicates))
     .orderBy(...sortOrder(query.sort))
     .limit(query.limit + 1);
+}
+
+export async function listImageSearchPatternIds(
+  ownerId: string,
+  query: PatternQuery,
+) {
+  const libraryQuery: PatternQuery = {
+    ...query,
+    scope: "library",
+    cursor: undefined,
+  };
+  const commercialSummary = buildCommercialSummary(ownerId);
+  const predicates = buildPatternFilterPredicates(
+    ownerId,
+    libraryQuery,
+    commercialSummary,
+  );
+  const rows = await db
+    .select({ id: patterns.id })
+    .from(patterns)
+    .leftJoin(
+      commercialSummary,
+      and(
+        eq(commercialSummary.ownerId, ownerId),
+        eq(commercialSummary.patternId, patterns.id),
+      ),
+    )
+    .where(and(...predicates))
+    .orderBy(asc(patterns.id))
+    .limit(10_001);
+  if (rows.length > 10_000) {
+    throw new AppError(
+      "IMAGE_SEARCH_SCOPE_TOO_LARGE",
+      413,
+      "Image search scope is too large",
+    );
+  }
+  return rows.map((row) => row.id);
+}
+
+export async function listPatternRowsByIds(
+  ownerId: string,
+  ids: readonly string[],
+): Promise<PatternRowWithAssetsAndCommercial[]> {
+  if (ids.length === 0) return [];
+  if (ids.length > 30) {
+    throw new AppError("VALIDATION_ERROR", 400, "Invalid request");
+  }
+  const commercialSummary = buildCommercialSummary(ownerId);
+  const hydrationQuery: PatternQuery = {
+    formats: [],
+    tagIds: [],
+    tagMode: "all",
+    includeDescendants: true,
+    scope: "library",
+    sort: "updated_desc",
+    limit: 30,
+  };
+  const predicates = buildPatternFilterPredicates(
+    ownerId,
+    hydrationQuery,
+    commercialSummary,
+  );
+  predicates.push(inArray(patterns.id, [...ids]));
+  const rows = await db
+    .select({
+      ...getTableColumns(patterns),
+      previewAssetId: previewAssets.id,
+      thumbnailAssetId: thumbnailAssets.id,
+      sourceAssetId: sourceAssets.id,
+      authorizationCount: sql<number>`coalesce(${commercialSummary.activeCount}, 0)`,
+      authorizationRevenueFen: sql<string>`coalesce(${commercialSummary.revenueFen}, '0')`,
+      hasActiveBuyout: sql<boolean>`coalesce(${commercialSummary.hasBuyout}, false)`,
+      hasActiveExclusive: sql<boolean>`coalesce(${commercialSummary.hasExclusive}, false)`,
+      updatedCursorValue: sql<string>`to_char(${patterns.updatedAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+      createdCursorValue: sql<string>`to_char(${patterns.createdAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+    })
+    .from(patterns)
+    .leftJoin(
+      previewAssets,
+      and(
+        eq(previewAssets.ownerId, ownerId),
+        eq(previewAssets.patternId, patterns.id),
+        eq(previewAssets.role, "preview"),
+      ),
+    )
+    .leftJoin(
+      thumbnailAssets,
+      and(
+        eq(thumbnailAssets.ownerId, ownerId),
+        eq(thumbnailAssets.patternId, patterns.id),
+        eq(thumbnailAssets.role, "thumbnail"),
+      ),
+    )
+    .leftJoin(
+      sourceAssets,
+      and(
+        eq(sourceAssets.ownerId, ownerId),
+        eq(sourceAssets.patternId, patterns.id),
+        eq(sourceAssets.role, "source"),
+      ),
+    )
+    .leftJoin(
+      commercialSummary,
+      and(
+        eq(commercialSummary.ownerId, ownerId),
+        eq(commercialSummary.patternId, patterns.id),
+      ),
+    )
+    .where(and(...predicates));
+  const rank = new Map(ids.map((id, index) => [id, index]));
+  return rows.sort(
+    (left, right) => rank.get(left.id)! - rank.get(right.id)!,
+  );
 }
 
 export async function getPatternRow(
