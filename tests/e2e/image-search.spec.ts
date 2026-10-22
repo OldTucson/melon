@@ -97,6 +97,11 @@ test("image search preserves the library workflow across responsive themes", asy
   await loginAs(page, E2E_USERS.designer);
 
   await expect(page.getByText("高概率来源图案", { exact: true })).toBeVisible();
+  await expect(
+    page
+      .getByRole("listitem", { name: /高概率来源图案/ })
+      .getByRole("button", { name: /^按颜色 .* 搜索$/ }),
+  ).toHaveCount(3);
   await page.getByRole("button", { name: "列表视图" }).click();
   const normalCard = page.getByRole("listitem", { name: /可能来源图案/ });
   await normalCard.getByRole("checkbox", { name: "选择 可能来源图案" }).click();
@@ -142,6 +147,9 @@ test("image search preserves the library workflow across responsive themes", asy
   ).toBeVisible();
 
   const resultCard = results.getByRole("listitem", { name: /高概率来源图案/ });
+  await expect(
+    resultCard.getByRole("button", { name: /^按颜色 .* 搜索$/ }),
+  ).toHaveCount(3);
   const resultCheckbox = resultCard.getByRole("checkbox", {
     name: "选择 高概率来源图案",
   });

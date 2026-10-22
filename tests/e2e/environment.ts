@@ -1,6 +1,10 @@
 export const E2E_IMAGE_SEARCH =
   process.env.E2E_IMAGE_SEARCH === "1" ||
-  process.argv.some((argument) => argument.includes("image-search.spec"));
+  process.argv.some(
+    (argument) =>
+      argument.includes("image-search.spec") ||
+      argument.includes("palette-search.spec"),
+  );
 export const E2E_PORT =
   process.env.E2E_PORT ?? (E2E_IMAGE_SEARCH ? "3213" : "3210");
 if (!/^\d+$/.test(E2E_PORT) || Number(E2E_PORT) < 1 || Number(E2E_PORT) > 65535) {

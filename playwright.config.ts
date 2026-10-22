@@ -33,7 +33,7 @@ export default defineConfig({
   testDir: "./tests/e2e",
   // Commercial fixtures contain metadata only; legacy uploads require real OSS.
   ...(E2E_IMAGE_SEARCH
-    ? { testMatch: ["image-search.spec.ts"] }
+    ? { testMatch: ["image-search.spec.ts", "palette-search.spec.ts"] }
     : E2E_METADATA_ONLY
       ? {
           testMatch: [
@@ -46,6 +46,7 @@ export default defineConfig({
             "commercial-authorizations.spec.ts",
             "dashboard.spec.ts",
             "image-search.spec.ts",
+            "palette-search.spec.ts",
           ],
         }),
   fullyParallel: false,
@@ -124,7 +125,7 @@ export default defineConfig({
               ? {
                   E2E_IMAGE_SEARCH: "1",
                   E2E_IMAGE_SEARCH_STUB_PORT,
-                  IMAGE_SEARCH_ACTIVE_VERSION: "visual-search-v1",
+                  IMAGE_SEARCH_ACTIVE_VERSION: "visual-search-v2",
                   IMAGE_SEARCH_ENABLED: "true",
                   IMAGE_SEARCH_INTERNAL_TOKEN:
                     "image-search-e2e-internal-token-2026",

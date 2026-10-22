@@ -3,6 +3,25 @@ import postgres from "postgres";
 import { E2E_DATABASE_URL, E2E_USERS } from "./environment";
 
 const ownerId = E2E_USERS.designer.id;
+export const IMAGE_SEARCH_INDEX_VERSION = "visual-search-v2";
+
+export const IMAGE_SEARCH_PALETTE = [
+  {
+    coverage: 0.5,
+    displayHex: "#285947",
+    oklab: [0.42, -0.08, 0.03] as const,
+  },
+  {
+    coverage: 0.3,
+    displayHex: "#CC9C3F",
+    oklab: [0.72, 0.03, 0.11] as const,
+  },
+  {
+    coverage: 0.2,
+    displayHex: "#8F4038",
+    oklab: [0.48, 0.1, 0.05] as const,
+  },
+] as const;
 
 export const IMAGE_SEARCH_PATTERN_SEEDS = [
   {
@@ -12,6 +31,7 @@ export const IMAGE_SEARCH_PATTERN_SEEDS = [
     originalFilename: "probable-source.png",
     sourceAssetId: "55555555-5555-4555-8555-555555555541",
     previewAssetId: "66666666-6666-4666-8666-666666666641",
+    documentId: "77777777-7777-4777-8777-777777777741",
     kind: "probable_source",
   },
   {
@@ -21,6 +41,7 @@ export const IMAGE_SEARCH_PATTERN_SEEDS = [
     originalFilename: "possible-source.png",
     sourceAssetId: "55555555-5555-4555-8555-555555555542",
     previewAssetId: "66666666-6666-4666-8666-666666666642",
+    documentId: "77777777-7777-4777-8777-777777777742",
     kind: "possible_source",
   },
   {
@@ -30,6 +51,7 @@ export const IMAGE_SEARCH_PATTERN_SEEDS = [
     originalFilename: "visually-similar.jpg",
     sourceAssetId: "55555555-5555-4555-8555-555555555543",
     previewAssetId: "66666666-6666-4666-8666-666666666643",
+    documentId: "77777777-7777-4777-8777-777777777743",
     kind: "visually_similar",
   },
   {
@@ -39,6 +61,7 @@ export const IMAGE_SEARCH_PATTERN_SEEDS = [
     originalFilename: "filtered-similar.ai",
     sourceAssetId: "55555555-5555-4555-8555-555555555544",
     previewAssetId: "66666666-6666-4666-8666-666666666644",
+    documentId: "77777777-7777-4777-8777-777777777744",
     kind: "visually_similar",
   },
 ] as const;
@@ -147,6 +170,29 @@ export async function seedImageSearchPatterns(
             'preview.jpg', 'image/jpeg', 4096, 320, 240
           )
       `;
+      await client`
+        insert into visual_search_documents (
+          id, owner_id, pattern_id, preview_asset_id, preview_hash,
+          index_version, status, width, height, indexed_at
+        ) values (
+          ${pattern.documentId}, ${ownerId}, ${pattern.id},
+          ${pattern.previewAssetId}, ${String(index + 1).repeat(64)},
+          ${IMAGE_SEARCH_INDEX_VERSION}, 'ready', 320, 240,
+          '2026-10-22T00:00:00.000Z'
+        )
+      `;
+      for (const [colorIndex, color] of IMAGE_SEARCH_PALETTE.entries()) {
+        await client`
+          insert into visual_search_palette_colors (
+            document_id, owner_id, pattern_id, color_index, display_hex,
+            oklab_l, oklab_a, oklab_b, coverage
+          ) values (
+            ${pattern.documentId}, ${ownerId}, ${pattern.id}, ${colorIndex},
+            ${color.displayHex}, ${color.oklab[0]}, ${color.oklab[1]},
+            ${color.oklab[2]}, ${color.coverage}
+          )
+        `;
+      }
     }
   } finally {
     await client.end();

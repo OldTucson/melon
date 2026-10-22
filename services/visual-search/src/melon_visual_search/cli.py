@@ -16,6 +16,7 @@ from .benchmark import (
 )
 from .embedding import EmbeddingRuntime
 from .image_io import ImageSearchError
+from .palette_benchmark import PaletteBenchmarkError, run_palette_benchmark
 from .repository import Repository
 from .search import SearchService
 from .settings import Settings, get_settings
@@ -57,6 +58,16 @@ def _positive_integer(value: str) -> int:
     return result
 
 
+def _nonnegative_integer(value: str) -> int:
+    try:
+        result = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("value must be an integer") from error
+    if result < 0:
+        raise argparse.ArgumentTypeError("value must not be negative")
+    return result
+
+
 def _canonical_uuid(value: str) -> UUID:
     try:
         result = UUID(value)
@@ -82,6 +93,17 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--count", type=_positive_integer, default=100)
     benchmark.add_argument("--seed", type=int, default=20261020)
     benchmark.add_argument("--output", type=Path, required=True)
+    palette_benchmark = commands.add_parser("palette-benchmark")
+    palette_benchmark.add_argument("--count", type=_positive_integer, default=10_000)
+    palette_benchmark.add_argument(
+        "--colors-per-candidate",
+        type=_positive_integer,
+        default=5,
+    )
+    palette_benchmark.add_argument("--warmups", type=_nonnegative_integer, default=5)
+    palette_benchmark.add_argument("--iterations", type=_positive_integer, default=30)
+    palette_benchmark.add_argument("--seed", type=int, default=20261022)
+    palette_benchmark.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -212,9 +234,49 @@ def _run_benchmark(
     return 0
 
 
+def _run_palette_benchmark(
+    *,
+    count: int,
+    colors_per_candidate: int,
+    warmups: int,
+    iterations: int,
+    seed: int,
+    output_path: Path,
+) -> int:
+    report = run_palette_benchmark(
+        count=count,
+        colors_per_candidate=colors_per_candidate,
+        warmups=warmups,
+        iterations=iterations,
+        seed=seed,
+        output_path=output_path,
+    )
+    print(
+        json.dumps(
+            {
+                "count": report.count,
+                "iterations": report.iterations,
+                "p50Milliseconds": report.p50_milliseconds,
+                "p95Milliseconds": report.p95_milliseconds,
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.command == "palette-benchmark":
+            return _run_palette_benchmark(
+                count=args.count,
+                colors_per_candidate=args.colors_per_candidate,
+                warmups=args.warmups,
+                iterations=args.iterations,
+                seed=args.seed,
+                output_path=args.output,
+            )
         settings = get_settings()
         if args.command == "worker":
             return _run_worker(settings)
@@ -239,6 +301,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         CleanupRefusedError,
         CliConfigurationError,
         ImageSearchError,
+        PaletteBenchmarkError,
     ) as error:
         print(getattr(error, "code", "INDEX_COMMAND_FAILED"), file=sys.stderr)
         return 2

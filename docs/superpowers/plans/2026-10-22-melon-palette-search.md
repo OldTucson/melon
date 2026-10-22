@@ -1038,11 +1038,11 @@ git commit -m "feat: add multi-color palette search ui"
 - Create: `tests/e2e/palette-search.spec.ts`
 - Modify: `playwright.config.ts`
 
-- [ ] **Step 1: Write failing benchmark and E2E expectations**
+- [x] **Step 1: Write failing benchmark and E2E expectations**
 
 The benchmark test requires a JSON report with count, colors per candidate, warmups, iterations, individual milliseconds, p50, and p95. The browser test must verify 3-5 swatches in grid/list/inspector, one-color entry, three-color addition, repeated-color removal, current format filtering, ordered results, clear-and-restore behavior, image-search mutual exclusion, keyboard activation, light/dark screenshots, and no horizontal overflow at 1440, 1024, and 390 widths.
 
-- [ ] **Step 2: Run focused tests and confirm missing benchmark/spec support**
+- [x] **Step 2: Run focused tests and confirm missing benchmark/spec support**
 
 ```bash
 .venv-visual-search/bin/uv run --project services/visual-search pytest services/visual-search/tests/test_palette_benchmark.py -q
@@ -1051,7 +1051,7 @@ E2E_IMAGE_SEARCH=1 npx --yes --package=node@24 -c 'npm run test:e2e -- tests/e2e
 
 Expected: FAIL because the benchmark command and palette E2E route are absent.
 
-- [ ] **Step 3: Implement the deterministic benchmark**
+- [x] **Step 3: Implement the deterministic benchmark**
 
 Generate 10,000 candidates with five seeded valid OKLab colors, warm up five times, run 30 measured searches with one, three, and five query colors in rotation, and calculate nearest-rank p50/p95. The command must not access image bytes or log actual user colors.
 
@@ -1061,11 +1061,11 @@ Generate 10,000 candidates with five seeded valid OKLab colors, warm up five tim
 
 The CLI exits nonzero when count exceeds 10,000, colors per candidate exceed five, results contain nonfinite values, or output cannot be written. Timing acceptance is recorded, not asserted in unit tests, to avoid machine-speed flakes.
 
-- [ ] **Step 4: Extend isolated E2E fixtures and stub**
+- [x] **Step 4: Extend isolated E2E fixtures and stub**
 
 Seed `visual-search-v2` ready documents plus deterministic 3-color palettes for every fixture pattern. Route `/internal/search` and `/internal/palette-search` separately in the stub; validate Bearer auth and exact JSON fields, intersect with allowed IDs, and return a deterministic order that changes for the PNG filter so the browser test proves scope recomputation.
 
-- [ ] **Step 5: Implement and run responsive E2E acceptance**
+- [x] **Step 5: Implement and run responsive E2E acceptance**
 
 ```bash
 E2E_IMAGE_SEARCH=1 npx --yes --package=node@24 -c 'npm run test:e2e -- tests/e2e/image-search.spec.ts tests/e2e/palette-search.spec.ts'
@@ -1073,7 +1073,7 @@ E2E_IMAGE_SEARCH=1 npx --yes --package=node@24 -c 'npm run test:e2e -- tests/e2e
 
 Expected: both specs PASS across the configured isolated visual-search projects. Inspect every generated light/dark screenshot for text clipping, overlapping controls, broken swatches, and blank thumbnails.
 
-- [ ] **Step 6: Verify benchmark tests and commit acceptance tooling**
+- [x] **Step 6: Verify benchmark tests and commit acceptance tooling**
 
 ```bash
 .venv-visual-search/bin/uv run --project services/visual-search pytest services/visual-search/tests/test_palette_benchmark.py -q
