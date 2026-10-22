@@ -73,6 +73,8 @@ const makePattern = (index: number): PatternItem => ({
   isFavorite: false,
   version: 0,
   commercialVersion: 0,
+  paletteStatus: "pending",
+  palette: [],
   lastErrorCode: null,
   trashedAt: null,
   deletedAt: null,
@@ -2267,6 +2269,47 @@ describe("pattern editor mutation", () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+  });
+
+  it("preserves a loaded palette when metadata response has the pending default", async () => {
+    const item: PatternItem = {
+      ...makePattern(1),
+      paletteStatus: "ready",
+      palette: [
+        { hex: "#285947", coverage: 0.5 },
+        { hex: "#CC9C3F", coverage: 0.3 },
+        { hex: "#8F4038", coverage: 0.2 },
+      ],
+    };
+    const updated: PatternItem = {
+      ...item,
+      isFavorite: true,
+      version: 1,
+      paletteStatus: "pending",
+      palette: [],
+    };
+    const client = createClient([item]);
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json(updated)));
+
+    render(
+      <QueryClientProvider client={client}>
+        <QueryOwnerProvider ownerId={ownerId}>
+          <MutationHarness item={item} />
+        </QueryOwnerProvider>
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Favorite" }));
+
+    await waitFor(() => {
+      expect(
+        client.getQueryData<PatternItem>(queryKeys.pattern(ownerId, item.id)),
+      ).toMatchObject({
+        isFavorite: true,
+        version: 1,
+        paletteStatus: "ready",
+        palette: item.palette,
+      });
+    });
   });
 
   it("updates detail and active list optimistically, then fully rolls back", async () => {

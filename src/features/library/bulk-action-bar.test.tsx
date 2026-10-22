@@ -36,6 +36,8 @@ const items = [1, 2].map((index): PatternItem => ({
   isFavorite: false,
   version: index,
   commercialVersion: 0,
+  paletteStatus: "pending",
+  palette: [],
   lastErrorCode: null,
   trashedAt: null,
   deletedAt: null,

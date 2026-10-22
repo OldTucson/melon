@@ -213,6 +213,10 @@ describe("upload service lifecycle", () => {
     expect(replay.session.id).toBe(first.session.id);
     expect(replay.sourceAsset.id).toBe(first.sourceAsset.id);
     expect(first.pattern.status).toBe("uploading");
+    expect(first.pattern).toMatchObject({
+      paletteStatus: "pending",
+      palette: [],
+    });
     expect(first.session.status).toBe("initialized");
     expect(issuer.issues).toHaveLength(2);
     expect(replay.credentials.accessKeyId).not.toBe(
@@ -671,6 +675,8 @@ describe("upload service lifecycle", () => {
       id: initialized.pattern.id,
       status: "ready",
       detectedMimeType: "image/vnd.adobe.photoshop",
+      paletteStatus: "pending",
+      palette: [],
     });
     expect(replay).toEqual(first);
     const sourceRows = await db

@@ -121,6 +121,8 @@ function toPatternDto(row: PatternRow) {
     isFavorite: row.isFavorite,
     version: row.version,
     commercialVersion: row.commercialVersion,
+    paletteStatus: "pending" as const,
+    palette: [],
     lastErrorCode: row.lastErrorCode,
     changeSeq: row.changeSeq.toString(),
     createdAt: row.createdAt.toISOString(),

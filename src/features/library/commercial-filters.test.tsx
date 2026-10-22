@@ -61,6 +61,8 @@ const item = {
   isFavorite: false,
   version: 0,
   commercialVersion: 2,
+  paletteStatus: "pending",
+  palette: [],
   commercialSummary: {
     state: "field_exclusive",
     activeCount: 2,

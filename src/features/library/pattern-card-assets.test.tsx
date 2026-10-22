@@ -26,6 +26,8 @@ const item: PatternItem = {
   isFavorite: false,
   version: 0,
   commercialVersion: 0,
+  paletteStatus: "pending",
+  palette: [],
   lastErrorCode: null,
   trashedAt: null,
   deletedAt: null,

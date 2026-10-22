@@ -17,6 +17,7 @@ import {
   storeOperationResult,
 } from "@/lib/db/operation";
 import { AppError } from "@/lib/http/app-error";
+import { getActiveVisualSearchIndexVersion } from "@/features/image-search/index-service";
 
 import {
   parsePatternBatchMutation,
@@ -30,6 +31,10 @@ import {
   updatePatternRows,
   type PatternBatchRowWithAssets,
 } from "./pattern-batch-repository";
+import {
+  loadPatternPaletteStates,
+  withPalette,
+} from "./pattern-palette-repository";
 
 const editablePatternStatuses = new Set(["ready", "failed"] as const);
 const optionalNullableUuidSchema = normalizedUuidSchema
@@ -58,19 +63,30 @@ const replayPatternDtoSchema = z.object({
   isFavorite: z.boolean(),
   version: z.number().int().nonnegative(),
   commercialVersion: z.number().int().nonnegative(),
+  paletteStatus: z.enum(["pending", "ready", "failed"]),
+  palette: z
+    .array(
+      z
+        .object({
+          hex: z.string().regex(/^#[0-9A-F]{6}$/),
+          coverage: z.number().finite().positive().max(1),
+        })
+        .strict(),
+    )
+    .max(5),
   lastErrorCode: z.string().nullable(),
   trashedAt: z.string().datetime().nullable(),
   deletedAt: z.string().datetime().nullable(),
   changeSeq: z.string().regex(/^(0|[1-9]\d*)$/),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
-});
+}).strict();
 const replayPatternBatchResultSchema = z.object({
   patterns: z.array(replayPatternDtoSchema).min(1).max(100),
-});
+}).strict();
 
 function toPatternDto(row: PatternBatchRowWithAssets) {
-  return {
+  return withPalette({
     id: row.id,
     ownerId: row.ownerId,
     name: row.name,
@@ -96,7 +112,7 @@ function toPatternDto(row: PatternBatchRowWithAssets) {
     changeSeq: row.changeSeq.toString(),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
-  };
+  });
 }
 
 export type PatternBatchResult = {
@@ -271,8 +287,16 @@ export async function batchPatterns(input: {
     if (freshRows.length !== patternIds.length) {
       throw new Error("PATTERN_BATCH_RESULT_MISSING");
     }
+    const paletteStates = await loadPatternPaletteStates({
+      ownerId: input.ownerId,
+      patternIds,
+      indexVersion: getActiveVisualSearchIndexVersion(),
+      executor: tx,
+    });
     const result: PatternBatchResult = {
-      patterns: freshRows.map(toPatternDto),
+      patterns: freshRows.map((row) =>
+        withPalette(toPatternDto(row), paletteStates.get(row.id)),
+      ),
     };
 
     if (seq !== undefined && now !== undefined) {

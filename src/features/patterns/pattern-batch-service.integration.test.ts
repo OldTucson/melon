@@ -248,6 +248,8 @@ describe("pattern batch service", () => {
         previewAssetId,
         version: 1,
         changeSeq: "1",
+        paletteStatus: "pending",
+        palette: [],
       }),
       expect.objectContaining({
         id: highId,
@@ -257,6 +259,8 @@ describe("pattern batch service", () => {
         preTrashStatus: null,
         version: 1,
         changeSeq: "1",
+        paletteStatus: "pending",
+        palette: [],
       }),
     ]);
     expect(await readPatterns(ownerA, [highId, lowId])).toEqual([

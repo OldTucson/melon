@@ -48,10 +48,21 @@ const applyPatch = (pattern: PatternItem, patch: PatternPatch) => ({
 const mergeServerPattern = (
   current: PatternItem | undefined,
   updated: PatternItem,
-) =>
-  current?.commercialSummary && !updated.commercialSummary
-    ? { ...updated, commercialSummary: current.commercialSummary }
-    : updated;
+) => ({
+  ...updated,
+  ...(current?.commercialSummary && !updated.commercialSummary
+    ? { commercialSummary: current.commercialSummary }
+    : {}),
+  ...(current &&
+  current.paletteStatus !== "pending" &&
+  updated.paletteStatus === "pending" &&
+  updated.palette.length === 0
+    ? {
+        paletteStatus: current.paletteStatus,
+        palette: current.palette,
+      }
+    : {}),
+});
 
 const updatePatternInPages = (
   data: InfiniteData<PatternPage, string | null> | undefined,

@@ -74,6 +74,17 @@ const patternItemSchema = z
     isFavorite: z.boolean(),
     version: z.number().int().nonnegative(),
     commercialVersion: z.number().int().nonnegative(),
+    paletteStatus: z.enum(["pending", "ready", "failed"]),
+    palette: z
+      .array(
+        z
+          .object({
+            hex: z.string().regex(/^#[0-9A-F]{6}$/),
+            coverage: z.number().finite().positive().max(1),
+          })
+          .strict(),
+      )
+      .max(5),
     lastErrorCode: z.string().nullable(),
     trashedAt: z.string().datetime().nullable(),
     deletedAt: z.string().datetime().nullable(),
@@ -466,13 +477,25 @@ function rollbackOptimisticIntent(
   }
 }
 
-function mergeCommercialSummary(
+function mergeServerPattern(
   current: PatternItem | undefined,
   next: PatternItem,
 ) {
-  return current?.commercialSummary && !next.commercialSummary
-    ? { ...next, commercialSummary: current.commercialSummary }
-    : next;
+  return {
+    ...next,
+    ...(current?.commercialSummary && !next.commercialSummary
+      ? { commercialSummary: current.commercialSummary }
+      : {}),
+    ...(current &&
+    current.paletteStatus !== "pending" &&
+    next.paletteStatus === "pending" &&
+    next.palette.length === 0
+      ? {
+          paletteStatus: current.paletteStatus,
+          palette: current.palette,
+        }
+      : {}),
+  };
 }
 
 function applyServerPatterns(
@@ -491,7 +514,7 @@ function applyServerPatterns(
         updatePages(data, (item) => {
           const next = updated.get(item.id);
           if (!next) return item;
-          const merged = mergeCommercialSummary(item, next);
+          const merged = mergeServerPattern(item, next);
           return knownQueryExcludes(query, merged) ? null : merged;
         }),
     );
@@ -499,7 +522,7 @@ function applyServerPatterns(
   for (const pattern of patterns) {
     queryClient.setQueryData<PatternItem>(
       queryKeys.pattern(ownerId, pattern.id),
-      (current) => mergeCommercialSummary(current, pattern),
+      (current) => mergeServerPattern(current, pattern),
     );
   }
 }

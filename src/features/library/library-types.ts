@@ -11,6 +11,13 @@ export type PatternCommercialSummary = {
   revenueFen: string;
 };
 
+export type PatternPaletteStatus = "pending" | "ready" | "failed";
+
+export type PatternPaletteColor = {
+  hex: string;
+  coverage: number;
+};
+
 export type PatternItem = {
   id: string;
   ownerId: string;
@@ -32,6 +39,8 @@ export type PatternItem = {
   version: number;
   commercialVersion: number;
   commercialSummary?: PatternCommercialSummary;
+  paletteStatus: PatternPaletteStatus;
+  palette: PatternPaletteColor[];
   lastErrorCode: string | null;
   trashedAt: string | null;
   deletedAt: string | null;

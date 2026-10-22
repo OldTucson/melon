@@ -35,6 +35,7 @@ const pattern: PatternItem = {
   sizeBytes: "2048", contentHash: null, status: "ready", folderId: folder.id,
   trashBatchId: null, preTrashStatus: null, previewStatus: "ready", isFavorite: false,
   version: 0, commercialVersion: 0, lastErrorCode: null, trashedAt: null,
+  paletteStatus: "pending", palette: [],
   deletedAt: null, changeSeq: "1", createdAt: folder.createdAt, updatedAt: folder.updatedAt,
 };
 

@@ -17,6 +17,7 @@ import {
 import { AppError, validationError } from "@/lib/http/app-error";
 import { publicOperationIdSchema } from "@/lib/validation/operation-id";
 import { normalizedUuidSchema } from "@/features/storage/identifiers";
+import { getActiveVisualSearchIndexVersion } from "@/features/image-search/index-service";
 
 import {
   patternPatchSchema,
@@ -37,6 +38,10 @@ import {
   type PatternRowWithAssets,
   type PatternRowWithAssetsAndCommercial,
 } from "./pattern-repository";
+import {
+  loadPatternPaletteStates,
+  withPalette,
+} from "./pattern-palette-repository";
 
 const mutationIdentitySchema = z.object({
   patternId: normalizedUuidSchema,
@@ -68,13 +73,24 @@ const replayPatternDtoSchema = z.object({
   isFavorite: z.boolean(),
   version: z.number().int().nonnegative(),
   commercialVersion: z.number().int().nonnegative(),
+  paletteStatus: z.enum(["pending", "ready", "failed"]),
+  palette: z
+    .array(
+      z
+        .object({
+          hex: z.string().regex(/^#[0-9A-F]{6}$/),
+          coverage: z.number().finite().positive().max(1),
+        })
+        .strict(),
+    )
+    .max(5),
   lastErrorCode: z.string().nullable(),
   trashedAt: z.string().datetime().nullable(),
   deletedAt: z.string().datetime().nullable(),
   changeSeq: z.string().regex(/^(0|[1-9]\d*)$/),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
-});
+}).strict();
 
 export type PatternDto = ReturnType<typeof toPatternDto>;
 
@@ -98,7 +114,7 @@ function normalizePatternReplayResult(
 }
 
 export function toPatternDto(row: PatternRow | PatternRowWithAssets) {
-  return {
+  return withPalette({
     id: row.id,
     ownerId: row.ownerId,
     name: row.name,
@@ -124,7 +140,7 @@ export function toPatternDto(row: PatternRow | PatternRowWithAssets) {
     changeSeq: row.changeSeq.toString(),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
-  };
+  });
 }
 
 export function toPatternListItemDto(row: PatternRowWithAssetsAndCommercial) {
@@ -172,9 +188,16 @@ export async function listPatterns(input: {
   const hasMore = rows.length > query.limit;
   const page = rows.slice(0, query.limit);
   const last = page.at(-1);
+  const paletteStates = await loadPatternPaletteStates({
+    ownerId: input.ownerId,
+    patternIds: page.map((row) => row.id),
+    indexVersion: getActiveVisualSearchIndexVersion(),
+  });
 
   return {
-    items: page.map(toPatternListItemDto),
+    items: page.map((row) =>
+      withPalette(toPatternListItemDto(row), paletteStates.get(row.id)),
+    ),
     nextCursor:
       hasMore && last ? encodePatternCursor(last, query.sort) : null,
   };
@@ -189,7 +212,12 @@ export async function getPattern(input: {
   );
   const row = await getPatternRow(input.ownerId, patternId);
   if (!row) throw new AppError("NOT_FOUND", 404, "Pattern not found");
-  return toPatternDto(row);
+  const paletteStates = await loadPatternPaletteStates({
+    ownerId: input.ownerId,
+    patternIds: [row.id],
+    indexVersion: getActiveVisualSearchIndexVersion(),
+  });
+  return withPalette(toPatternDto(row), paletteStates.get(row.id));
 }
 
 export async function updatePattern(input: {
@@ -267,7 +295,16 @@ export async function updatePattern(input: {
       );
     }
 
-    const result = toPatternDto(updated);
+    const paletteStates = await loadPatternPaletteStates({
+      ownerId: input.ownerId,
+      patternIds: [updated.id],
+      indexVersion: getActiveVisualSearchIndexVersion(),
+      executor: tx,
+    });
+    const result = withPalette(
+      toPatternDto(updated),
+      paletteStates.get(updated.id),
+    );
     await tx.insert(changeLog).values({
       ownerId: input.ownerId,
       seq,

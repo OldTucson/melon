@@ -630,7 +630,7 @@ git commit -m "feat: expose internal palette search"
 - Modify: `src/features/library/pattern-mutations.ts`
 - Modify: `src/features/library/library-view.test.tsx`
 
-- [ ] **Step 1: Write failing repository and DTO tests**
+- [x] **Step 1: Write failing repository and DTO tests**
 
 Seed four patterns: ready document with 3 colors, indexing job, terminal failed job, and old-version ready document. Assert one batch query returns `ready`, `pending`, `failed`, and `pending` respectively; wrong-owner rows never appear. Verify list/detail responses include required fields and list hydration performs a fixed number of queries rather than one per pattern.
 
@@ -650,7 +650,7 @@ expect(response.items.map(({ paletteStatus, palette }) => ({ paletteStatus, pale
 ]);
 ```
 
-- [ ] **Step 2: Run focused tests and confirm missing fields**
+- [x] **Step 2: Run focused tests and confirm missing fields**
 
 ```bash
 npx --yes --package=node@24 -c 'npm run test:integration -- src/features/patterns/pattern-palette-repository.integration.test.ts src/features/patterns/pattern-service.integration.test.ts src/features/patterns/pattern-batch-service.integration.test.ts src/features/uploads/upload-service.integration.test.ts'
@@ -659,7 +659,7 @@ npx --yes --package=node@24 -c 'npm run test -- src/features/library/library-vie
 
 Expected: FAIL because palette state is not part of `PatternItem`.
 
-- [ ] **Step 3: Define required public palette types and defaults**
+- [x] **Step 3: Define required public palette types and defaults**
 
 ```ts
 export type PatternPaletteStatus = "pending" | "ready" | "failed";
@@ -672,7 +672,7 @@ export type PatternPaletteColor = {
 
 Append `paletteStatus: PatternPaletteStatus` and `palette: PatternPaletteColor[]` as required properties on the existing `PatternItem`. Use `{ paletteStatus: "pending", palette: [] }` for new uploads and mutation paths that have not loaded a visual document. Update replay schemas so stored results remain strict and old malformed operation payloads fail closed.
 
-- [ ] **Step 4: Implement the batch palette-state loader**
+- [x] **Step 4: Implement the batch palette-state loader**
 
 Expose:
 
@@ -687,11 +687,11 @@ export async function loadPatternPaletteStates(input: {
 
 Use two bounded queries, never per-pattern queries: one for ready documents plus ordered colors, one for the latest active-version job status among IDs without ready colors. Validate that ready palettes contain 3-5 consecutive, unique uppercase colors with finite positive coverage summing to `1 +/- 1e-5`; treat malformed stored data as an internal error. Return pending when the feature is disabled or no current-version document/job exists.
 
-- [ ] **Step 5: Enrich list, detail, and transactional mutation DTOs**
+- [x] **Step 5: Enrich list, detail, and transactional mutation DTOs**
 
 Load one map for each list page, one entry for detail, and use the transaction executor for update/batch results before storing idempotency payloads. Add a `withPalette(dto, state)` helper so all required fields are set in one place. In the client mutation merge, preserve current `paletteStatus` and `palette` when a metadata-only response contains the pending default.
 
-- [ ] **Step 6: Verify server DTOs and client mutation behavior**
+- [x] **Step 6: Verify server DTOs and client mutation behavior**
 
 ```bash
 npx --yes --package=node@24 -c 'npm run test:integration -- src/features/patterns/pattern-palette-repository.integration.test.ts src/features/patterns/pattern-service.integration.test.ts src/features/patterns/pattern-batch-service.integration.test.ts src/features/uploads/upload-service.integration.test.ts'
@@ -701,7 +701,7 @@ npx --yes --package=node@24 -c 'npm run typecheck'
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit Pattern DTO enrichment**
+- [x] **Step 7: Commit Pattern DTO enrichment**
 
 ```bash
 git add src/features/patterns/pattern-palette-repository.ts src/features/patterns/pattern-palette-repository.integration.test.ts src/features/patterns/pattern-service.ts src/features/patterns/pattern-service.integration.test.ts src/features/patterns/pattern-batch-service.ts src/features/patterns/pattern-batch-service.integration.test.ts src/features/uploads/upload-service.ts src/features/uploads/upload-service.integration.test.ts src/features/library/library-types.ts src/features/library/pattern-mutations.ts src/features/library/library-view.test.tsx

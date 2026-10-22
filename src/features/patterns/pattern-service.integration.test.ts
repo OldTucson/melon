@@ -127,6 +127,18 @@ describe("pattern service", () => {
       [first, second].sort(),
     );
     expect(listed.items).toHaveLength(2);
+    expect(
+      listed.items.map(({ paletteStatus, palette }) => ({
+        paletteStatus,
+        palette,
+      })),
+    ).toEqual([
+      { paletteStatus: "pending", palette: [] },
+      { paletteStatus: "pending", palette: [] },
+    ]);
+    await expect(
+      getPattern({ ownerId: ownerA, patternId: first }),
+    ).resolves.toMatchObject({ paletteStatus: "pending", palette: [] });
     await expect(
       getPattern({ ownerId: ownerA, patternId: foreign }),
     ).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
@@ -908,6 +920,8 @@ describe("pattern service", () => {
       isFavorite: true,
       version: 1,
       commercialVersion: 0,
+      paletteStatus: "pending",
+      palette: [],
     });
     expect(replay).toEqual(first);
 
