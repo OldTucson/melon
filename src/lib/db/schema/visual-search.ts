@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   bit,
+  check,
   foreignKey,
   index,
   integer,
@@ -128,6 +129,55 @@ export const visualSearchEmbeddings = pgTable(
     index("visual_search_embeddings_hnsw_idx")
       .using("hnsw", table.embedding.op("vector_cosine_ops"))
       .with({ m: 16, ef_construction: 64 }),
+  ],
+);
+
+export const visualSearchPaletteColors = pgTable(
+  "visual_search_palette_colors",
+  {
+    documentId: uuid("document_id").notNull(),
+    ownerId: uuid("owner_id").notNull(),
+    patternId: uuid("pattern_id").notNull(),
+    colorIndex: integer("color_index").notNull(),
+    displayHex: text("display_hex").notNull(),
+    oklabL: real("oklab_l").notNull(),
+    oklabA: real("oklab_a").notNull(),
+    oklabB: real("oklab_b").notNull(),
+    coverage: real("coverage").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.documentId, table.colorIndex] }),
+    foreignKey({
+      columns: [table.documentId, table.ownerId, table.patternId],
+      foreignColumns: [
+        visualSearchDocuments.id,
+        visualSearchDocuments.ownerId,
+        visualSearchDocuments.patternId,
+      ],
+      name: "visual_search_palette_colors_document_owner_fk",
+    }).onDelete("cascade"),
+    check(
+      "visual_search_palette_colors_index_check",
+      sql`${table.colorIndex} between 0 and 4`,
+    ),
+    check(
+      "visual_search_palette_colors_hex_check",
+      sql`${table.displayHex} ~ '^#[0-9A-F]{6}$'`,
+    ),
+    check(
+      "visual_search_palette_colors_coverage_check",
+      sql`${table.coverage} > 0 and ${table.coverage} <= 1`,
+    ),
+    check(
+      "visual_search_palette_colors_oklab_check",
+      sql`${table.oklabL} >= 0 and ${table.oklabL} <= 1
+        and ${table.oklabA} >= -0.5 and ${table.oklabA} <= 0.5
+        and ${table.oklabB} >= -0.5 and ${table.oklabB} <= 0.5`,
+    ),
+    index("visual_search_palette_colors_owner_pattern_idx").on(
+      table.ownerId,
+      table.patternId,
+    ),
   ],
 );
 

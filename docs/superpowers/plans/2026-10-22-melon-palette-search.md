@@ -126,7 +126,7 @@ Run Node commands with Node 24. Run Python commands through `.venv-visual-search
 - Create: `drizzle/meta/0006_snapshot.json`
 - Modify: `drizzle/meta/_journal.json`
 
-- [ ] **Step 1: Write failing schema tests**
+- [x] **Step 1: Write failing schema tests**
 
 Add an `insertPaletteColor` helper and tests proving that a valid 3-row palette can be stored, an owner/pattern mismatch is rejected, duplicate indexes are rejected, invalid HEX/coverage/index values are rejected by named checks, and deleting the parent document cascades to the palette rows.
 
@@ -151,7 +151,7 @@ const insertPaletteColor = (input: {
 `);
 ```
 
-- [ ] **Step 2: Run the focused integration test and confirm the missing-table failure**
+- [x] **Step 2: Run the focused integration test and confirm the missing-table failure**
 
 ```bash
 npx --yes --package=node@24 -c 'npm run test:integration -- src/lib/db/schema/visual-search.integration.test.ts'
@@ -159,7 +159,7 @@ npx --yes --package=node@24 -c 'npm run test:integration -- src/lib/db/schema/vi
 
 Expected: FAIL with `relation "visual_search_palette_colors" does not exist`.
 
-- [ ] **Step 3: Define the Drizzle table with database checks**
+- [x] **Step 3: Define the Drizzle table with database checks**
 
 Add the table after `visualSearchEmbeddings` and export it through the existing schema barrel:
 
@@ -216,7 +216,7 @@ export const visualSearchPaletteColors = pgTable(
 
 Import `check` from `drizzle-orm/pg-core`, and insert `"visual_search_palette_colors"` before `"visual_search_documents"` in `resetDatabase()`.
 
-- [ ] **Step 4: Generate, inspect, and apply the deterministic migration**
+- [x] **Step 4: Generate, inspect, and apply the deterministic migration**
 
 ```bash
 npx --yes --package=node@24 -c 'npm run db:generate -- --name melon_palette_search'
@@ -225,7 +225,7 @@ npx --yes --package=node@24 -c 'npm run db:migrate'
 
 Confirm the generated SQL contains all four named checks, the composite cascading foreign key, primary key, and owner/pattern index. Keep the generated snapshot and journal together with `0006_melon_palette_search.sql`.
 
-- [ ] **Step 5: Run focused schema tests**
+- [x] **Step 5: Run focused schema tests**
 
 ```bash
 npx --yes --package=node@24 -c 'npm run test:integration -- src/lib/db/schema/visual-search.integration.test.ts src/test/database.test.ts'
@@ -233,7 +233,7 @@ npx --yes --package=node@24 -c 'npm run test:integration -- src/lib/db/schema/vi
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit the schema slice**
+- [x] **Step 6: Commit the schema slice**
 
 ```bash
 git add drizzle src/lib/db/schema/visual-search.ts src/lib/db/schema/visual-search.integration.test.ts src/test/database.ts

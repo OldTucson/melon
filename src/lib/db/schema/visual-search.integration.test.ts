@@ -141,6 +141,42 @@ const insertEmbedding = (input: {
     )
   `);
 
+const insertPaletteColor = (input: {
+  documentId: string;
+  ownerId: string;
+  patternId: string;
+  colorIndex?: number;
+  displayHex?: string;
+  oklab?: readonly [number, number, number];
+  coverage?: number;
+}) => {
+  const oklab = input.oklab ?? [0.5, 0, 0];
+
+  return db.execute(sql`
+    insert into visual_search_palette_colors (
+      document_id,
+      owner_id,
+      pattern_id,
+      color_index,
+      display_hex,
+      oklab_l,
+      oklab_a,
+      oklab_b,
+      coverage
+    ) values (
+      ${input.documentId},
+      ${input.ownerId},
+      ${input.patternId},
+      ${input.colorIndex ?? 0},
+      ${input.displayHex ?? "#285947"},
+      ${oklab[0]},
+      ${oklab[1]},
+      ${oklab[2]},
+      ${input.coverage ?? 1}
+    )
+  `);
+};
+
 const insertJob = (input: {
   ownerId: string;
   patternId: string;
@@ -436,6 +472,140 @@ describe("visual search schema", () => {
     );
   });
 
+  it("stores ordered palette colors for a visual document", async () => {
+    const documentId = await insertDocument({
+      ownerId: ownerA,
+      patternId: patternA,
+      previewAssetId: previewA,
+    });
+
+    await insertPaletteColor({
+      documentId,
+      ownerId: ownerA,
+      patternId: patternA,
+      colorIndex: 0,
+      displayHex: "#285947",
+      oklab: [0.42, -0.08, 0.03],
+      coverage: 0.5,
+    });
+    await insertPaletteColor({
+      documentId,
+      ownerId: ownerA,
+      patternId: patternA,
+      colorIndex: 1,
+      displayHex: "#CC9C3F",
+      oklab: [0.72, 0.03, 0.11],
+      coverage: 0.3,
+    });
+    await insertPaletteColor({
+      documentId,
+      ownerId: ownerA,
+      patternId: patternA,
+      colorIndex: 2,
+      displayHex: "#8F4038",
+      oklab: [0.48, 0.1, 0.05],
+      coverage: 0.2,
+    });
+
+    const rows = await db.execute<{
+      color_index: number;
+      display_hex: string;
+    }>(sql`
+      select color_index, display_hex
+      from visual_search_palette_colors
+      where document_id = ${documentId}
+      order by color_index
+    `);
+    expect(rows).toEqual([
+      { color_index: 0, display_hex: "#285947" },
+      { color_index: 1, display_hex: "#CC9C3F" },
+      { color_index: 2, display_hex: "#8F4038" },
+    ]);
+  });
+
+  it("rejects a palette color whose owner differs from its document", async () => {
+    const documentId = await insertDocument({
+      ownerId: ownerB,
+      patternId: patternB,
+      previewAssetId: previewB,
+    });
+
+    await expectDatabaseError(
+      insertPaletteColor({
+        documentId,
+        ownerId: ownerA,
+        patternId: patternB,
+      }),
+      {
+        code: "23503",
+        constraintName: "visual_search_palette_colors_document_owner_fk",
+      },
+    );
+  });
+
+  it("rejects duplicate palette color indexes for one document", async () => {
+    const documentId = await insertDocument({
+      ownerId: ownerA,
+      patternId: patternA,
+      previewAssetId: previewA,
+    });
+    await insertPaletteColor({ documentId, ownerId: ownerA, patternId: patternA });
+
+    await expectDatabaseError(
+      insertPaletteColor({
+        documentId,
+        ownerId: ownerA,
+        patternId: patternA,
+        displayHex: "#CC9C3F",
+      }),
+      { code: "23505" },
+    );
+  });
+
+  it.each([
+    {
+      label: "out-of-range color index",
+      input: { colorIndex: 5 },
+      constraintName: "visual_search_palette_colors_index_check",
+    },
+    {
+      label: "noncanonical HEX",
+      input: { displayHex: "#285947ff" },
+      constraintName: "visual_search_palette_colors_hex_check",
+    },
+    {
+      label: "zero coverage",
+      input: { coverage: 0 },
+      constraintName: "visual_search_palette_colors_coverage_check",
+    },
+    {
+      label: "out-of-range OKLab",
+      input: { oklab: [1.1, 0, 0] as const },
+      constraintName: "visual_search_palette_colors_oklab_check",
+    },
+    {
+      label: "nonfinite OKLab",
+      input: { oklab: [Number.NaN, 0, 0] as const },
+      constraintName: "visual_search_palette_colors_oklab_check",
+    },
+  ])("rejects $label", async ({ input, constraintName }) => {
+    const documentId = await insertDocument({
+      ownerId: ownerA,
+      patternId: patternA,
+      previewAssetId: previewA,
+    });
+
+    await expectDatabaseError(
+      insertPaletteColor({
+        documentId,
+        ownerId: ownerA,
+        patternId: patternA,
+        ...input,
+      }),
+      { code: "23514", constraintName },
+    );
+  });
+
   it("rejects a job whose owner does not own its pattern", async () => {
     await expect(
       insertJob({
@@ -503,13 +673,18 @@ describe("visual search schema", () => {
     );
   });
 
-  it("cascades preview deletion into documents, embeddings, and jobs", async () => {
+  it("cascades preview deletion into documents, embeddings, palettes, and jobs", async () => {
     const documentId = await insertDocument({
       ownerId: ownerA,
       patternId: patternA,
       previewAssetId: previewA,
     });
     await insertEmbedding({
+      documentId,
+      ownerId: ownerA,
+      patternId: patternA,
+    });
+    await insertPaletteColor({
       documentId,
       ownerId: ownerA,
       patternId: patternA,
@@ -528,16 +703,19 @@ describe("visual search schema", () => {
     const [counts] = await db.execute<{
       document_count: number;
       embedding_count: number;
+      palette_count: number;
       job_count: number;
     }>(sql`
       select
         (select count(*)::int from visual_search_documents) as document_count,
         (select count(*)::int from visual_search_embeddings) as embedding_count,
+        (select count(*)::int from visual_search_palette_colors) as palette_count,
         (select count(*)::int from visual_search_jobs) as job_count
     `);
     expect(counts).toEqual({
       document_count: 0,
       embedding_count: 0,
+      palette_count: 0,
       job_count: 0,
     });
   });
