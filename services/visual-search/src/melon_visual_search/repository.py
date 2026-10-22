@@ -25,6 +25,7 @@ MAX_ALLOWED_PATTERN_IDS = 10_000
 MAX_RECALL_ROWS_PER_VECTOR = 100
 MAX_RECALL_CANDIDATES = 50
 EXACT_RECALL_PATTERN_LIMIT = 500
+MAX_BENCHMARK_PATTERN_COUNT = 1_000
 
 _ERROR_CODE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
 _INDEX_VERSION_PATTERN = re.compile(r"^[a-z0-9-]{1,64}$")
@@ -134,6 +135,12 @@ class RecallCandidate:
     phash: str
     best_visual: float
     global_visual: float
+
+
+@dataclass(frozen=True)
+class ReadyPreview:
+    pattern_id: UUID
+    object_key: str
 
 
 def _utc_now() -> datetime:
@@ -296,6 +303,61 @@ class Repository:
                 (owner_id, index_version, list(allowed_ids)),
             ).fetchone()
         return row is not None
+
+    def sample_ready_previews(
+        self,
+        *,
+        owner_id: UUID,
+        index_version: str,
+        count: int,
+        seed: int,
+    ) -> tuple[ReadyPreview, ...]:
+        self._validate_recall_scope(owner_id, index_version, ())
+        if (
+            not isinstance(count, int)
+            or isinstance(count, bool)
+            or not 1 <= count <= MAX_BENCHMARK_PATTERN_COUNT
+        ):
+            raise ValueError("count is outside the supported benchmark range")
+        if not isinstance(seed, int) or isinstance(seed, bool):
+            raise ValueError("seed must be an integer")
+
+        with self._pool.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT d.pattern_id, a.object_key
+                FROM visual_search_documents d
+                JOIN patterns p
+                  ON p.owner_id = d.owner_id
+                 AND p.id = d.pattern_id
+                JOIN assets a
+                  ON a.owner_id = d.owner_id
+                 AND a.pattern_id = d.pattern_id
+                 AND a.id = d.preview_asset_id
+                WHERE d.owner_id = %(owner_id)s
+                  AND d.index_version = %(index_version)s
+                  AND d.status = 'ready'
+                  AND p.status NOT IN ('trashed', 'deleting', 'deleted')
+                  AND p.preview_status IN ('ready', 'manual')
+                  AND a.role = 'preview'
+                ORDER BY md5(d.pattern_id::text || ':' || %(seed)s::text),
+                         d.pattern_id
+                LIMIT %(count)s
+                """,
+                {
+                    "owner_id": owner_id,
+                    "index_version": index_version,
+                    "seed": seed,
+                    "count": count,
+                },
+            ).fetchall()
+        return tuple(
+            ReadyPreview(
+                pattern_id=row["pattern_id"],
+                object_key=row["object_key"],
+            )
+            for row in rows
+        )
 
     def recall_candidates(
         self,

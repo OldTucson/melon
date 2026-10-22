@@ -7,11 +7,17 @@ import time
 from collections.abc import Callable, Sequence
 from datetime import timedelta
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
+from .benchmark import (
+    SCORING_CONFIG_PATH,
+    BenchmarkError,
+    run_benchmark,
+)
 from .embedding import EmbeddingRuntime
 from .image_io import ImageSearchError
 from .repository import Repository
+from .search import SearchService
 from .settings import Settings, get_settings
 from .storage import AlibabaOssStorage
 from .worker import (
@@ -41,6 +47,26 @@ def _positive_hours(value: str) -> float:
     return hours
 
 
+def _positive_integer(value: str) -> int:
+    try:
+        result = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("value must be an integer") from error
+    if result <= 0:
+        raise argparse.ArgumentTypeError("value must be positive")
+    return result
+
+
+def _canonical_uuid(value: str) -> UUID:
+    try:
+        result = UUID(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("value must be a UUID") from error
+    if str(result) != value:
+        raise argparse.ArgumentTypeError("value must be a canonical UUID")
+    return result
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="melon-visual-search")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -51,6 +77,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=_positive_hours,
         default=24.0,
     )
+    benchmark = commands.add_parser("benchmark")
+    benchmark.add_argument("--owner-id", type=_canonical_uuid, required=True)
+    benchmark.add_argument("--count", type=_positive_integer, default=100)
+    benchmark.add_argument("--seed", type=int, default=20261020)
+    benchmark.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -138,6 +169,49 @@ def _run_cleanup(settings: Settings, *, older_than_hours: float) -> int:
     return 0
 
 
+def _run_benchmark(
+    settings: Settings,
+    *,
+    owner_id: UUID,
+    count: int,
+    seed: int,
+    output_path: Path,
+) -> int:
+    repository = Repository(_database_url(settings))
+    try:
+        storage = _build_storage(settings)
+        service = SearchService(
+            repository,
+            storage,
+            load_embedding_runtime(settings),
+            index_version=settings.active_version,
+        )
+        report = run_benchmark(
+            repository,
+            storage,
+            service,
+            owner_id=owner_id,
+            index_version=settings.active_version,
+            model_sha256=_required_text(settings.model_sha256),
+            count=count,
+            seed=seed,
+            output_path=output_path,
+            scoring_output_path=SCORING_CONFIG_PATH,
+        )
+    finally:
+        repository.close()
+    print(
+        json.dumps(
+            {
+                "corpusCount": report.metrics.corpus_count,
+                "passed": report.quality_gates.passed,
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
@@ -149,10 +223,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 settings,
                 older_than_hours=args.older_than_hours,
             )
+        if args.command == "benchmark":
+            return _run_benchmark(
+                settings,
+                owner_id=args.owner_id,
+                count=args.count,
+                seed=args.seed,
+                output_path=args.output,
+            )
         raise CliConfigurationError()
     except KeyboardInterrupt:
         return 130
-    except (CleanupRefusedError, CliConfigurationError, ImageSearchError) as error:
+    except (
+        BenchmarkError,
+        CleanupRefusedError,
+        CliConfigurationError,
+        ImageSearchError,
+    ) as error:
         print(getattr(error, "code", "INDEX_COMMAND_FAILED"), file=sys.stderr)
         return 2
     except Exception:

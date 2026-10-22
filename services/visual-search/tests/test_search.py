@@ -15,6 +15,7 @@ from melon_visual_search.local_features import (
 from melon_visual_search.repository import RecallCandidate
 from melon_visual_search.search import (
     NoIndexError,
+    SearchEvidenceResult,
     SearchService,
     SearchUnavailableError,
 )
@@ -206,6 +207,42 @@ def test_verified_crop_ranks_before_visual_neighbor(query_image: np.ndarray) -> 
     assert result.items[0].kind in {"probable_source", "possible_source"}
     assert result.items[1].pattern_id == neighbor
     assert result.items[1].kind == "visually_similar"
+
+
+def test_search_ranks_the_same_evidence_exposed_for_offline_calibration(
+    query_image: np.ndarray,
+) -> None:
+    owner = uuid4()
+    pattern = uuid4()
+    reference = extract_local_features(query_image)
+    candidate = _candidate(
+        owner,
+        pattern,
+        best_visual=0.9,
+        global_visual=0.85,
+        phash=reference.phash,
+    )
+    service = _service(
+        FakeRepository([candidate]),
+        FakeStorage(
+            {
+                (pattern, candidate.preview_hash): serialize_local_features(reference),
+            }
+        ),
+    )
+
+    evidence = service.collect_evidence(
+        owner,
+        (pattern,),
+        query_image,
+        minimum_visual_similarity=0.0,
+    )
+    ranked = service.rank_evidence(evidence)
+    online = service.search(owner, (pattern,), query_image)
+
+    assert isinstance(evidence, SearchEvidenceResult)
+    assert evidence.items[0].pattern_id == pattern
+    assert ranked == online
 
 
 def test_zero_allowed_ids_and_no_ready_index_raise_no_index(

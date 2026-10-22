@@ -189,6 +189,44 @@ def test_recall_reports_whether_the_filtered_scope_has_a_ready_index(
     )
 
 
+def test_benchmark_sampling_is_deterministic_and_owner_version_scoped(
+    repository: Repository,
+    seed_factory: SeedFactory,
+    database_url: str,
+) -> None:
+    owner = uuid4()
+    ready = [
+        _seed_ready_document(database_url, seed_factory, owner_id=owner)
+        for _ in range(8)
+    ]
+    _seed_ready_document(
+        database_url,
+        seed_factory,
+        owner_id=owner,
+        index_version="visual-search-v2",
+    )
+    foreign = _seed_ready_document(database_url, seed_factory)
+
+    first = repository.sample_ready_previews(
+        owner_id=owner,
+        index_version=INDEX_VERSION,
+        count=5,
+        seed=20261020,
+    )
+    replay = repository.sample_ready_previews(
+        owner_id=owner,
+        index_version=INDEX_VERSION,
+        count=5,
+        seed=20261020,
+    )
+
+    assert first == replay
+    assert len(first) == 5
+    assert {preview.pattern_id for preview in first} <= set(_ids(ready))
+    assert foreign[0] not in {preview.pattern_id for preview in first}
+    assert all(str(owner) in preview.object_key for preview in first)
+
+
 def test_exact_recall_merges_best_region_and_caps_candidates_at_fifty(
     repository: Repository,
     seed_factory: SeedFactory,

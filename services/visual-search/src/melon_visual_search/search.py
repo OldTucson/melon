@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import threading
 from collections import OrderedDict
 from collections.abc import Sequence
@@ -60,6 +61,19 @@ class SearchResult:
     width: int
     height: int
     items: tuple[SearchItem, ...]
+
+
+@dataclass(frozen=True)
+class SearchEvidenceItem:
+    pattern_id: UUID
+    evidence: MatchEvidence
+
+
+@dataclass(frozen=True)
+class SearchEvidenceResult:
+    width: int
+    height: int
+    items: tuple[SearchEvidenceItem, ...]
 
 
 class SearchRepository(Protocol):
@@ -144,6 +158,22 @@ class SearchService:
         allowed_pattern_ids: Sequence[UUID],
         image: npt.NDArray[np.uint8],
     ) -> SearchResult:
+        evidence = self.collect_evidence(
+            owner_id,
+            allowed_pattern_ids,
+            image,
+            minimum_visual_similarity=self._scoring.minimum_visual_similarity,
+        )
+        return self.rank_evidence(evidence)
+
+    def collect_evidence(
+        self,
+        owner_id: UUID,
+        allowed_pattern_ids: Sequence[UUID],
+        image: npt.NDArray[np.uint8],
+        *,
+        minimum_visual_similarity: float = 0.0,
+    ) -> SearchEvidenceResult:
         if not isinstance(owner_id, UUID):
             raise ValueError("owner_id must be a UUID")
         if len(allowed_pattern_ids) > MAX_ALLOWED_PATTERN_IDS:
@@ -155,6 +185,13 @@ class SearchService:
             raise NoIndexError()
         if image.dtype != np.uint8 or image.ndim != 3 or image.shape[2] != 3:
             raise ValueError("image must be an HxWx3 uint8 RGB array")
+        if (
+            not isinstance(minimum_visual_similarity, (int, float))
+            or isinstance(minimum_visual_similarity, bool)
+            or not math.isfinite(minimum_visual_similarity)
+            or not 0.0 <= minimum_visual_similarity <= 1.0
+        ):
+            raise ValueError("minimum_visual_similarity must be between zero and one")
 
         try:
             has_ready = self._repository.has_ready_documents(
@@ -183,39 +220,61 @@ class SearchService:
 
         query_features = extract_local_features(image)
         allowed_set = set(allowed_ids)
-        ranked: list[SearchItem] = []
+        evidence_items: list[SearchEvidenceItem] = []
         for candidate in candidates[:MAX_RERANK_CANDIDATES]:
             if (
                 candidate.owner_id != owner_id
                 or candidate.pattern_id not in allowed_set
                 or candidate.index_version != self._index_version
-                or candidate.best_visual < self._scoring.minimum_visual_similarity
+                or candidate.best_visual < minimum_visual_similarity
             ):
                 continue
             try:
                 reference_features = self._load_features(candidate)
                 geometry = geometric_evidence(query_features, reference_features)
-                classified = classify(
-                    MatchEvidence(
-                        best_visual=candidate.best_visual,
-                        global_visual=candidate.global_visual,
-                        phash_distance=phash_distance(
-                            query_features.phash,
-                            candidate.phash,
+                evidence_items.append(
+                    SearchEvidenceItem(
+                        pattern_id=candidate.pattern_id,
+                        evidence=MatchEvidence(
+                            best_visual=candidate.best_visual,
+                            global_visual=candidate.global_visual,
+                            phash_distance=phash_distance(
+                                query_features.phash,
+                                candidate.phash,
+                            ),
+                            inliers=geometry.inliers,
+                            inlier_ratio=geometry.inlier_ratio,
+                            coverage=geometry.coverage,
                         ),
-                        inliers=geometry.inliers,
-                        inlier_ratio=geometry.inlier_ratio,
-                        coverage=geometry.coverage,
-                    ),
-                    self._scoring,
+                    )
                 )
+            except Exception as error:
+                raise SearchUnavailableError() from error
+
+        return SearchEvidenceResult(
+            width=int(image.shape[1]),
+            height=int(image.shape[0]),
+            items=tuple(evidence_items),
+        )
+
+    def rank_evidence(
+        self,
+        evidence: SearchEvidenceResult,
+        *,
+        scoring_config: ScoringConfig | None = None,
+    ) -> SearchResult:
+        config = scoring_config or self._scoring
+        ranked: list[SearchItem] = []
+        for item in evidence.items:
+            try:
+                classified = classify(item.evidence, config)
             except Exception as error:
                 raise SearchUnavailableError() from error
             if classified is None:
                 continue
             ranked.append(
                 SearchItem(
-                    pattern_id=candidate.pattern_id,
+                    pattern_id=item.pattern_id,
                     kind=classified.kind,
                     score=classified.score,
                     category_rank=classified.category_rank,
@@ -230,8 +289,8 @@ class SearchService:
             )
         )
         return SearchResult(
-            width=int(image.shape[1]),
-            height=int(image.shape[0]),
+            width=evidence.width,
+            height=evidence.height,
             items=tuple(ranked[:MAX_SEARCH_RESULTS]),
         )
 

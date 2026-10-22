@@ -1946,15 +1946,31 @@ def test_cleanup_database_guard_requires_an_exact_explicit_production_name() -> 
         assert_cleanup_database_allowed("melon", production_database_name=None)
 
 
-def test_cli_exposes_worker_and_cleanup_commands() -> None:
+def test_cli_exposes_worker_cleanup_and_benchmark_commands(tmp_path: Path) -> None:
     parser = cli.build_parser()
 
     worker_args = parser.parse_args(["worker"])
     cleanup_args = parser.parse_args(["cleanup-orphans"])
+    benchmark_args = parser.parse_args(
+        [
+            "benchmark",
+            "--owner-id",
+            "00000000-0000-4000-8000-000000000001",
+            "--count",
+            "100",
+            "--seed",
+            "20261020",
+            "--output",
+            str(tmp_path / "report.json"),
+        ]
+    )
 
     assert worker_args.command == "worker"
     assert cleanup_args.command == "cleanup-orphans"
     assert cleanup_args.older_than_hours == 24.0
+    assert benchmark_args.command == "benchmark"
+    assert benchmark_args.count == 100
+    assert benchmark_args.seed == 20261020
     with pytest.raises(SystemExit):
         parser.parse_args(["cleanup-orphans", "--older-than-hours", "0"])
 
