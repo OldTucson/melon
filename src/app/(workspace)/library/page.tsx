@@ -15,6 +15,7 @@ import { normalizedUuidSchema } from "@/features/storage/identifiers";
 import { AppError } from "@/lib/http/app-error";
 import { createQueryClient } from "@/lib/query/client";
 import { queryKeys } from "@/lib/query/keys";
+import { getServerEnv } from "@/lib/env/server";
 
 const libraryStatuses = new Set([
   "draft",
@@ -87,6 +88,7 @@ export default async function LibraryPage({
       <LibraryView
         initialQuery={query}
         initialSelectedId={selectedPattern?.id}
+        paletteEnabled={getServerEnv().IMAGE_SEARCH_ENABLED}
       />
     </HydrationBoundary>
   );

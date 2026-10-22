@@ -35,16 +35,23 @@ import { TrashPatternsDialog } from "./trash-patterns-dialog";
 import { ManualPreviewDialog } from "@/features/preview/manual-preview-dialog";
 import { queryKeys } from "@/lib/query/keys";
 import { useQueryOwnerId } from "@/lib/query/provider";
+import { PaletteSwatches } from "@/features/palette-search/palette-swatches";
 
 export function Inspector({
   activeQuery,
   onCollapse,
+  onPaletteToggle,
+  paletteEnabled = false,
   pattern,
+  selectedPaletteColors,
   statusCheck,
 }: {
   activeQuery: PatternQuery;
   onCollapse: () => void;
+  onPaletteToggle?: (hex: string) => void;
+  paletteEnabled?: boolean;
   pattern: PatternItem;
+  selectedPaletteColors?: ReadonlySet<string>;
   statusCheck?: PatternStatusCheck;
 }) {
   const ownerId = useQueryOwnerId();
@@ -234,6 +241,19 @@ export function Inspector({
                 />
                 {pattern.isFavorite ? "已收藏" : "添加收藏"}
               </button>
+              {paletteEnabled ? (
+                <div className="inspector-palette">
+                  <span>主色</span>
+                  <PaletteSwatches
+                    colors={pattern.palette}
+                    interactive={Boolean(onPaletteToggle)}
+                    onToggle={onPaletteToggle}
+                    selectedColors={selectedPaletteColors}
+                    size="detail"
+                    status={pattern.paletteStatus}
+                  />
+                </div>
+              ) : null}
               <dl className="pattern-facts">
                 <div>
                   <dt>格式</dt>

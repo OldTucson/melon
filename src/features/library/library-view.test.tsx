@@ -131,12 +131,21 @@ function createClient(items: PatternItem[]) {
   return client;
 }
 
-function libraryTree(client: QueryClient, initialQuery = query, initialSelectedId?: string) {
+function libraryTree(
+  client: QueryClient,
+  initialQuery = query,
+  initialSelectedId?: string,
+  paletteEnabled = true,
+) {
   return (
     <QueryClientProvider client={client}>
       <QueryOwnerProvider ownerId={ownerId}>
         <Tooltip.Provider>
-          <LibraryView initialQuery={initialQuery} initialSelectedId={initialSelectedId} />
+          <LibraryView
+            initialQuery={initialQuery}
+            initialSelectedId={initialSelectedId}
+            paletteEnabled={paletteEnabled}
+          />
         </Tooltip.Provider>
       </QueryOwnerProvider>
     </QueryClientProvider>
@@ -167,6 +176,34 @@ function selectPattern(name: string, modifiers: MouseEventInit = {}) {
 }
 
 describe("Mac-first workspace", () => {
+  it("shows ready palettes on cards and in the inspector only when enabled", () => {
+    const item: PatternItem = {
+      ...makePattern(1),
+      paletteStatus: "ready",
+      palette: [
+        { hex: "#285947", coverage: 0.5 },
+        { hex: "#CC9C3F", coverage: 0.3 },
+        { hex: "#8F4038", coverage: 0.2 },
+      ],
+    };
+    const client = createClient([item]);
+    const rendered = render(libraryTree(client));
+
+    expect(screen.getByLabelText("#285947，覆盖率 50%")).toBeVisible();
+    inspectPattern(item.name);
+    const inspector = screen.getByRole("complementary", {
+      name: "图案检查器",
+    });
+    expect(within(inspector).getByText("#285947")).toBeVisible();
+    expect(within(inspector).getByText("50%")).toBeVisible();
+
+    rendered.unmount();
+    render(libraryTree(client, query, undefined, false));
+    expect(
+      screen.queryByLabelText("#285947，覆盖率 50%"),
+    ).not.toBeInTheDocument();
+  });
+
   it("preserves an inspected deep link through StrictMode effect replay", () => {
     const item = makePattern(1);
     const client = createClient([item]);
@@ -1464,7 +1501,7 @@ describe("Mac-first workspace", () => {
       expect(row!.style.gridTemplateColumns).toBe("repeat(4, minmax(0, 1fr))");
       return row!;
     });
-    expect(initialRow.style.height).toBe("302px");
+    expect(initialRow.style.height).toBe("328px");
 
     act(() => {
       for (const { callback, observer } of resizeObservers) {
@@ -1483,11 +1520,11 @@ describe("Mac-first workspace", () => {
     await waitFor(() => {
       const row = document.querySelector<HTMLElement>(".virtual-pattern-row");
       expect(row?.style.gridTemplateColumns).toBe("repeat(4, minmax(0, 1fr))");
-      expect(row?.style.height).toBe("312px");
+      expect(row?.style.height).toBe("338px");
       expect(
         document.querySelector<HTMLElement>(".virtual-pattern-canvas")?.style
           .height,
-      ).toBe("936px");
+      ).toBe("1014px");
     });
   });
 

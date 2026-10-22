@@ -285,4 +285,34 @@ describe("pattern card interactions", () => {
     expect(props.onInspect).toHaveBeenCalledWith(item.id);
     expect(props.onOpenPreview).not.toHaveBeenCalled();
   });
+
+  it("toggles a palette color without selecting, inspecting, or previewing", async () => {
+    const user = userEvent.setup();
+    const onPaletteToggle = vi.fn();
+    const props = renderCard({
+      item: {
+        ...item,
+        paletteStatus: "ready",
+        palette: [
+          { hex: "#285947", coverage: 0.5 },
+          { hex: "#CC9C3F", coverage: 0.3 },
+          { hex: "#8F4038", coverage: 0.2 },
+        ],
+      },
+      onPaletteToggle,
+      paletteEnabled: true,
+      selectedPaletteColors: new Set(["#285947"]),
+    });
+
+    const swatch = screen.getByRole("button", {
+      name: "按颜色 #285947 搜索",
+    });
+    expect(swatch).toHaveAttribute("aria-pressed", "true");
+    await user.click(swatch);
+
+    expect(onPaletteToggle).toHaveBeenCalledWith("#285947");
+    expect(props.onSelect).not.toHaveBeenCalled();
+    expect(props.onInspect).not.toHaveBeenCalled();
+    expect(props.onOpenPreview).not.toHaveBeenCalled();
+  });
 });

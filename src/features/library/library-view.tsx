@@ -281,9 +281,11 @@ function imageSearchMembershipMayChange(
 export function LibraryView({
   initialQuery,
   initialSelectedId,
+  paletteEnabled = true,
 }: {
   initialQuery: PatternQuery;
   initialSelectedId?: string;
+  paletteEnabled?: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -1165,6 +1167,7 @@ export function LibraryView({
             onInspect={inspectVisiblePattern}
             onOpenPreview={openVisiblePreview}
             onSelect={selectVisiblePattern}
+            paletteEnabled={paletteEnabled}
             selectedIds={selectedSet}
           />
         )}
@@ -1175,6 +1178,7 @@ export function LibraryView({
           key={inspectorPatterns[0]!.id}
           activeQuery={initialQuery}
           onCollapse={() => setCollapsedInspectorKey(inspectorKey)}
+          paletteEnabled={paletteEnabled}
           pattern={inspectorPatterns[0]!}
           statusCheck={
             !imageSearchActive &&

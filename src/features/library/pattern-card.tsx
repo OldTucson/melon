@@ -18,6 +18,7 @@ import { IconButton } from "./icon-button";
 import type { LibraryViewMode } from "./library-toolbar";
 import type { SelectionModifiers } from "./selection-store";
 import { formatFenForDisplay } from "@/features/authorizations/api";
+import { PaletteSwatches } from "@/features/palette-search/palette-swatches";
 import { isPatternEditable } from "./selection-availability";
 
 const commercialStateLabels = {
@@ -62,16 +63,22 @@ export function PatternCard({
   onFavorite,
   onInspect,
   onOpenPreview,
+  onPaletteToggle,
   onSelect,
+  paletteEnabled = false,
   selected,
+  selectedPaletteColors,
 }: {
   item: PatternItem;
   mode: LibraryViewMode;
   onFavorite: (item: PatternItem) => void;
   onInspect: (id: string) => void;
   onOpenPreview: (id: string) => void;
+  onPaletteToggle?: (hex: string) => void;
   onSelect: (id: string, modifiers: SelectionModifiers) => void;
+  paletteEnabled?: boolean;
   selected: boolean;
+  selectedPaletteColors?: ReadonlySet<string>;
 }) {
   const imageAssetId = item.thumbnailAssetId ?? item.previewAssetId;
   const [failedImageAssetId, setFailedImageAssetId] = useState<string | null>(
@@ -107,6 +114,7 @@ export function PatternCard({
     <div
       className="pattern-card"
       data-mode={mode}
+      data-palette={paletteEnabled ? "true" : undefined}
       data-selected={selected ? "true" : undefined}
       role="listitem"
       aria-label={`${item.name}, ${item.extension.toUpperCase()}${selected ? ", 已选择" : ""}`}
@@ -176,6 +184,18 @@ export function PatternCard({
           />
         )}
       </button>
+      {paletteEnabled ? (
+        <div className="pattern-card-palette">
+          <PaletteSwatches
+            colors={item.palette}
+            interactive={Boolean(onPaletteToggle)}
+            onToggle={onPaletteToggle}
+            selectedColors={selectedPaletteColors}
+            size="compact"
+            status={item.paletteStatus}
+          />
+        </div>
+      ) : null}
       <div className="pattern-card-copy">
         <strong title={item.name}>{item.name}</strong>
         <span>

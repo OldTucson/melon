@@ -855,10 +855,12 @@ git commit -m "feat: add palette search api"
 - Modify: `src/features/library/pattern-card-interactions.test.tsx`
 - Modify: `src/features/library/pattern-grid.tsx`
 - Modify: `src/features/library/inspector.tsx`
+- Modify: `src/features/library/library-view.tsx`
 - Modify: `src/features/library/library-view.test.tsx`
+- Modify: `src/app/(workspace)/library/page.tsx`
 - Modify: `src/app/globals.css`
 
-- [ ] **Step 1: Write failing component and interaction tests**
+- [x] **Step 1: Write failing component and interaction tests**
 
 Assert ready palettes render 3-5 native buttons in coverage order; pending renders five fixed placeholders; failed renders disabled segments with a tooltip; card buttons expose `aria-label="按颜色 #285947 搜索"` and `aria-pressed`; inspector labels include HEX and rounded percent. Clicking or pressing a swatch must not select the card, open preview, or open the inspector.
 
@@ -869,7 +871,7 @@ expect(onSelect).not.toHaveBeenCalled();
 expect(onInspect).not.toHaveBeenCalled();
 ```
 
-- [ ] **Step 2: Run focused component tests and confirm missing UI**
+- [x] **Step 2: Run focused component tests and confirm missing UI**
 
 ```bash
 npx --yes --package=node@24 -c 'npm run test -- src/features/palette-search/palette-swatches.test.tsx src/features/library/pattern-card-interactions.test.tsx src/features/library/library-view.test.tsx'
@@ -877,7 +879,7 @@ npx --yes --package=node@24 -c 'npm run test -- src/features/palette-search/pale
 
 Expected: FAIL because no swatches are rendered.
 
-- [ ] **Step 3: Implement the focused `PaletteSwatches` component**
+- [x] **Step 3: Implement the focused `PaletteSwatches` component**
 
 Use these props and no API knowledge:
 
@@ -894,15 +896,15 @@ type PaletteSwatchesProps = {
 
 Render a stable five-track container for pending/failed states and an equal-width 3-5 track container for ready colors. Use native buttons, `title` only for the failed explanation, visible text only in detail mode, and stop propagation for click, pointer-down, and Enter/Space key handling.
 
-- [ ] **Step 4: Wire cards, grid, and inspector**
+- [x] **Step 4: Wire cards, grid, and inspector**
 
 Add optional `selectedPaletteColors` and `onPaletteToggle` props through `PatternGrid` and `PatternCard`. In `Inspector`, use detail mode and show the same colors. When `IMAGE_SEARCH_ENABLED` is false, omit the interactive palette row entirely; pending space is reserved only when the feature is enabled.
 
-- [ ] **Step 5: Add stable responsive styles**
+- [x] **Step 5: Add stable responsive styles**
 
 Use a fixed row height, maximum 8 px card radius, 44 px touch hit targets on narrow viewports, a 2 px high-contrast selected ring, and zero letter-spacing changes. Ensure list rows and grid cards retain stable dimensions when palette state changes.
 
-- [ ] **Step 6: Verify components, accessibility behavior, and types**
+- [x] **Step 6: Verify components, accessibility behavior, and types**
 
 ```bash
 npx --yes --package=node@24 -c 'npm run test -- src/features/palette-search/palette-swatches.test.tsx src/features/library/pattern-card-assets.test.tsx src/features/library/pattern-card-interactions.test.tsx src/features/library/library-view.test.tsx'
@@ -912,10 +914,10 @@ npx --yes --package=node@24 -c 'npm run lint -- src/features/palette-search/pale
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit swatch rendering**
+- [x] **Step 7: Commit swatch rendering**
 
 ```bash
-git add src/features/palette-search/palette-swatches.tsx src/features/palette-search/palette-swatches.test.tsx src/features/library/pattern-card.tsx src/features/library/pattern-card-interactions.test.tsx src/features/library/pattern-grid.tsx src/features/library/inspector.tsx src/features/library/library-view.test.tsx src/app/globals.css
+git add src/features/palette-search/palette-swatches.tsx src/features/palette-search/palette-swatches.test.tsx src/features/library/pattern-card.tsx src/features/library/pattern-card-interactions.test.tsx src/features/library/pattern-grid.tsx src/features/library/inspector.tsx src/features/library/library-view.tsx src/features/library/library-view.test.tsx 'src/app/(workspace)/library/page.tsx' src/app/globals.css
 git commit -m "feat: display pattern color palettes"
 ```
 

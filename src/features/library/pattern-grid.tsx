@@ -32,8 +32,11 @@ type PatternGridProps = {
   onInspect: (id: string) => void;
   onLoadMore: () => void;
   onOpenPreview: (id: string) => void;
+  onPaletteToggle?: (hex: string) => void;
   onSelect: (id: string, modifiers: SelectionModifiers) => void;
+  paletteEnabled?: boolean;
   selectedIds: ReadonlySet<string>;
+  selectedPaletteColors?: ReadonlySet<string>;
 };
 
 export const PatternGrid = forwardRef<PatternGridHandle, PatternGridProps>(
@@ -47,8 +50,11 @@ export const PatternGrid = forwardRef<PatternGridHandle, PatternGridProps>(
       onInspect,
       onLoadMore,
       onOpenPreview,
+      onPaletteToggle,
       onSelect,
+      paletteEnabled = false,
       selectedIds,
+      selectedPaletteColors,
     },
     ref,
   ) {
@@ -89,10 +95,13 @@ export const PatternGrid = forwardRef<PatternGridHandle, PatternGridProps>(
       return Math.max(1, Math.min(6, Math.floor((width + 12) / 196)));
     }, [mode, width]);
     const rowCount = Math.ceil(items.length / columns);
+    const paletteRowHeight = paletteEnabled ? (width <= 720 ? 44 : 26) : 0;
     const rowHeight =
       mode === "list"
-        ? 88
-        : Math.max(196, (width - (columns - 1) * 12) / columns) + 86;
+        ? 88 + paletteRowHeight
+        : Math.max(196, (width - (columns - 1) * 12) / columns) +
+          86 +
+          paletteRowHeight;
 
     return (
       <div
@@ -120,11 +129,14 @@ export const PatternGrid = forwardRef<PatternGridHandle, PatternGridProps>(
           onFavorite={onFavorite}
           onInspect={onInspect}
           onOpenPreview={onOpenPreview}
+          onPaletteToggle={onPaletteToggle}
           onSelect={onSelect}
+          paletteEnabled={paletteEnabled}
           rowCount={rowCount}
           rowHeight={rowHeight}
           scrollRef={scrollRef}
           selectedIds={selectedIds}
+          selectedPaletteColors={selectedPaletteColors}
         />
         {isFetchingNextPage ? (
           <p className="load-more-status" aria-live="polite">
@@ -143,11 +155,14 @@ function VirtualPatternCanvas({
   onFavorite,
   onInspect,
   onOpenPreview,
+  onPaletteToggle,
   onSelect,
+  paletteEnabled,
   rowCount,
   rowHeight,
   scrollRef,
   selectedIds,
+  selectedPaletteColors,
 }: {
   columns: number;
   items: PatternItem[];
@@ -155,11 +170,14 @@ function VirtualPatternCanvas({
   onFavorite: (item: PatternItem) => void;
   onInspect: (id: string) => void;
   onOpenPreview: (id: string) => void;
+  onPaletteToggle?: (hex: string) => void;
   onSelect: (id: string, modifiers: SelectionModifiers) => void;
+  paletteEnabled: boolean;
   rowCount: number;
   rowHeight: number;
   scrollRef: RefObject<HTMLDivElement | null>;
   selectedIds: ReadonlySet<string>;
+  selectedPaletteColors?: ReadonlySet<string>;
 }) {
   // TanStack Virtual is the approved engine; its methods intentionally resist compiler memoization.
   // eslint-disable-next-line react-hooks/incompatible-library
@@ -214,8 +232,11 @@ function VirtualPatternCanvas({
                 onFavorite={onFavorite}
                 onInspect={onInspect}
                 onOpenPreview={onOpenPreview}
+                onPaletteToggle={onPaletteToggle}
                 onSelect={onSelect}
+                paletteEnabled={paletteEnabled}
                 selected={selectedIds.has(item.id)}
+                selectedPaletteColors={selectedPaletteColors}
               />
             ))}
           </div>
