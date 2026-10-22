@@ -99,9 +99,10 @@ users/{OWNER_UUID}/patterns/{PATTERN_UUID}/derived/{ASSET_UUID}.{jpg|jpeg|png|we
 - 对目标上传角色的精确 `sts:AssumeRole` 权限。
 - 对 `melon` 对象树的 `oss:GetObject`，用于 `HEAD`、Range 验证和签名 GET。
 - 对同一对象树的 `oss:DeleteObject`，用于批量回收确认删除的资产。
+- 对以图搜图派生目录的 `oss:PutObject`，用于 worker 写入局部特征归档。
 - 对 Bucket 的 `oss:ListObjects`，并通过 `oss:Prefix` 条件只允许列举 `users/*/patterns/*`。永久删除会先列举图案前缀，以覆盖尚未写入数据库的在途或派生对象。
 
-对象权限和列举权限必须分成不同 statement。`ListObjects` 是 Bucket 级操作，其 `Resource` 必须是 Bucket ARN；对象级 `GetObject` 和 `DeleteObject` 仍只覆盖 `BUCKET/users/*/patterns/*`：
+列举、通用对象读删和搜索特征写入权限必须分成不同 statement。`ListObjects` 是 Bucket 级操作，其 `Resource` 必须是 Bucket ARN；对象级 `GetObject` 和 `DeleteObject` 仍只覆盖 `BUCKET/users/*/patterns/*`；`PutObject` 进一步收窄到 `derived/search` 子树：
 
 ```json
 {
@@ -126,14 +127,20 @@ users/{OWNER_UUID}/patterns/{PATTERN_UUID}/derived/{ASSET_UUID}.{jpg|jpeg|png|we
         "oss:DeleteObject"
       ],
       "Resource": "acs:oss:*:*:BUCKET/users/*/patterns/*"
+    },
+    {
+      "Sid": "WriteVisualSearchFeatures",
+      "Effect": "Allow",
+      "Action": "oss:PutObject",
+      "Resource": "acs:oss:*:*:BUCKET/users/*/patterns/*/derived/search/*"
     }
   ]
 }
 ```
 
-`HeadObject` 对应 `oss:GetObject`，`ListObjectsV2` 对应 `oss:ListObjects`，`DeleteMultipleObjects` 对应 `oss:DeleteObject`；参见[HeadObject 权限](https://www.alibabacloud.com/help/en/oss/developer-reference/headobject)、[按前缀限制 ListObjects 权限](https://www.alibabacloud.com/help/en/oss/user-guide/access-control-base-on-ram-policy)、[DeleteMultipleObjects 权限和单请求 1000 对象上限](https://www.alibabacloud.com/help/en/oss/developer-reference/deletemultipleobjects)和[签名下载权限](https://www.alibabacloud.com/help/en/oss/user-guide/how-to-obtain-the-url-of-a-single-object-or-the-urls-of-multiple-objects)。适配器会验证返回 key 和完整删除列表均属于请求的规范图案前缀，再按最多 1000 个对象分块删除。多个分块请求不是事务：如果后续批次失败，早先批次可能已经完成。在上述版本控制保持关闭的基线下，调用方可重新列举并重试，已经删除的 key 可以安全重复提交；版本控制开启或暂停的 Bucket 不满足这项契约。服务端身份不需要 `oss:ListBuckets`、Bucket 根前缀列举或其他 OSS 管理权限。
+`HeadObject` 对应 `oss:GetObject`，`ListObjectsV2` 对应 `oss:ListObjects`，`DeleteMultipleObjects` 对应 `oss:DeleteObject`，搜索特征上传对应 `oss:PutObject`；参见[HeadObject 权限](https://www.alibabacloud.com/help/en/oss/developer-reference/headobject)、[按前缀限制 ListObjects 权限](https://www.alibabacloud.com/help/en/oss/user-guide/access-control-base-on-ram-policy)、[DeleteMultipleObjects 权限和单请求 1000 对象上限](https://www.alibabacloud.com/help/en/oss/developer-reference/deletemultipleobjects)和[签名下载权限](https://www.alibabacloud.com/help/en/oss/user-guide/how-to-obtain-the-url-of-a-single-object-or-the-urls-of-multiple-objects)。适配器会验证返回 key 和完整删除列表均属于请求的规范图案前缀，再按最多 1000 个对象分块删除。多个分块请求不是事务：如果后续批次失败，早先批次可能已经完成。在上述版本控制保持关闭的基线下，调用方可重新列举并重试，已经删除的 key 可以安全重复提交；版本控制开启或暂停的 Bucket 不满足这项契约。服务端身份不需要 `oss:ListBuckets`、Bucket 根前缀列举或其他 OSS 管理权限。
 
-以图搜图的局部特征对象位于同一规范图案树的 `derived/search/{INDEX_VERSION}/{PREVIEW_HASH}.npz`。只有使用 ECS 实例 RAM 角色的 Python API、worker 和清理命令可以读写该路径。不要修改浏览器上传角色的 action 集合，也不要为浏览器增加搜索特征的读取、列举或删除权限；ready 文档的发布仍由数据库 owner 外键和 worker 租约共同约束。
+以图搜图的局部特征对象位于同一规范图案树的 `derived/search/{INDEX_VERSION}/{PREVIEW_HASH}.npz`。只有 Python API、worker 和清理命令使用的服务端运行身份可以读写该路径。不要修改浏览器上传角色的 action 集合，也不要为浏览器增加搜索特征的读取、列举或删除权限；ready 文档的发布仍由数据库 owner 外键和 worker 租约共同约束。
 
 ### 本地开发
 
@@ -192,6 +199,6 @@ OSS_ADAPTER=real
 - 浏览器 STS 有效期为 900 秒；源文件上传只覆盖当前 owner/pattern 前缀，手动预览只覆盖本次两个精确 derived key，二者都只有三项写入 action。
 - 浏览器凭证不能读取对象、列举 Bucket、访问其他图案或其他用户前缀。
 - 本地 RAM 调用者和 ECS 实例角色只能假设指定上传角色。
-- 本地 RAM 调用者和 ECS 实例角色能以 `users/*/patterns/*` 下的图案前缀调用 `ListObjectsV2`，但不能列举 Bucket 根前缀或图案树以外的对象；对象读取和删除仍只能访问 `BUCKET/users/*/patterns/*`。
+- 本地 RAM 调用者和 ECS 实例角色能以 `users/*/patterns/*` 下的图案前缀调用 `ListObjectsV2`，但不能列举 Bucket 根前缀或图案树以外的对象；对象读取和删除仍只能访问 `BUCKET/users/*/patterns/*`，写入只允许 `BUCKET/users/*/patterns/*/derived/search/*`。
 - 7 天未完成 multipart 生命周期规则已启用。
 - 应用日志和数据库中没有长期密钥、security token 或签名 URL。

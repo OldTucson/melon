@@ -286,6 +286,7 @@ def test_rejects_invalid_security_and_runtime_values(
     [
         ("database_url", "mysql://melon:secret@127.0.0.1/melon"),
         ("oss_region", "CN Shanghai"),
+        ("oss_region", "oss-cn-shanghai"),
         ("oss_bucket", "Invalid_Bucket"),
         ("oss_endpoint", "oss-cn-shanghai.aliyuncs.com"),
         ("oss_endpoint", "https://user:secret@oss.example.test/private?token=secret"),

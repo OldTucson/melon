@@ -67,8 +67,12 @@ class Settings(BaseSettings):
     @field_validator("oss_region")
     @classmethod
     def validate_oss_region(cls, value: str | None) -> str | None:
-        if value is not None and not _REGION_PATTERN.fullmatch(value):
-            raise ValueError("OSS region must use lowercase dash-separated segments")
+        if value is not None and (
+            not _REGION_PATTERN.fullmatch(value) or value.startswith("oss-")
+        ):
+            raise ValueError(
+                "OSS region must be lowercase dash-separated without an oss- prefix"
+            )
         return value
 
     @field_validator("oss_bucket")

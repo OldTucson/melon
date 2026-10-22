@@ -43,6 +43,9 @@ describe("OSS operations contract", () => {
     expect(serverSection).toMatch(
       /"Action": \[[\s\S]*"oss:GetObject"[\s\S]*"oss:DeleteObject"[\s\S]*"Resource": "acs:oss:\*:\*:BUCKET\/users\/\*\/patterns\/\*"/,
     );
+    expect(serverSection).toMatch(
+      /"Sid": "WriteVisualSearchFeatures"[\s\S]*"Action": "oss:PutObject"[\s\S]*"Resource": "acs:oss:\*:\*:BUCKET\/users\/\*\/patterns\/\*\/derived\/search\/\*"/,
+    );
     expect(serverSection).not.toContain('"Resource": "acs:oss:*:*:BUCKET/users/*"');
     expect(browserSection).toMatch(/不授予[^\n]*列举/);
     expect(browserSection).toMatch(/不要添加[^\n]*`ListObjects`/);

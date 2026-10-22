@@ -44,7 +44,7 @@ VISUAL_SEARCH_MODEL_SHA256=e306c964ab0a1a9bdb334af89ab657d58448417b830a6a7f7b742
 VISUAL_SEARCH_MODEL_HOST_PATH=/opt/melon/models/dinov2-small.onnx
 VISUAL_SEARCH_TEMP_HOST_PATH=/var/lib/melon/visual-search/tmp
 VISUAL_SEARCH_REPORT_HOST_PATH=/var/lib/melon/visual-search/reports
-VISUAL_SEARCH_OSS_REGION=oss-cn-hangzhou
+VISUAL_SEARCH_OSS_REGION=cn-hangzhou
 VISUAL_SEARCH_OSS_BUCKET=replace-with-private-bucket
 VISUAL_SEARCH_OSS_ENDPOINT=https://assets.example.com
 VISUAL_SEARCH_PRODUCTION_DATABASE_NAME=replace-with-production-database-name
@@ -52,6 +52,8 @@ VISUAL_SEARCH_MAX_CONCURRENCY=1
 ```
 
 Next.js 的 `IMAGE_SEARCH_INTERNAL_TOKEN` 必须与上面的 `VISUAL_SEARCH_INTERNAL_TOKEN` 完全相同；`IMAGE_SEARCH_SERVICE_URL` 固定为 `http://127.0.0.1:8091`。不要把环境文件传给镜像构建，也不要在 `docker compose config` 输出中保留展开后的密钥。
+
+Python OSS SDK V2 的 `VISUAL_SEARCH_OSS_REGION` 使用 `cn-hangzhou` 形式，不带 `oss-` 前缀；Next.js 使用的 `ALIYUN_OSS_REGION` 仍保持 `oss-cn-hangzhou` 形式。两者不要直接复用。
 
 ## 首次上线顺序
 
