@@ -4,13 +4,14 @@ from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import replace
 from datetime import timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import numpy as np
 import psycopg
 import pytest
 from conftest import INDEX_VERSION, NOW, SeededJob, SeedFactory
 
+from melon_visual_search.palette_search import PaletteDataError
 from melon_visual_search.repository import (
     EmbeddingRecord,
     LeaseLostError,
@@ -40,6 +41,136 @@ def valid_publication_palette() -> tuple[PaletteColorRecord, ...]:
         PaletteColorRecord(1, "#CC9C3F", (0.72, 0.03, 0.11), 0.3),
         PaletteColorRecord(2, "#8F4038", (0.48, 0.1, 0.05), 0.2),
     )
+
+
+def insert_palette_document(
+    database_url: str,
+    seeded: SeededJob,
+    *,
+    status: str = "ready",
+    palette: tuple[PaletteColorRecord, ...] | None = None,
+) -> UUID:
+    document_id = uuid4()
+    colors = palette or valid_publication_palette()
+    with psycopg.connect(database_url) as connection:
+        connection.execute(
+            """
+            INSERT INTO visual_search_documents (
+                id, owner_id, pattern_id, preview_asset_id, preview_hash,
+                index_version, status, phash, width, height,
+                local_feature_object_key, indexed_at
+            )
+            VALUES (
+                %s, %s, %s, %s, %s, %s, %s,
+                %s::bit(64), 512, 512, %s, %s
+            )
+            """,
+            (
+                document_id,
+                seeded.owner_id,
+                seeded.pattern_id,
+                seeded.preview_asset_id,
+                uuid4().hex * 2,
+                seeded.index_version,
+                status,
+                "0" * 64,
+                f"features/{document_id}.npz",
+                NOW if status == "ready" else None,
+            ),
+        )
+        with connection.cursor() as cursor:
+            cursor.executemany(
+                """
+                INSERT INTO visual_search_palette_colors (
+                    document_id, owner_id, pattern_id, color_index,
+                    display_hex, oklab_l, oklab_a, oklab_b, coverage
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                [
+                    (
+                        document_id,
+                        seeded.owner_id,
+                        seeded.pattern_id,
+                        color.color_index,
+                        color.display_hex,
+                        *color.oklab,
+                        color.coverage,
+                    )
+                    for color in colors
+                ],
+            )
+    return document_id
+
+
+def test_list_ready_palettes_is_scoped_to_owner_version_status_and_ids(
+    repository,
+    seed_factory: SeedFactory,
+    database_url: str,
+) -> None:
+    owner_id = uuid4()
+    included = seed_factory.job(owner_id=owner_id)
+    out_of_scope = seed_factory.job(owner_id=owner_id)
+    wrong_version = seed_factory.job(
+        owner_id=owner_id,
+        index_version="visual-search-v2",
+    )
+    wrong_owner = seed_factory.job()
+    not_ready = seed_factory.job(owner_id=owner_id)
+    for seeded in (included, out_of_scope, wrong_version, wrong_owner):
+        insert_palette_document(database_url, seeded)
+    insert_palette_document(database_url, not_ready, status="indexing")
+
+    candidates = repository.list_ready_palettes(
+        owner_id=owner_id,
+        index_version=INDEX_VERSION,
+        allowed_pattern_ids=(
+            included.pattern_id,
+            wrong_version.pattern_id,
+            wrong_owner.pattern_id,
+            not_ready.pattern_id,
+        ),
+    )
+
+    assert [candidate.pattern_id for candidate in candidates] == [
+        included.pattern_id
+    ]
+    assert [color.display_hex for color in candidates[0].colors] == [
+        "#285947",
+        "#CC9C3F",
+        "#8F4038",
+    ]
+
+
+def test_list_ready_palettes_rejects_malformed_stored_palette(
+    repository,
+    seed_factory: SeedFactory,
+    database_url: str,
+) -> None:
+    seeded = seed_factory.job()
+    insert_palette_document(
+        database_url,
+        seeded,
+        palette=valid_publication_palette()[:2],
+    )
+
+    with pytest.raises(PaletteDataError) as caught:
+        repository.list_ready_palettes(
+            owner_id=seeded.owner_id,
+            index_version=INDEX_VERSION,
+            allowed_pattern_ids=(seeded.pattern_id,),
+        )
+
+    assert caught.value.code == "PALETTE_DATA_INVALID"
+
+
+def test_list_ready_palettes_rejects_oversized_scope(repository) -> None:
+    with pytest.raises(ValueError, match="supported limit"):
+        repository.list_ready_palettes(
+            owner_id=uuid4(),
+            index_version=INDEX_VERSION,
+            allowed_pattern_ids=tuple(uuid4() for _ in range(10_001)),
+        )
 
 
 def test_publication_accepts_three_to_five_valid_palette_colors() -> None:

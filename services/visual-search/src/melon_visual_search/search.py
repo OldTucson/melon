@@ -20,6 +20,14 @@ from .local_features import (
     load_local_features,
     phash_distance,
 )
+from .palette_search import (
+    PaletteCandidate,
+    PaletteScoringConfig,
+    PaletteSearchItem,
+    load_palette_scoring_config,
+    rank_palettes,
+    validate_query_colors,
+)
 from .repository import MAX_ALLOWED_PATTERN_IDS, RecallCandidate
 from .scoring import (
     MatchEvidence,
@@ -64,6 +72,12 @@ class SearchResult:
 
 
 @dataclass(frozen=True)
+class PaletteSearchResult:
+    colors: tuple[str, ...]
+    items: tuple[PaletteSearchItem, ...]
+
+
+@dataclass(frozen=True)
 class SearchEvidenceItem:
     pattern_id: UUID
     evidence: MatchEvidence
@@ -96,6 +110,14 @@ class SearchRepository(Protocol):
         query_vectors: npt.NDArray[np.float32],
     ) -> tuple[RecallCandidate, ...]: ...
 
+    def list_ready_palettes(
+        self,
+        *,
+        owner_id: UUID,
+        index_version: str,
+        allowed_pattern_ids: Sequence[UUID],
+    ) -> tuple[PaletteCandidate, ...]: ...
+
 
 class SearchFeatureStorage(Protocol):
     def read_features(
@@ -126,6 +148,7 @@ class SearchService:
         *,
         index_version: str,
         scoring_config: ScoringConfig | None = None,
+        palette_scoring_config: PaletteScoringConfig | None = None,
         feature_cache_size: int = DEFAULT_FEATURE_CACHE_SIZE,
     ) -> None:
         if feature_cache_size <= 0:
@@ -136,6 +159,14 @@ class SearchService:
         self._index_version = index_version
         self._scoring = scoring_config or load_scoring_config(
             Path(__file__).resolve().parents[2] / "config" / "scoring-v1.json"
+        )
+        self._palette_scoring = (
+            palette_scoring_config
+            or load_palette_scoring_config(
+                Path(__file__).resolve().parents[2]
+                / "config"
+                / "palette-scoring-v1.json"
+            )
         )
         self._feature_cache_size = feature_cache_size
         self._feature_cache: OrderedDict[FeatureCacheKey, LocalFeatures] = OrderedDict()
@@ -165,6 +196,44 @@ class SearchService:
             minimum_visual_similarity=self._scoring.minimum_visual_similarity,
         )
         return self.rank_evidence(evidence)
+
+    def search_palette(
+        self,
+        owner_id: UUID,
+        allowed_pattern_ids: Sequence[UUID],
+        colors: Sequence[str],
+    ) -> PaletteSearchResult:
+        if not isinstance(owner_id, UUID):
+            raise ValueError("owner_id must be a UUID")
+        if len(allowed_pattern_ids) > MAX_ALLOWED_PATTERN_IDS:
+            raise ValueError("allowed_pattern_ids exceeds the supported limit")
+        if any(not isinstance(pattern_id, UUID) for pattern_id in allowed_pattern_ids):
+            raise ValueError("allowed_pattern_ids must contain UUID values")
+        allowed_ids = tuple(dict.fromkeys(allowed_pattern_ids))
+        query_colors = validate_query_colors(colors)
+        if not allowed_ids:
+            raise NoIndexError()
+
+        try:
+            candidates = self._repository.list_ready_palettes(
+                owner_id=owner_id,
+                index_version=self._index_version,
+                allowed_pattern_ids=allowed_ids,
+            )
+            allowed_set = set(allowed_ids)
+            scoped = tuple(
+                candidate
+                for candidate in candidates
+                if candidate.pattern_id in allowed_set
+            )
+            if not scoped:
+                raise NoIndexError()
+            items = rank_palettes(query_colors, scoped, self._palette_scoring)
+        except NoIndexError:
+            raise
+        except Exception as error:
+            raise SearchUnavailableError() from error
+        return PaletteSearchResult(colors=query_colors, items=items)
 
     def collect_evidence(
         self,

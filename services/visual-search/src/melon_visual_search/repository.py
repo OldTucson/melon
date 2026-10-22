@@ -16,6 +16,13 @@ from pgvector.psycopg import register_vector
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
+from .palette_search import (
+    PaletteCandidate,
+    PaletteDataError,
+    StoredPaletteColor,
+    validate_palette_candidate,
+)
+
 LEASE_DURATION = timedelta(minutes=5)
 HEARTBEAT_INTERVAL_SECONDS = 15
 MAX_RETRY_DELAY_SECONDS = 3600
@@ -311,6 +318,77 @@ class Repository:
                 (owner_id, index_version, list(allowed_ids)),
             ).fetchone()
         return row is not None
+
+    def list_ready_palettes(
+        self,
+        *,
+        owner_id: UUID,
+        index_version: str,
+        allowed_pattern_ids: Sequence[UUID],
+    ) -> tuple[PaletteCandidate, ...]:
+        allowed_ids = self._validate_recall_scope(
+            owner_id,
+            index_version,
+            allowed_pattern_ids,
+        )
+        if not allowed_ids:
+            return ()
+        with self._pool.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT d.id AS document_id, d.pattern_id,
+                       p.color_index, p.display_hex,
+                       p.oklab_l, p.oklab_a, p.oklab_b, p.coverage
+                FROM visual_search_documents d
+                LEFT JOIN visual_search_palette_colors p
+                  ON p.document_id = d.id
+                 AND p.owner_id = d.owner_id
+                 AND p.pattern_id = d.pattern_id
+                WHERE d.owner_id = %(owner_id)s
+                  AND d.index_version = %(index_version)s
+                  AND d.status = 'ready'
+                  AND d.pattern_id = ANY(%(allowed_ids)s::uuid[])
+                ORDER BY d.pattern_id, p.color_index
+                """,
+                {
+                    "owner_id": owner_id,
+                    "index_version": index_version,
+                    "allowed_ids": list(allowed_ids),
+                },
+            ).fetchall()
+
+        grouped: dict[UUID, list[dict[str, Any]]] = {}
+        for row in rows:
+            grouped.setdefault(row["pattern_id"], []).append(row)
+
+        candidates: list[PaletteCandidate] = []
+        for pattern_id, palette_rows in grouped.items():
+            if [row["color_index"] for row in palette_rows] != list(
+                range(len(palette_rows))
+            ):
+                raise PaletteDataError()
+            try:
+                colors = tuple(
+                    StoredPaletteColor(
+                        display_hex=row["display_hex"],
+                        oklab=(
+                            float(row["oklab_l"]),
+                            float(row["oklab_a"]),
+                            float(row["oklab_b"]),
+                        ),
+                        coverage=float(row["coverage"]),
+                    )
+                    for row in palette_rows
+                )
+            except (TypeError, ValueError) as error:
+                raise PaletteDataError() from error
+            candidates.append(
+                validate_palette_candidate(
+                    PaletteCandidate(pattern_id=pattern_id, colors=colors)
+                )
+            )
+        candidates.sort(key=lambda candidate: str(candidate.pattern_id))
+        return tuple(candidates)
 
     def sample_ready_previews(
         self,

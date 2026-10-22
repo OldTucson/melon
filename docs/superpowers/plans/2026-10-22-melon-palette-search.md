@@ -438,7 +438,7 @@ git commit -m "feat: publish palettes with visual indexes"
 - Modify: `services/visual-search/tests/test_repository.py`
 - Modify: `services/visual-search/tests/test_search.py`
 
-- [ ] **Step 1: Write failing ranking and repository tests**
+- [x] **Step 1: Write failing ranking and repository tests**
 
 Use fixed OKLab candidates to prove this order: exact group, small color shifts, one missing query color, unrelated palette. Add tests showing candidate coverage changes only the candidate-side term, ties sort by canonical `pattern_id`, candidates above the threshold disappear, non-ready/wrong-version/wrong-owner/out-of-scope rows never load, and a scope over 10,000 IDs is rejected.
 
@@ -451,7 +451,7 @@ assert [item.pattern_id for item in rank_palettes(query, candidates, config)] ==
 assert rank_palettes(query, unrelated, config) == ()
 ```
 
-- [ ] **Step 2: Run the tests and confirm missing-module failures**
+- [x] **Step 2: Run the tests and confirm missing-module failures**
 
 ```bash
 .venv-visual-search/bin/uv run --project services/visual-search pytest services/visual-search/tests/test_palette_search.py services/visual-search/tests/test_repository.py services/visual-search/tests/test_search.py -q
@@ -459,7 +459,7 @@ assert rank_palettes(query, unrelated, config) == ()
 
 Expected: FAIL because palette ranking and repository reads are absent.
 
-- [ ] **Step 3: Add and validate the versioned scoring config**
+- [x] **Step 3: Add and validate the versioned scoring config**
 
 Create exactly this initial contract:
 
@@ -481,7 +481,7 @@ Create exactly this initial contract:
 
 Reject unknown keys, nonfinite values, weights not summing to one, nonpositive thresholds, or a result limit other than 30. Resolve the file from settings instead of the process working directory.
 
-- [ ] **Step 4: Implement pure vectorized ranking**
+- [x] **Step 4: Implement pure vectorized ranking**
 
 ```python
 distance = (
@@ -494,7 +494,7 @@ distance = (
 
 Convert query HEX to OKLab with the same conversion used by extraction. Return immutable `PaletteSearchItem(pattern_id, distance)` values. Sort with a comparator that treats distances within `tie_tolerance` as equal and then compares the UUID string; cap at 30 after applying `maximum_distance`.
 
-- [ ] **Step 5: Add one scoped repository query and service method**
+- [x] **Step 5: Add one scoped repository query and service method**
 
 Add `Repository.list_ready_palettes(owner_id, index_version, allowed_pattern_ids)` using `pattern_id = ANY(%s::uuid[])`, ready documents only, and deterministic `ORDER BY pattern_id, color_index`. Group 3-5 rows per candidate and reject malformed stored palettes as `PALETTE_DATA_INVALID` rather than silently ranking them.
 
@@ -523,7 +523,7 @@ def search_palette(
     return PaletteSearchResult(colors, rank_palettes(colors, candidates, self._palette_config))
 ```
 
-- [ ] **Step 6: Verify scoring, scope, style, and types**
+- [x] **Step 6: Verify scoring, scope, style, and types**
 
 ```bash
 .venv-visual-search/bin/uv run --project services/visual-search pytest services/visual-search/tests/test_palette_search.py services/visual-search/tests/test_repository.py services/visual-search/tests/test_search.py -q
@@ -533,7 +533,7 @@ def search_palette(
 
 Expected: all commands PASS.
 
-- [ ] **Step 7: Commit exact palette ranking**
+- [x] **Step 7: Commit exact palette ranking**
 
 ```bash
 git add services/visual-search/config/palette-scoring-v1.json services/visual-search/src/melon_visual_search/palette_search.py services/visual-search/src/melon_visual_search/repository.py services/visual-search/src/melon_visual_search/search.py services/visual-search/tests/test_palette_search.py services/visual-search/tests/test_repository.py services/visual-search/tests/test_search.py

@@ -12,9 +12,11 @@ from melon_visual_search.local_features import (
     extract_local_features,
     serialize_local_features,
 )
+from melon_visual_search.palette_search import PaletteCandidate, StoredPaletteColor
 from melon_visual_search.repository import RecallCandidate
 from melon_visual_search.search import (
     NoIndexError,
+    PaletteSearchResult,
     SearchEvidenceResult,
     SearchService,
     SearchUnavailableError,
@@ -38,10 +40,15 @@ class FakeRepository:
         candidates: list[RecallCandidate],
         *,
         has_ready: bool = True,
+        palettes: list[PaletteCandidate] | None = None,
+        palette_error: Exception | None = None,
     ) -> None:
         self.candidates = candidates
         self.has_ready = has_ready
+        self.palettes = palettes or []
+        self.palette_error = palette_error
         self.recall_calls: list[tuple[UUID, str, tuple[UUID, ...]]] = []
+        self.palette_calls: list[tuple[UUID, str, tuple[UUID, ...]]] = []
         self.closed = False
 
     def close(self) -> None:
@@ -71,6 +78,20 @@ class FakeRepository:
             (owner_id, index_version, tuple(allowed_pattern_ids))
         )
         return tuple(self.candidates)
+
+    def list_ready_palettes(
+        self,
+        *,
+        owner_id: UUID,
+        index_version: str,
+        allowed_pattern_ids: list[UUID] | tuple[UUID, ...],
+    ) -> tuple[PaletteCandidate, ...]:
+        self.palette_calls.append(
+            (owner_id, index_version, tuple(allowed_pattern_ids))
+        )
+        if self.palette_error is not None:
+            raise self.palette_error
+        return tuple(self.palettes)
 
 
 class FakeStorage:
@@ -109,6 +130,17 @@ def _candidate(
         phash=phash,
         best_visual=best_visual,
         global_visual=global_visual,
+    )
+
+
+def _palette_candidate(pattern_id: UUID) -> PaletteCandidate:
+    return PaletteCandidate(
+        pattern_id=pattern_id,
+        colors=(
+            StoredPaletteColor("#FF0000", (0.627955, 0.224863, 0.125846), 0.4),
+            StoredPaletteColor("#00FF00", (0.866440, -0.233888, 0.179498), 0.3),
+            StoredPaletteColor("#0000FF", (0.452014, -0.032457, -0.311528), 0.3),
+        ),
     )
 
 
@@ -404,6 +436,71 @@ def test_search_rejects_more_than_ten_thousand_allowed_ids(
 
     with pytest.raises(ValueError):
         service.search(uuid4(), [uuid4() for _ in range(10_001)], query_image)
+
+
+def test_palette_search_uses_deduplicated_scope_and_returns_ranked_colors() -> None:
+    owner_id = uuid4()
+    allowed = uuid4()
+    disallowed = uuid4()
+    repository = FakeRepository(
+        [],
+        palettes=[_palette_candidate(disallowed), _palette_candidate(allowed)],
+    )
+    service = _service(repository, FakeStorage({}))
+
+    result = service.search_palette(
+        owner_id,
+        (allowed, allowed),
+        ("#FF0000", "#00FF00", "#0000FF"),
+    )
+
+    assert isinstance(result, PaletteSearchResult)
+    assert result.colors == ("#FF0000", "#00FF00", "#0000FF")
+    assert [item.pattern_id for item in result.items] == [allowed]
+    assert repository.palette_calls == [
+        (owner_id, INDEX_VERSION, (allowed,)),
+    ]
+
+
+def test_palette_search_requires_scope_ready_candidates_and_valid_colors() -> None:
+    owner_id = uuid4()
+    repository = FakeRepository([])
+    service = _service(repository, FakeStorage({}))
+
+    with pytest.raises(NoIndexError):
+        service.search_palette(owner_id, (), ("#FF0000",))
+    assert repository.palette_calls == []
+
+    with pytest.raises(NoIndexError):
+        service.search_palette(owner_id, (uuid4(),), ("#FF0000",))
+
+    for invalid_colors in (
+        (),
+        ("#ff0000",),
+        ("#FF0000", "#FF0000"),
+        ("#000000", "#111111", "#222222", "#333333", "#444444", "#555555"),
+    ):
+        with pytest.raises(ValueError, match="colors"):
+            service.search_palette(owner_id, (uuid4(),), invalid_colors)
+
+
+def test_palette_search_rejects_oversized_scope_and_maps_repository_errors() -> None:
+    owner_id = uuid4()
+    service = _service(FakeRepository([]), FakeStorage({}))
+
+    with pytest.raises(ValueError, match="supported limit"):
+        service.search_palette(
+            owner_id,
+            tuple(uuid4() for _ in range(10_001)),
+            ("#FF0000",),
+        )
+
+    failing = _service(
+        FakeRepository([], palette_error=RuntimeError("database unavailable")),
+        FakeStorage({}),
+    )
+    with pytest.raises(SearchUnavailableError):
+        failing.search_palette(owner_id, (uuid4(),), ("#FF0000",))
 
 
 def test_search_service_closes_its_repository() -> None:

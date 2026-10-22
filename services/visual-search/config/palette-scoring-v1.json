@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "version": "palette-scoring-v1",
+  "weights": {
+    "queryCoverage": 0.8,
+    "candidateFit": 0.2
+  },
+  "thresholds": {
+    "maximumDistance": 0.24,
+    "tieTolerance": 1e-9
+  },
+  "resultLimit": 30
+}
