@@ -50,6 +50,15 @@ class Region:
     image: npt.NDArray[np.uint8]
 
 
+@dataclass(frozen=True)
+class DecodedImage:
+    """One normalized decode shared by embedding and palette extraction."""
+
+    embedding_rgb: npt.NDArray[np.uint8]
+    palette_rgb: npt.NDArray[np.uint8]
+    palette_alpha: npt.NDArray[np.uint8] | None
+
+
 def _invalid_file(detail: str) -> ImageSearchError:
     return ImageSearchError(IMAGE_SEARCH_INVALID_FILE, detail)
 
@@ -108,14 +117,14 @@ def _flatten_alpha(image: Image.Image) -> Image.Image:
     return light
 
 
-def decode_image(
+def decode_image_inputs(
     encoded: bytes | bytearray | memoryview,
     *,
     max_encoded_bytes: int = MAX_ENCODED_BYTES,
     max_pixels: int = MAX_DECODED_PIXELS,
     min_edge: int = MIN_IMAGE_EDGE,
-) -> npt.NDArray[np.uint8]:
-    """Decode one supported image into deterministic contiguous sRGB bytes."""
+) -> DecodedImage:
+    """Decode one image while retaining alpha for palette extraction."""
 
     if max_encoded_bytes <= 0 or max_pixels <= 0 or min_edge <= 0:
         raise ValueError("image decode bounds must be positive")
@@ -149,8 +158,20 @@ def decode_image(
                 opened.load()
                 oriented = ImageOps.exif_transpose(opened)
                 srgb = _convert_to_srgb(oriented)
+                palette_rgb = np.ascontiguousarray(
+                    np.asarray(srgb.convert("RGB"), dtype=np.uint8)
+                )
+                palette_alpha = (
+                    np.ascontiguousarray(
+                        np.asarray(srgb.getchannel("A"), dtype=np.uint8)
+                    )
+                    if srgb.mode == "RGBA"
+                    else None
+                )
                 normalized = _flatten_alpha(srgb)
-                result = np.ascontiguousarray(np.asarray(normalized, dtype=np.uint8))
+                embedding_rgb = np.ascontiguousarray(
+                    np.asarray(normalized, dtype=np.uint8)
+                )
     except ImageSearchError:
         raise
     except (Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
@@ -158,9 +179,34 @@ def decode_image(
     except (OSError, SyntaxError, UnidentifiedImageError, ValueError) as error:
         raise _invalid_file("image data could not be decoded") from error
 
-    if result.ndim != 3 or result.shape[2] != 3:
+    if embedding_rgb.ndim != 3 or embedding_rgb.shape[2] != 3:
         raise _invalid_file("decoded image did not produce RGB pixels")
-    return result
+    if palette_rgb.shape != embedding_rgb.shape:
+        raise _invalid_file("decoded palette pixels did not match the image")
+    if palette_alpha is not None and palette_alpha.shape != embedding_rgb.shape[:2]:
+        raise _invalid_file("decoded alpha pixels did not match the image")
+    return DecodedImage(
+        embedding_rgb=embedding_rgb,
+        palette_rgb=palette_rgb,
+        palette_alpha=palette_alpha,
+    )
+
+
+def decode_image(
+    encoded: bytes | bytearray | memoryview,
+    *,
+    max_encoded_bytes: int = MAX_ENCODED_BYTES,
+    max_pixels: int = MAX_DECODED_PIXELS,
+    min_edge: int = MIN_IMAGE_EDGE,
+) -> npt.NDArray[np.uint8]:
+    """Decode one supported image into deterministic contiguous sRGB bytes."""
+
+    return decode_image_inputs(
+        encoded,
+        max_encoded_bytes=max_encoded_bytes,
+        max_pixels=max_pixels,
+        min_edge=min_edge,
+    ).embedding_rgb
 
 
 def _crop_edge(position: float, length: int, *, upper: bool) -> int:

@@ -248,7 +248,7 @@ git commit -m "feat: add visual search palettes"
 - Modify: `services/visual-search/tests/test_image_io.py`
 - Create: `services/visual-search/tests/test_palette.py`
 
-- [ ] **Step 1: Write extraction tests before the implementation**
+- [x] **Step 1: Write extraction tests before the implementation**
 
 Cover these exact invariants:
 
@@ -276,7 +276,7 @@ def test_uniform_image_gets_three_distinct_lightness_steps() -> None:
 
 Also test half-transparent weighting, fewer than 16 visible alpha values falling back to the composited image, fixed-grid sampling at 16,384 pixels, coverage ordering, and uppercase HEX output.
 
-- [ ] **Step 2: Run the focused tests and confirm import failures**
+- [x] **Step 2: Run the focused tests and confirm import failures**
 
 ```bash
 .venv-visual-search/bin/uv run --project services/visual-search pytest services/visual-search/tests/test_image_io.py services/visual-search/tests/test_palette.py -q
@@ -284,7 +284,7 @@ Also test half-transparent weighting, fewer than 16 visible alpha values falling
 
 Expected: FAIL because `palette.py` and `decode_image_inputs` do not exist.
 
-- [ ] **Step 3: Add an alpha-preserving decode result without changing embeddings**
+- [x] **Step 3: Add an alpha-preserving decode result without changing embeddings**
 
 Introduce this immutable value and keep `decode_image()` as a compatibility wrapper:
 
@@ -313,7 +313,7 @@ def decode_image(encoded: bytes) -> npt.NDArray[np.uint8]:
 
 Reuse the current decode limits, EXIF transpose, ICC conversion, and deterministic embedding background. `palette_rgb` remains height-by-width-by-three sRGB; `embedding_rgb` retains the shape already expected by region generation.
 
-- [ ] **Step 4: Implement the pure extraction module**
+- [x] **Step 4: Implement the pure extraction module**
 
 Use immutable output and named version constants:
 
@@ -335,7 +335,7 @@ class PaletteColor:
 
 Implement fixed-grid sampling, alpha weighting, vectorized sRGB-to-OKLab and OKLab-to-sRGB conversion, one-attempt seeded OpenCV k-means, nearest-cluster weighted coverage, deterministic merge ordering, duplicate-HEX coalescing, and the specified `L - 0.03 / L / L + 0.03` fallback with `0.06` retry. Normalize coverage after the last merge and sort by `(-coverage, display_hex)`.
 
-- [ ] **Step 5: Verify extraction, style, and types**
+- [x] **Step 5: Verify extraction, style, and types**
 
 ```bash
 .venv-visual-search/bin/uv run --project services/visual-search pytest services/visual-search/tests/test_image_io.py services/visual-search/tests/test_palette.py -q
@@ -345,7 +345,7 @@ Implement fixed-grid sampling, alpha weighting, vectorized sRGB-to-OKLab and OKL
 
 Expected: all commands PASS.
 
-- [ ] **Step 6: Commit the extraction slice**
+- [x] **Step 6: Commit the extraction slice**
 
 ```bash
 git add services/visual-search/src/melon_visual_search/image_io.py services/visual-search/src/melon_visual_search/palette.py services/visual-search/tests/test_image_io.py services/visual-search/tests/test_palette.py

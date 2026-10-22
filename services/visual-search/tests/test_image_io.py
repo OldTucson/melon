@@ -17,6 +17,7 @@ from melon_visual_search.image_io import (
     MAX_ENCODED_BYTES,
     ImageSearchError,
     decode_image,
+    decode_image_inputs,
     make_regions,
 )
 
@@ -170,6 +171,38 @@ def test_decode_alpha_information_ties_choose_the_light_background() -> None:
 
     expected = np.full((96, 96, 3), ALPHA_LIGHT_BACKGROUND, dtype=np.uint8)
     np.testing.assert_array_equal(decoded, expected)
+
+
+def test_decode_inputs_preserve_srgb_and_alpha_before_embedding_composite() -> None:
+    image = Image.new("RGBA", (96, 96), (240, 10, 20, 0))
+    image.paste((20, 220, 40, 128), (24, 24, 72, 72))
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+
+    decoded = decode_image_inputs(output.getvalue())
+
+    np.testing.assert_array_equal(
+        decoded.embedding_rgb,
+        decode_image(output.getvalue()),
+    )
+    assert decoded.palette_rgb.shape == (96, 96, 3)
+    assert decoded.palette_rgb.dtype == np.uint8
+    assert decoded.palette_rgb.flags.c_contiguous
+    np.testing.assert_array_equal(decoded.palette_rgb[0, 0], [240, 10, 20])
+    np.testing.assert_array_equal(decoded.palette_rgb[48, 48], [20, 220, 40])
+    assert decoded.palette_alpha is not None
+    assert decoded.palette_alpha.shape == (96, 96)
+    assert decoded.palette_alpha.dtype == np.uint8
+    assert decoded.palette_alpha.flags.c_contiguous
+    assert decoded.palette_alpha[0, 0] == 0
+    assert decoded.palette_alpha[48, 48] == 128
+
+
+def test_decode_inputs_use_no_alpha_plane_for_opaque_images() -> None:
+    decoded = decode_image_inputs(encoded_image())
+
+    assert decoded.palette_alpha is None
+    np.testing.assert_array_equal(decoded.palette_rgb, decoded.embedding_rgb)
 
 
 def test_decode_rejects_multiple_frames() -> None:
