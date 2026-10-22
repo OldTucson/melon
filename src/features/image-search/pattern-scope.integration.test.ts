@@ -1,6 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const paletteFeature = vi.hoisted(() => ({ enabled: true }));
+
+vi.mock("@/lib/env/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/env/server")>();
+  return {
+    ...actual,
+    getServerEnv: () => ({
+      ...actual.getServerEnv(),
+      IMAGE_SEARCH_ENABLED: paletteFeature.enabled,
+      IMAGE_SEARCH_ACTIVE_VERSION: "visual-search-v1",
+    }),
+  };
+});
 
 import { SYSTEM_AUTHORIZATION_FIELD_SEED } from "@/features/authorizations/system-fields";
 import { listPatterns } from "@/features/patterns/pattern-service";
@@ -13,6 +27,8 @@ import {
   patternTags,
   tags,
   users,
+  visualSearchDocuments,
+  visualSearchPaletteColors,
 } from "@/lib/db/schema";
 import { resetDatabase } from "@/test/database";
 
@@ -100,6 +116,7 @@ describe("image-search pattern scope", () => {
   let ownerB: string;
 
   beforeEach(async () => {
+    paletteFeature.enabled = true;
     await resetDatabase();
     ownerA = await seedUser("image-scope-a@example.test");
     ownerB = await seedUser("image-scope-b@example.test");
@@ -258,13 +275,24 @@ describe("image-search pattern scope", () => {
     });
   });
 
-  it("hydrates at most 30 owned rows in rank order with assets and commercial summary", async () => {
+  it("hydrates at most 30 owned rows in rank order with assets, commercial summary, and one palette map", async () => {
     const first = await seedPattern({ ownerId: ownerA, name: "First" });
     const second = await seedPattern({ ownerId: ownerA, name: "Second" });
     const foreign = await seedPattern({ ownerId: ownerB, name: "Foreign" });
+    const firstPreviewAssetId = randomUUID();
     const previewAssetId = randomUUID();
     const sourceAssetId = randomUUID();
     await db.insert(assets).values([
+      {
+        id: firstPreviewAssetId,
+        ownerId: ownerA,
+        patternId: first,
+        role: "preview",
+        objectKey: `users/${ownerA}/patterns/${first}/derived/preview.png`,
+        originalFilename: "first-preview.png",
+        detectedMimeType: "image/png",
+        sizeBytes: 100n,
+      },
       {
         id: previewAssetId,
         ownerId: ownerA,
@@ -286,6 +314,59 @@ describe("image-search pattern scope", () => {
         sizeBytes: 200n,
       },
     ]);
+    const firstDocumentId = randomUUID();
+    const secondDocumentId = randomUUID();
+    await db.insert(visualSearchDocuments).values([
+      {
+        id: firstDocumentId,
+        ownerId: ownerA,
+        patternId: first,
+        previewAssetId: firstPreviewAssetId,
+        previewHash: "a".repeat(64),
+        indexVersion: "visual-search-v1",
+        status: "ready",
+        phash: "0".repeat(64),
+        width: 64,
+        height: 64,
+        localFeatureObjectKey: `features/${firstDocumentId}.npz`,
+        indexedAt: new Date("2026-10-22T00:00:00.000Z"),
+      },
+      {
+        id: secondDocumentId,
+        ownerId: ownerA,
+        patternId: second,
+        previewAssetId,
+        previewHash: "b".repeat(64),
+        indexVersion: "visual-search-v1",
+        status: "ready",
+        phash: "1".repeat(64),
+        width: 64,
+        height: 64,
+        localFeatureObjectKey: `features/${secondDocumentId}.npz`,
+        indexedAt: new Date("2026-10-22T00:00:00.000Z"),
+      },
+    ]);
+    await db.insert(visualSearchPaletteColors).values(
+      [
+        ["#285947", 0.42, -0.08, 0.03, 0.5],
+        ["#CC9C3F", 0.72, 0.03, 0.11, 0.3],
+        ["#8F4038", 0.48, 0.1, 0.05, 0.2],
+      ].flatMap(([displayHex, oklabL, oklabA, oklabB, coverage], colorIndex) =>
+        [
+          { documentId: firstDocumentId, patternId: first },
+          { documentId: secondDocumentId, patternId: second },
+        ].map((document) => ({
+          ...document,
+          ownerId: ownerA,
+          colorIndex,
+          displayHex: String(displayHex),
+          oklabL: Number(oklabL),
+          oklabA: Number(oklabA),
+          oklabB: Number(oklabB),
+          coverage: Number(coverage),
+        })),
+      ),
+    );
     await seedAuthorization({
       ownerId: ownerA,
       patternId: second,
@@ -293,15 +374,24 @@ describe("image-search pattern scope", () => {
       kind: "field_exclusive",
     });
 
-    const hydrated = await hydrateRankedPatterns({
-      ownerId: ownerA,
-      items: [
-        { patternId: second, kind: "possible_source" },
-        { patternId: foreign, kind: "visually_similar" },
-        { patternId: first, kind: "visually_similar" },
-      ],
-    });
+    const execute = vi.spyOn(db, "execute");
+    let hydrated!: Awaited<ReturnType<typeof hydrateRankedPatterns>>;
+    let executeCalls = 0;
+    try {
+      hydrated = await hydrateRankedPatterns({
+        ownerId: ownerA,
+        items: [
+          { patternId: second, kind: "possible_source" },
+          { patternId: foreign, kind: "visually_similar" },
+          { patternId: first, kind: "visually_similar" },
+        ],
+      });
+      executeCalls = execute.mock.calls.length;
+    } finally {
+      execute.mockRestore();
+    }
 
+    expect(executeCalls).toBe(1);
     expect(hydrated.map((item) => item.id)).toEqual([second, first]);
     expect(hydrated[0]).toMatchObject({
       previewAssetId,
@@ -313,6 +403,12 @@ describe("image-search pattern scope", () => {
         activeCount: 1,
         revenueFen: "12800",
       },
+      paletteStatus: "ready",
+      palette: [
+        { hex: "#285947", coverage: 0.5 },
+        { hex: "#CC9C3F", coverage: 0.3 },
+        { hex: "#8F4038", coverage: 0.2 },
+      ],
     });
     await expect(
       hydrateRankedPatterns({

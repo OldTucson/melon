@@ -7,6 +7,11 @@ import {
   canonicalizePatternTagIds,
   type PatternQuery,
 } from "@/features/patterns/contracts";
+import { getActiveVisualSearchIndexVersion } from "@/features/image-search/index-service";
+import {
+  loadPatternPaletteStates,
+  withPalette,
+} from "@/features/patterns/pattern-palette-repository";
 import {
   listImageSearchPatternIds,
   listPatternRowsByIds,
@@ -25,6 +30,7 @@ const rankedItemSchema = z.object({
   patternId: z.string().uuid(),
   kind: imageSearchMatchKindSchema,
 });
+const patternIdsSchema = z.array(z.string().uuid()).max(30);
 
 const validationError = () =>
   new AppError("VALIDATION_ERROR", 400, "Invalid request");
@@ -56,15 +62,37 @@ export async function hydrateRankedPatterns(input: {
   if (new Set(parsed.data.map((item) => item.patternId)).size !== parsed.data.length) {
     throw validationError();
   }
-  const rows = await listPatternRowsByIds(
-    input.ownerId,
-    parsed.data.map((item) => item.patternId),
-  );
+  const rows = await hydratePatternIdsInOrder({
+    ownerId: input.ownerId,
+    patternIds: parsed.data.map((item) => item.patternId),
+  });
   const kindById = new Map(
     parsed.data.map((item) => [item.patternId, item.kind]),
   );
   return rows.map((row) => ({
-    ...toPatternListItemDto(row),
+    ...row,
     matchKind: kindById.get(row.id)!,
   }));
+}
+
+export async function hydratePatternIdsInOrder(input: {
+  ownerId: string;
+  patternIds: readonly string[];
+}) {
+  const parsed = patternIdsSchema.safeParse(input.patternIds);
+  if (
+    !parsed.success ||
+    new Set(parsed.data).size !== parsed.data.length
+  ) {
+    throw validationError();
+  }
+  const rows = await listPatternRowsByIds(input.ownerId, parsed.data);
+  const paletteStates = await loadPatternPaletteStates({
+    ownerId: input.ownerId,
+    patternIds: rows.map((row) => row.id),
+    indexVersion: getActiveVisualSearchIndexVersion(),
+  });
+  return rows.map((row) =>
+    withPalette(toPatternListItemDto(row), paletteStates.get(row.id)),
+  );
 }

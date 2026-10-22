@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
-import { createInternalImageSearchClient } from "./internal-client";
+import { MAX_INTERNAL_SEARCH_RESPONSE_BYTES } from "@/features/visual-search/internal-json";
+
+import {
+  createInternalImageSearchClient,
+  MAX_INTERNAL_IMAGE_SEARCH_RESPONSE_BYTES,
+} from "./internal-client";
 
 const ownerId = "10000000-0000-4000-8000-000000000001";
 const patternId = "20000000-0000-4000-8000-000000000002";
@@ -36,6 +41,12 @@ function settleWithin(
 }
 
 describe("internal image search client", () => {
+  it("keeps the legacy response limit as the shared reader alias", () => {
+    expect(MAX_INTERNAL_IMAGE_SEARCH_RESPONSE_BYTES).toBe(
+      MAX_INTERNAL_SEARCH_RESPONSE_BYTES,
+    );
+  });
+
   it("sends only the four locked multipart fields with bearer auth", async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       expect(init?.method).toBe("POST");

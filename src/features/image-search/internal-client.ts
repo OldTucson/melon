@@ -1,5 +1,9 @@
 import "server-only";
 
+import {
+  MAX_INTERNAL_SEARCH_RESPONSE_BYTES,
+  readBoundedInternalJson,
+} from "@/features/visual-search/internal-json";
 import { getServerEnv } from "@/lib/env/server";
 import { AppError } from "@/lib/http/app-error";
 
@@ -10,7 +14,8 @@ import {
 
 const INTERNAL_TIMEOUT_MS = 12_000;
 // The schema allows only 30 compact matches; 64 KiB leaves ample JSON overhead.
-export const MAX_INTERNAL_IMAGE_SEARCH_RESPONSE_BYTES = 64 * 1024;
+export const MAX_INTERNAL_IMAGE_SEARCH_RESPONSE_BYTES =
+  MAX_INTERNAL_SEARCH_RESPONSE_BYTES;
 
 const publicErrors = {
   INVALID_FILE: ["IMAGE_SEARCH_INVALID_FILE", 415, "Invalid search image"],
@@ -54,62 +59,12 @@ function unavailable() {
   return publicError("UNAVAILABLE");
 }
 
-async function readResponseJson(
-  response: Response,
-  signal: AbortSignal,
-): Promise<unknown> {
-  if (!response.body) throw new Error("Missing response body");
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let byteLength = 0;
-  const abortReason = () =>
-    signal.reason ?? new DOMException("Request aborted", "AbortError");
-  const cancelReader = (reason: unknown) => {
-    try {
-      void reader.cancel(reason).catch(() => undefined);
-    } catch {
-      // Cancellation is best effort; the request deadline must still win.
-    }
-  };
-  const onAbort = () => cancelReader(abortReason());
-  signal.addEventListener("abort", onAbort, { once: true });
-
-  try {
-    if (signal.aborted) onAbort();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (signal.aborted) throw abortReason();
-      if (done) break;
-      if (
-        value.byteLength >
-        MAX_INTERNAL_IMAGE_SEARCH_RESPONSE_BYTES - byteLength
-      ) {
-        const error = new Error("Internal image search response is too large");
-        cancelReader(error);
-        throw error;
-      }
-      chunks.push(value);
-      byteLength += value.byteLength;
-    }
-    const bytes = new Uint8Array(byteLength);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
-  } finally {
-    signal.removeEventListener("abort", onAbort);
-    reader.releaseLock();
-  }
-}
-
 async function readInternalError(
   response: Response,
   signal: AbortSignal,
 ): Promise<InternalErrorCode> {
   try {
-    const body = await readResponseJson(response, signal);
+    const body = await readBoundedInternalJson(response, signal);
     if (
       typeof body === "object" &&
       body !== null &&
@@ -173,7 +128,7 @@ export function createInternalImageSearchClient(
 
       try {
         const parsed = internalImageSearchResponseSchema.parse(
-          await readResponseJson(response, signal),
+          await readBoundedInternalJson(response, signal),
         );
         if (parsed.requestId !== input.requestId) throw unavailable();
         return parsed;

@@ -728,7 +728,7 @@ git commit -m "feat: expose palette state on patterns"
 - Create: `src/app/api/palette-search/route.ts`
 - Create: `src/app/api/palette-search/route.test.ts`
 
-- [ ] **Step 1: Write failing contract, service, route, and browser-client tests**
+- [x] **Step 1: Write failing contract, service, route, and browser-client tests**
 
 Require exactly 1-5 unique uppercase colors and a strict object. Reuse the current image-search filter schema. Test auth and same-origin checks occur before body parsing, JSON content type is required, service results outside the allowed set are rejected, missing rows fail closed, server ranking survives DTO hydration, responses are `no-store`, and AbortSignal reaches both browser and internal fetch calls.
 
@@ -746,7 +746,7 @@ for (const colors of [[], ["#285947", "#285947"], ["#285947".toLowerCase()]]) {
 }
 ```
 
-- [ ] **Step 2: Run focused tests and confirm module/route failures**
+- [x] **Step 2: Run focused tests and confirm module/route failures**
 
 ```bash
 npx --yes --package=node@24 -c 'npm run test -- src/features/visual-search/internal-json.test.ts src/features/image-search/internal-client.test.ts src/features/palette-search/contracts.test.ts src/features/palette-search/internal-client.test.ts src/features/palette-search/palette-search-client.test.ts src/app/api/palette-search/route.test.ts'
@@ -755,7 +755,7 @@ npx --yes --package=node@24 -c 'npm run test:integration -- src/features/palette
 
 Expected: FAIL because the palette-search boundary does not exist.
 
-- [ ] **Step 3: Extract the bounded internal JSON reader**
+- [x] **Step 3: Extract the bounded internal JSON reader**
 
 Move the existing body-stream loop from `image-search/internal-client.ts` into a shared visual-search helper with this exact public boundary:
 
@@ -771,7 +771,7 @@ export async function readBoundedInternalJson(
 
 Keep cancellation best-effort, always remove the abort listener and release the reader lock, reject the first chunk that exceeds the remaining allowance, and collapse malformed bodies only in the calling client. Re-export `MAX_INTERNAL_IMAGE_SEARCH_RESPONSE_BYTES` as an alias from the image client so existing imports remain compatible. Make both clients use this single helper.
 
-- [ ] **Step 4: Implement strict shared contracts**
+- [x] **Step 4: Implement strict shared contracts**
 
 ```ts
 export const paletteHexSchema = z.string().regex(/^#[0-9A-F]{6}$/);
@@ -792,7 +792,7 @@ export const paletteSearchRequestSchema = z
 
 Define internal request/response schemas with canonical UUIDs, finite nonnegative distances, at most 30 unique items, and exact request ID echo. Define only the four public errors approved in the design.
 
-- [ ] **Step 5: Share ordered hydration and implement server orchestration**
+- [x] **Step 5: Share ordered hydration and implement server orchestration**
 
 Extract `hydratePatternIdsInOrder({ ownerId, patternIds })` from the current ranked image hydration and keep the image-specific `kind` wrapper intact. The shared hydrator must load the active-version palette-state map once, apply `withPalette` to every DTO, and preserve `listPatternRowsByIds` input order so image-search results also gain color cards without an N+1 query. Palette orchestration must:
 
@@ -803,7 +803,7 @@ Extract `hydratePatternIdsInOrder({ ownerId, patternIds })` from the current ran
 5. Hydrate by owner in service order and require every returned row.
 6. Return `{ query: { colors }, items, timing: { totalMs } }` without distance values.
 
-- [ ] **Step 6: Implement the browser client and route handler**
+- [x] **Step 6: Implement the browser client and route handler**
 
 ```ts
 export async function searchPatternsByPalette(
@@ -827,7 +827,7 @@ export async function searchPatternsByPalette(
 
 The route follows the installed Next.js 16 `POST` handler API, calls the same authentication and origin guards as `/api/image-search`, rejects non-JSON media types before parsing, maps Zod failures to `PALETTE_SEARCH_INVALID_COLORS`, and sets `Cache-Control: no-store` on success and errors.
 
-- [ ] **Step 7: Verify the full public boundary**
+- [x] **Step 7: Verify the full public boundary**
 
 ```bash
 npx --yes --package=node@24 -c 'npm run test -- src/features/visual-search/internal-json.test.ts src/features/image-search/internal-client.test.ts src/features/palette-search/contracts.test.ts src/features/palette-search/internal-client.test.ts src/features/palette-search/palette-search-client.test.ts src/app/api/palette-search/route.test.ts'
@@ -837,7 +837,7 @@ npx --yes --package=node@24 -c 'npm run typecheck'
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit the public boundary**
+- [x] **Step 8: Commit the public boundary**
 
 ```bash
 git add src/features/palette-search src/features/visual-search/internal-json.ts src/features/visual-search/internal-json.test.ts src/features/image-search/internal-client.ts src/features/image-search/internal-client.test.ts src/features/image-search/pattern-scope.ts src/features/image-search/pattern-scope.integration.test.ts src/app/api/palette-search
