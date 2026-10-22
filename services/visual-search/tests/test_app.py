@@ -34,8 +34,10 @@ from melon_visual_search.image_io import (
     IMAGE_SEARCH_INVALID_FILE,
     ImageSearchError,
 )
+from melon_visual_search.palette_search import PaletteSearchItem
 from melon_visual_search.search import (
     NoIndexError,
+    PaletteSearchResult,
     SearchItem,
     SearchResult,
     SearchUnavailableError,
@@ -49,6 +51,7 @@ FIXTURE_DIRECTORY = Path(__file__).parent / "fixtures"
 OWNER_ID = uuid4()
 PATTERN_ID = uuid4()
 REQUEST_ID = uuid4()
+SECOND_PATTERN_ID = uuid4()
 MULTIPART_BOUNDARY = "melon-test-boundary"
 
 
@@ -1161,6 +1164,55 @@ class ClosableBlockingSearchService(BlockingSearchService):
         self.closed.set()
 
 
+class StubPaletteSearchService(StubSearchService):
+    def __init__(
+        self,
+        *,
+        result: PaletteSearchResult | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        super().__init__()
+        self.palette_result = result or PaletteSearchResult(colors=("#FF0000",), items=())
+        self.palette_error = error
+        self.palette_calls: list[
+            tuple[UUID, tuple[UUID, ...], tuple[str, ...]]
+        ] = []
+
+    def search_palette(
+        self,
+        owner_id: UUID,
+        allowed_pattern_ids: tuple[UUID, ...],
+        colors: tuple[str, ...],
+    ) -> PaletteSearchResult:
+        self.palette_calls.append((owner_id, allowed_pattern_ids, colors))
+        if self.palette_error is not None:
+            raise self.palette_error
+        return self.palette_result
+
+
+class ClosableBlockingPaletteSearchService(StubPaletteSearchService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.closed = threading.Event()
+
+    def search_palette(
+        self,
+        owner_id: UUID,
+        allowed_pattern_ids: tuple[UUID, ...],
+        colors: tuple[str, ...],
+    ) -> PaletteSearchResult:
+        self.palette_calls.append((owner_id, allowed_pattern_ids, colors))
+        self.started.set()
+        if not self.release.wait(timeout=5):
+            raise RuntimeError("test palette search release timed out")
+        return self.palette_result
+
+    def close(self) -> None:
+        self.closed.set()
+
+
 class PausingSecondAcquireLimiter(SearchConcurrencyLimiter):
     def __init__(self) -> None:
         super().__init__(2)
@@ -1187,6 +1239,16 @@ def _search_result() -> SearchResult:
                 score=0.91234567,
                 category_rank=2,
             ),
+        ),
+    )
+
+
+def _palette_result() -> PaletteSearchResult:
+    return PaletteSearchResult(
+        colors=("#FF0000", "#00FF00"),
+        items=(
+            PaletteSearchItem(pattern_id=SECOND_PATTERN_ID, distance=0.0125),
+            PaletteSearchItem(pattern_id=PATTERN_ID, distance=0.125),
         ),
     )
 
@@ -1277,6 +1339,30 @@ async def _post_search(
     )
 
 
+def _palette_body(**overrides: object) -> dict[str, object]:
+    body: dict[str, object] = {
+        "ownerId": str(OWNER_ID),
+        "allowedPatternIds": [str(PATTERN_ID), str(SECOND_PATTERN_ID)],
+        "requestId": str(REQUEST_ID),
+        "colors": ["#FF0000", "#00FF00"],
+    }
+    body.update(overrides)
+    return body
+
+
+async def _post_palette(
+    client: AsyncClient,
+    auth_headers: dict[str, str],
+    *,
+    body: dict[str, object] | None = None,
+):
+    return await client.post(
+        "/internal/palette-search",
+        headers=auth_headers,
+        json=body or _palette_body(),
+    )
+
+
 @pytest.fixture
 async def search_client(
     settings: Settings,
@@ -1288,6 +1374,243 @@ async def search_client(
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         yield client, service
+
+
+@pytest.fixture
+async def palette_client(
+    settings: Settings,
+) -> AsyncIterator[tuple[AsyncClient, StubPaletteSearchService]]:
+    service = StubPaletteSearchService(result=_palette_result())
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_search_service] = lambda: service
+    app.dependency_overrides[get_search_limiter] = lambda: SearchConcurrencyLimiter(1)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        yield client, service
+
+
+@pytest.mark.parametrize(
+    "authorization",
+    [None, f"Bearer {OTHER_INTERNAL_TOKEN}"],
+    ids=["missing", "wrong"],
+)
+async def test_internal_palette_search_requires_bearer_auth(
+    palette_client: tuple[AsyncClient, StubPaletteSearchService],
+    authorization: str | None,
+) -> None:
+    client, service = palette_client
+    headers = {} if authorization is None else {"Authorization": authorization}
+
+    response = await client.post(
+        "/internal/palette-search",
+        headers=headers,
+        json=_palette_body(),
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": {"code": "INTERNAL_AUTH_REQUIRED"}}
+    assert service.palette_calls == []
+
+
+async def test_internal_palette_search_rejects_non_json_and_malformed_json(
+    palette_client: tuple[AsyncClient, StubPaletteSearchService],
+    auth_headers: dict[str, str],
+) -> None:
+    client, service = palette_client
+
+    wrong_media = await client.post(
+        "/internal/palette-search",
+        headers={**auth_headers, "Content-Type": "text/plain"},
+        content=json.dumps(_palette_body()),
+    )
+    malformed = await client.post(
+        "/internal/palette-search",
+        headers={**auth_headers, "Content-Type": "application/json"},
+        content=b"{",
+    )
+
+    assert wrong_media.status_code == 415
+    assert wrong_media.json() == {"detail": {"code": "INVALID_COLORS"}}
+    assert malformed.status_code == 422
+    assert malformed.json() == {"detail": {"code": "INVALID_COLORS"}}
+    assert service.palette_calls == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {**_palette_body(), "unknown": True},
+        _palette_body(ownerId=str(OWNER_ID).upper()),
+        _palette_body(requestId=str(REQUEST_ID).upper()),
+        _palette_body(allowedPatternIds=[str(PATTERN_ID).upper()]),
+        _palette_body(colors=[]),
+        _palette_body(colors=["#ff0000"]),
+        _palette_body(colors=["#FF0000", "#FF0000"]),
+        _palette_body(
+            colors=[
+                "#000000",
+                "#111111",
+                "#222222",
+                "#333333",
+                "#444444",
+                "#555555",
+            ]
+        ),
+        _palette_body(
+            allowedPatternIds=[str(PATTERN_ID), str(PATTERN_ID)]
+        ),
+        _palette_body(
+            allowedPatternIds=[str(uuid4()) for _ in range(10_001)]
+        ),
+    ],
+    ids=[
+        "unknown-field",
+        "owner-not-canonical",
+        "request-not-canonical",
+        "pattern-not-canonical",
+        "empty-colors",
+        "lowercase-color",
+        "duplicate-color",
+        "too-many-colors",
+        "duplicate-pattern",
+        "too-many-patterns",
+    ],
+)
+async def test_internal_palette_search_rejects_invalid_contract(
+    palette_client: tuple[AsyncClient, StubPaletteSearchService],
+    auth_headers: dict[str, str],
+    body: dict[str, object],
+) -> None:
+    client, service = palette_client
+
+    response = await _post_palette(client, auth_headers, body=body)
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": {"code": "INVALID_COLORS"}}
+    assert service.palette_calls == []
+
+
+async def test_internal_palette_search_returns_ranked_distances(
+    palette_client: tuple[AsyncClient, StubPaletteSearchService],
+    auth_headers: dict[str, str],
+) -> None:
+    client, service = palette_client
+
+    response = await _post_palette(client, auth_headers)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "requestId": str(REQUEST_ID),
+        "query": {"colors": ["#FF0000", "#00FF00"]},
+        "items": [
+            {"patternId": str(SECOND_PATTERN_ID), "distance": 0.0125},
+            {"patternId": str(PATTERN_ID), "distance": 0.125},
+        ],
+    }
+    assert service.palette_calls == [
+        (
+            OWNER_ID,
+            (PATTERN_ID, SECOND_PATTERN_ID),
+            ("#FF0000", "#00FF00"),
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("error", "status", "code"),
+    [
+        (NoIndexError(), 409, "NO_INDEX"),
+        (SearchUnavailableError(), 503, "UNAVAILABLE"),
+        (RuntimeError("database secret"), 503, "UNAVAILABLE"),
+    ],
+)
+async def test_internal_palette_search_maps_stable_errors(
+    settings: Settings,
+    auth_headers: dict[str, str],
+    error: Exception,
+    status: int,
+    code: str,
+) -> None:
+    service = StubPaletteSearchService(error=error)
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_search_service] = lambda: service
+    app.dependency_overrides[get_search_limiter] = lambda: SearchConcurrencyLimiter(1)
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await _post_palette(client, auth_headers)
+
+    assert response.status_code == status
+    assert response.json() == {"detail": {"code": code}}
+    assert "secret" not in response.text
+
+
+async def test_internal_palette_search_timeout_holds_permit_until_work_finishes(
+    settings: Settings,
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = ClosableBlockingPaletteSearchService()
+    limiter = SearchConcurrencyLimiter(1)
+    monkeypatch.setattr(app_module, "SEARCH_TIMEOUT_SECONDS", 0.02)
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_search_service] = lambda: service
+    app.dependency_overrides[get_search_limiter] = lambda: limiter
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await _post_palette(client, auth_headers)
+        assert response.status_code == 504
+        assert response.json() == {"detail": {"code": "TIMEOUT"}}
+        assert limiter.locked
+        service.release.set()
+        for _ in range(100):
+            if not limiter.locked:
+                break
+            await asyncio.sleep(0.01)
+
+    assert not limiter.locked
+
+
+async def test_lifespan_waits_for_palette_search_before_closing_service(
+    settings: Settings,
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = ClosableBlockingPaletteSearchService()
+    limiter = SearchConcurrencyLimiter(1)
+
+    @lru_cache(maxsize=1)
+    def cached_service() -> ClosableBlockingPaletteSearchService:
+        return service
+
+    monkeypatch.setattr(app_module, "_get_search_service", cached_service)
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_search_limiter] = lambda: limiter
+    lifespan = app_module._lifespan(app)
+    await lifespan.__aenter__()
+    request: asyncio.Task[object] | None = None
+    shutdown: asyncio.Task[bool | None] | None = None
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            request = asyncio.create_task(_post_palette(client, auth_headers))
+            assert await asyncio.to_thread(service.started.wait, 2)
+            shutdown = asyncio.create_task(lifespan.__aexit__(None, None, None))
+            await asyncio.sleep(0)
+            assert not shutdown.done()
+            assert not service.closed.is_set()
+            service.release.set()
+            response = await request
+    finally:
+        service.release.set()
+        if request is not None and not request.done():
+            await asyncio.gather(request, return_exceptions=True)
+        if shutdown is None:
+            await lifespan.__aexit__(None, None, None)
+        else:
+            await shutdown
+
+    assert response.status_code == 200
+    assert service.closed.is_set()
 
 
 async def test_internal_search_requires_bearer_auth(

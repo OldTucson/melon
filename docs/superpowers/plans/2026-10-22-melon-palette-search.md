@@ -546,7 +546,7 @@ git commit -m "feat: rank images by palette similarity"
 - Modify: `services/visual-search/src/melon_visual_search/app.py`
 - Modify: `services/visual-search/tests/test_app.py`
 
-- [ ] **Step 1: Add failing endpoint contract tests**
+- [x] **Step 1: Add failing endpoint contract tests**
 
 Test missing/wrong Bearer token, non-JSON content type, malformed JSON, unknown fields, noncanonical UUIDs, empty/duplicate/lowercase/over-five colors, duplicate/over-10,000 allowed IDs, no-index, timeout, unavailable service, success order, and graceful shutdown waiting for an accepted palette task.
 
@@ -564,7 +564,7 @@ response = await client.post(
 assert response.json()["items"][0]["patternId"] == str(PATTERN_ID)
 ```
 
-- [ ] **Step 2: Run the focused app tests and confirm 404**
+- [x] **Step 2: Run the focused app tests and confirm 404**
 
 ```bash
 .venv-visual-search/bin/uv run --project services/visual-search pytest services/visual-search/tests/test_app.py -q
@@ -572,7 +572,7 @@ assert response.json()["items"][0]["patternId"] == str(PATTERN_ID)
 
 Expected: the new endpoint tests FAIL with 404.
 
-- [ ] **Step 3: Add strict Pydantic models and endpoint**
+- [x] **Step 3: Add strict Pydantic models and endpoint**
 
 Define models with `ConfigDict(extra="forbid", populate_by_name=True)`, field aliases matching the JSON contract, and field validators enforcing canonical UUID text and uppercase unique HEX values. Return only request ID, query colors, pattern IDs, and finite distances.
 
@@ -596,7 +596,7 @@ async def palette_search(
 
 Generalize the active task set to the union of image and palette results so the existing lifespan still blocks closure until every accepted thread finishes. Map validation to `INVALID_COLORS`, no ready palette to `NO_INDEX`, timeout to `TIMEOUT`, and other controlled failures to `UNAVAILABLE`.
 
-- [ ] **Step 4: Verify the API and the existing image endpoint together**
+- [x] **Step 4: Verify the API and the existing image endpoint together**
 
 ```bash
 .venv-visual-search/bin/uv run --project services/visual-search pytest services/visual-search/tests/test_app.py services/visual-search/tests/test_search.py -q
@@ -606,7 +606,7 @@ Generalize the active task set to the union of image and palette results so the 
 
 Expected: PASS with no image-search regressions.
 
-- [ ] **Step 5: Commit the internal endpoint**
+- [x] **Step 5: Commit the internal endpoint**
 
 ```bash
 git add services/visual-search/src/melon_visual_search/app.py services/visual-search/tests/test_app.py

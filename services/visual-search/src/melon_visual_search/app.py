@@ -12,13 +12,13 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal, TypeVar
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.datastructures import FormData, UploadFile
 from starlette.formparsers import MultiPartException, MultiPartParser
 from starlette.requests import Request
@@ -31,8 +31,15 @@ from .image_io import (
     MAX_ENCODED_BYTES,
     ImageSearchError,
 )
+from .palette_search import validate_query_colors
 from .repository import MAX_ALLOWED_PATTERN_IDS, Repository
-from .search import NoIndexError, SearchResult, SearchService, SearchUnavailableError
+from .search import (
+    NoIndexError,
+    PaletteSearchResult,
+    SearchResult,
+    SearchService,
+    SearchUnavailableError,
+)
 from .settings import Settings, get_settings
 from .storage import AlibabaOssStorage
 
@@ -46,9 +53,10 @@ _SEARCH_FORM_FIELDS = frozenset(
 _SEARCH_SERVICE_LOCK = threading.Lock()
 _SEARCH_LIMITER_LOCK = threading.Lock()
 _SEARCH_STATE = threading.Condition()
-_ACTIVE_SEARCH_TASKS: set[asyncio.Task[SearchResult]] = set()
+_ACTIVE_SEARCH_TASKS: set[asyncio.Task[Any]] = set()
 _SEARCH_ADMISSIONS = 0
 _SEARCH_STOPPING = False
+_SearchResultT = TypeVar("_SearchResultT")
 
 
 class MultipartBodyTooLargeError(Exception):
@@ -89,6 +97,70 @@ class InternalSearchResponse(BaseModel):
     request_id: UUID = Field(serialization_alias="requestId")
     query: SearchQueryResponse
     items: tuple[SearchItemResponse, ...]
+
+
+def _canonical_uuid_text(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("UUID values must be strings")
+    try:
+        parsed = UUID(value)
+    except (ValueError, AttributeError) as error:
+        raise ValueError("UUID values must be canonical") from error
+    if str(parsed) != value:
+        raise ValueError("UUID values must be canonical")
+    return value
+
+
+class InternalPaletteSearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    owner_id: UUID = Field(alias="ownerId")
+    allowed_pattern_ids: tuple[UUID, ...] = Field(alias="allowedPatternIds")
+    request_id: UUID = Field(alias="requestId")
+    colors: tuple[str, ...]
+
+    @field_validator("owner_id", "request_id", mode="before")
+    @classmethod
+    def _validate_identity(cls, value: object) -> object:
+        return _canonical_uuid_text(value)
+
+    @field_validator("allowed_pattern_ids", mode="before")
+    @classmethod
+    def _validate_allowed_pattern_ids(cls, value: object) -> object:
+        if not isinstance(value, list) or len(value) > MAX_ALLOWED_PATTERN_IDS:
+            raise ValueError("allowed pattern IDs are invalid")
+        validated = tuple(_canonical_uuid_text(item) for item in value)
+        if len(set(validated)) != len(validated):
+            raise ValueError("allowed pattern IDs must be unique")
+        return validated
+
+    @field_validator("colors", mode="before")
+    @classmethod
+    def _validate_colors(cls, value: object) -> object:
+        if not isinstance(value, list):
+            raise ValueError("colors must be an array")
+        return validate_query_colors(value)
+
+
+class PaletteQueryResponse(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+
+    colors: tuple[str, ...]
+
+
+class PaletteSearchItemResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, allow_inf_nan=False)
+
+    pattern_id: UUID = Field(serialization_alias="patternId")
+    distance: float = Field(ge=0.0)
+
+
+class InternalPaletteSearchResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, allow_inf_nan=False)
+
+    request_id: UUID = Field(serialization_alias="requestId")
+    query: PaletteQueryResponse
+    items: tuple[PaletteSearchItemResponse, ...]
 
 
 class SearchConcurrencyLimiter:
@@ -250,6 +322,13 @@ def _require_search_running() -> Iterator[None]:
             _SEARCH_STATE.notify_all()
 
 
+def _require_json_content_type(request: Request) -> None:
+    content_type = request.headers.get("content-type", "")
+    media_type = content_type.partition(";")[0].strip().lower()
+    if media_type != "application/json":
+        raise _error(415, "INVALID_COLORS")
+
+
 def _canonical_uuid(value: object) -> UUID:
     if not isinstance(value, str):
         raise _error(415, "INVALID_FILE")
@@ -305,7 +384,7 @@ async def _save_upload(upload: UploadFile, temp_dir: Path) -> Path:
 
 
 def _release_when_done(
-    task: asyncio.Task[SearchResult],
+    task: asyncio.Task[Any],
     limiter: SearchConcurrencyLimiter,
 ) -> None:
     with _SEARCH_STATE:
@@ -339,6 +418,27 @@ def _create_search_task(
         return task
 
 
+def _create_palette_search_task(
+    service: SearchService,
+    limiter: SearchConcurrencyLimiter,
+    body: InternalPaletteSearchRequest,
+) -> asyncio.Task[PaletteSearchResult]:
+    with _SEARCH_STATE:
+        if _SEARCH_STOPPING:
+            raise _error(503, "UNAVAILABLE")
+        task = asyncio.create_task(
+            asyncio.to_thread(
+                service.search_palette,
+                body.owner_id,
+                body.allowed_pattern_ids,
+                body.colors,
+            )
+        )
+        _ACTIVE_SEARCH_TASKS.add(task)
+        task.add_done_callback(lambda done: _release_when_done(done, limiter))
+        return task
+
+
 def _response(request_id: UUID, result: SearchResult) -> InternalSearchResponse:
     return InternalSearchResponse(
         request_id=request_id,
@@ -354,7 +454,24 @@ def _response(request_id: UUID, result: SearchResult) -> InternalSearchResponse:
     )
 
 
-async def _await_search(task: asyncio.Task[SearchResult]) -> SearchResult:
+def _palette_response(
+    request_id: UUID,
+    result: PaletteSearchResult,
+) -> InternalPaletteSearchResponse:
+    return InternalPaletteSearchResponse(
+        request_id=request_id,
+        query=PaletteQueryResponse(colors=result.colors),
+        items=tuple(
+            PaletteSearchItemResponse(
+                pattern_id=item.pattern_id,
+                distance=item.distance,
+            )
+            for item in result.items
+        ),
+    )
+
+
+async def _await_search(task: asyncio.Task[_SearchResultT]) -> _SearchResultT:
     shielded = asyncio.shield(task)
     timeout_factory = getattr(asyncio, "timeout", None)
     if timeout_factory is not None:
@@ -426,6 +543,11 @@ async def _validation_error_handler(
     del error
     if request.url.path == "/internal/search":
         return JSONResponse(status_code=415, content={"detail": {"code": "INVALID_FILE"}})
+    if request.url.path == "/internal/palette-search":
+        return JSONResponse(
+            status_code=422,
+            content={"detail": {"code": "INVALID_COLORS"}},
+        )
     return JSONResponse(status_code=422, content={"detail": "Invalid request"})
 
 
@@ -506,3 +628,44 @@ async def internal_search(
         finally:
             if temp_path is not None:
                 temp_path.unlink(missing_ok=True)
+
+
+@app.post(
+    "/internal/palette-search",
+    dependencies=[
+        Depends(require_internal_token),
+        Depends(_require_search_running),
+        Depends(_require_json_content_type),
+    ],
+    response_model=InternalPaletteSearchResponse,
+)
+async def internal_palette_search(
+    body: InternalPaletteSearchRequest,
+    service: Annotated[SearchService, Depends(get_search_service)],
+    limiter: Annotated[SearchConcurrencyLimiter, Depends(get_search_limiter)],
+) -> InternalPaletteSearchResponse:
+    acquired = False
+    work_task: asyncio.Task[PaletteSearchResult] | None = None
+    try:
+        acquired = await limiter.try_acquire()
+        if not acquired:
+            raise _error(503, "UNAVAILABLE")
+        work_task = _create_palette_search_task(service, limiter, body)
+        try:
+            result = await _await_search(work_task)
+        except (TimeoutError, asyncio.TimeoutError) as error:
+            raise _error(504, "TIMEOUT") from error
+        return _palette_response(body.request_id, result)
+    except NoIndexError as error:
+        raise _error(409, "NO_INDEX") from error
+    except SearchUnavailableError as error:
+        raise _error(503, "UNAVAILABLE") from error
+    except HTTPException:
+        raise
+    except asyncio.CancelledError:
+        raise
+    except Exception as error:
+        raise _error(503, "UNAVAILABLE") from error
+    finally:
+        if acquired and work_task is None:
+            limiter.release()
