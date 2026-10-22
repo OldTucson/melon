@@ -2,7 +2,7 @@
 
 面向图案设计师的私有 Web 图案资料库。应用使用 Next.js、PostgreSQL 和私有阿里云 OSS，管理 PSD、AI、JPG、PNG 与 Procreate 原文件。
 
-当前已实现资料库与商业授权：私有账号登录、浏览器分片直传、JPG/PNG 预览与缩略图、原文件下载、嵌套文件夹、批量整理、回收站、重命名、收藏、标签、组合筛选、排序、明暗主题和租户隔离；商业授权支持普通授权、领域独占、全局买断及收入看板。
+当前已实现资料库、商业授权与私有以图搜图：私有账号登录、浏览器分片直传、JPG/PNG 预览与缩略图、原文件下载、嵌套文件夹、批量整理、回收站、重命名、收藏、标签、组合筛选、排序、明暗主题和租户隔离；商业授权支持普通授权、领域独占、全局买断及收入看板。以图搜图使用自托管 DINOv2、局部特征、PostgreSQL pgvector 和异步单并发索引 worker，默认关闭，必须通过真实图库与生产 ECS 门禁后才启用。
 
 在图案检查器的“商业授权”页记录客户、价格与日期。同一领域可重复普通授权；独占和买断要求核对已有历史，并限制之后的授权。记录可以编辑、作废、恢复，自定义领域可以创建和归档。看板按日期、领域及类型统计有效收入，提供收入趋势、当前商业状态、领域与图案排行及下钻链接。回收站保留授权历史与过去收入，永久删除会同时删除授权历史并重算看板。
 
@@ -15,6 +15,8 @@
 - 一个专用、私有的阿里云 OSS Bucket 和按最小权限配置的 RAM/STS 身份
 
 OSS、RAM、CORS、加密与生命周期配置见 [阿里云 OSS 运行配置](docs/operations/aliyun-oss.md)。长期 AccessKey 只能放在本机 `.env.local` 或阿里云默认凭证提供链中，不能提交到 Git；生产环境应使用 ECS 实例 RAM 角色。
+
+以图搜图的镜像、模型挂载、systemd、回填、100 图基准、监控与回滚顺序见[以图搜图生产运行手册](docs/operations/visual-search.md)。模型不会在容器启动时下载，API 只能从宿主机 loopback 访问。
 
 ## 本地启动
 
@@ -45,6 +47,17 @@ npm run dev
 ```
 
 默认地址为 `http://localhost:3000`。忘记密码时可在终端执行 `npm run user:reset-password`。
+
+本地调试以图搜图时，另建 Python 环境并使用锁文件安装：
+
+```bash
+uv sync --project services/visual-search --frozen
+uv run --project services/visual-search uvicorn melon_visual_search.app:app \
+  --host 127.0.0.1 --port 8091
+uv run --project services/visual-search melon-visual-search worker
+```
+
+先保持 `IMAGE_SEARCH_ENABLED=false` 完成迁移、模型校验、worker 回填和质量基准，再按运行手册启用。Next.js 的 `IMAGE_SEARCH_INTERNAL_TOKEN` 与 Python 的 `VISUAL_SEARCH_INTERNAL_TOKEN` 必须相同。
 
 ## 文件夹与回收站
 
@@ -128,3 +141,5 @@ RUN_REAL_OSS_TESTS=1 npm run test:integration -- src/features/storage/oss-adapte
 - [MVP 实施路线图](docs/superpowers/plans/2026-10-08-melon-mvp-roadmap.md)
 - [第一阶段实施计划](docs/superpowers/plans/2026-10-08-melon-01-foundation-library.md)
 - [阿里云 OSS 运行配置](docs/operations/aliyun-oss.md)
+- [以图搜图生产运行手册](docs/operations/visual-search.md)
+- [以图搜图验证记录](docs/verification/2026-10-20-visual-search.md)

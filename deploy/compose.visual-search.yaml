@@ -1,0 +1,88 @@
+x-visual-search-service: &visual-search-service
+  image: ${VISUAL_SEARCH_IMAGE:-melon-visual-search:local}
+  init: true
+  read_only: true
+  user: "10001:10001"
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  environment: &visual-search-environment
+    VISUAL_SEARCH_ACTIVE_VERSION: ${VISUAL_SEARCH_ACTIVE_VERSION:-visual-search-v1}
+    VISUAL_SEARCH_DATABASE_URL:
+    VISUAL_SEARCH_ENV: production
+    VISUAL_SEARCH_HOST: 127.0.0.1
+    VISUAL_SEARCH_INTERNAL_TOKEN:
+    VISUAL_SEARCH_MAX_CONCURRENCY: ${VISUAL_SEARCH_MAX_CONCURRENCY:-1}
+    VISUAL_SEARCH_MODEL_LOCK_PATH: /app/services/visual-search/model-lock.json
+    VISUAL_SEARCH_MODEL_PATH: /models/dinov2-small.onnx
+    VISUAL_SEARCH_MODEL_SHA256:
+    VISUAL_SEARCH_OSS_BUCKET:
+    VISUAL_SEARCH_OSS_ENDPOINT:
+    VISUAL_SEARCH_OSS_REGION:
+    VISUAL_SEARCH_PORT: 8091
+    VISUAL_SEARCH_PRODUCTION_DATABASE_NAME:
+    VISUAL_SEARCH_TEMP_DIR: /tmp/melon-visual-search
+  volumes: &visual-search-volumes
+    - type: bind
+      source: ${VISUAL_SEARCH_MODEL_HOST_PATH:-/opt/melon/models/dinov2-small.onnx}
+      target: /models/dinov2-small.onnx
+      read_only: true
+    - type: bind
+      source: ${VISUAL_SEARCH_TEMP_HOST_PATH:-/var/lib/melon/visual-search/tmp}
+      target: /tmp/melon-visual-search
+    - type: bind
+      source: ${VISUAL_SEARCH_REPORT_HOST_PATH:-/var/lib/melon/visual-search/reports}
+      target: /reports
+  pids_limit: 256
+  stop_grace_period: 30s
+
+services:
+  visual-search-api:
+    <<: *visual-search-service
+    command:
+      - uvicorn
+      - melon_visual_search.app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8091"
+      - --workers
+      - "1"
+      - --no-access-log
+    ports:
+      - "127.0.0.1:8091:8091"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl --fail --silent --show-error
+          --header "Authorization: Bearer $${VISUAL_SEARCH_INTERNAL_TOKEN}"
+          http://127.0.0.1:8091/internal/health >/dev/null
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 30s
+    mem_limit: 3g
+    cpus: 2.0
+    restart: "no"
+
+  visual-search-worker:
+    <<: *visual-search-service
+    command:
+      - melon-visual-search
+      - worker
+    mem_limit: 3g
+    cpus: 2.0
+    restart: "no"
+
+  visual-search-cli:
+    <<: *visual-search-service
+    command:
+      - melon-visual-search
+      - --help
+    mem_limit: 3g
+    cpus: 2.0
+    profiles:
+      - tools
+    restart: "no"

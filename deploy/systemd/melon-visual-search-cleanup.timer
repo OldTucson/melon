@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Melon visual-search orphan cleanup daily
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=30m
+Persistent=true
+Unit=melon-visual-search-cleanup.service
+
+[Install]
+WantedBy=timers.target

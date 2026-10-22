@@ -3,7 +3,12 @@ import path from "node:path";
 import { config as loadDotEnv } from "dotenv";
 import postgres from "postgres";
 
-import { E2E_DATABASE_URL, E2E_METADATA_ONLY, E2E_USERS } from "./environment";
+import {
+  E2E_DATABASE_URL,
+  E2E_IMAGE_SEARCH,
+  E2E_METADATA_ONLY,
+  E2E_USERS,
+} from "./environment";
 import { E2E_PATTERN_SEEDS } from "./fixtures";
 import { resetAndSeed } from "./global-setup";
 import { assertE2eOssListAccess } from "./oss-client";
@@ -14,10 +19,9 @@ await resetAndSeed();
 
 const client = postgres(E2E_DATABASE_URL, { max: 1 });
 try {
-  const seeds = [
-    ...E2E_PATTERN_SEEDS.folderWorkflow,
-    E2E_PATTERN_SEEDS.isolationActor,
-  ];
+  const seeds = E2E_IMAGE_SEARCH
+    ? []
+    : [...E2E_PATTERN_SEEDS.folderWorkflow, E2E_PATTERN_SEEDS.isolationActor];
   for (const seed of seeds) {
     await client`
       insert into patterns (

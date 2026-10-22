@@ -1,0 +1,25 @@
+[Unit]
+Description=Melon visual-search indexing worker
+After=docker.service network-online.target melon-visual-search.service
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/melon/visual-search.env
+WorkingDirectory=/opt/melon
+ExecStartPre=/usr/bin/install -d -o 10001 -g 10001 -m 0700 /var/lib/melon/visual-search/tmp /var/lib/melon/visual-search/reports
+ExecStartPre=/usr/bin/docker compose -f /opt/melon/deploy/compose.visual-search.yaml config --quiet
+ExecStart=/usr/bin/docker compose -f /opt/melon/deploy/compose.visual-search.yaml up --no-deps visual-search-worker
+ExecStop=/usr/bin/docker compose -f /opt/melon/deploy/compose.visual-search.yaml stop -t 30 visual-search-worker
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=120s
+TimeoutStopSec=45s
+MemoryMax=4G
+TasksMax=512
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

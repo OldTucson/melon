@@ -28,3 +28,27 @@ it("rejects an unsafe E2E database before creating a connection", async () => {
   vi.stubEnv("E2E_DATABASE_URL", "postgres://localhost/melon");
   await expect(import("../../tests/e2e/environment")).rejects.toThrow("E2E_DATABASE_NAME_UNSAFE");
 });
+
+it("allows only the exact synthetic image-search assets during cleanup", async () => {
+  const { E2E_USERS } = await import("../../tests/e2e/environment");
+  const { IMAGE_SEARCH_PATTERN_SEEDS, assertImageSearchFixtureRows } =
+    await import("../../tests/e2e/image-search-fixtures");
+  const pattern = IMAGE_SEARCH_PATTERN_SEEDS[0];
+  const row = {
+    assetId: pattern.sourceAssetId,
+    objectKey: `users/${E2E_USERS.designer.id}/patterns/${pattern.id}/source/${pattern.sourceAssetId}.${pattern.extension}`,
+    ownerId: E2E_USERS.designer.id,
+    patternId: pattern.id,
+    role: "source",
+  };
+
+  expect(() => assertImageSearchFixtureRows([row])).not.toThrow();
+  expect(() =>
+    assertImageSearchFixtureRows([
+      { ...row, objectKey: "users/other/patterns/unexpected.png" },
+    ]),
+  ).toThrow("E2E_IMAGE_SEARCH_ASSET_UNSAFE");
+  expect(() =>
+    assertImageSearchFixtureRows([], [{ sourceObjectKey: "pending-upload" }]),
+  ).toThrow("E2E_IMAGE_SEARCH_UPLOADS_PRESENT");
+});

@@ -1,0 +1,14 @@
+[Unit]
+Description=Clean orphaned Melon visual-search feature objects
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/melon/visual-search.env
+WorkingDirectory=/opt/melon
+ExecStart=/usr/bin/docker compose -f /opt/melon/deploy/compose.visual-search.yaml --profile tools run --rm visual-search-cli cleanup-orphans --older-than-hours 24
+TimeoutStartSec=1h
+PrivateTmp=true
+NoNewPrivileges=true

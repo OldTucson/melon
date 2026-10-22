@@ -9,12 +9,14 @@ import { hashPassword } from "../../src/features/auth/password";
 import { SYSTEM_AUTHORIZATION_FIELD_SEED } from "../../src/features/authorizations/system-fields";
 import {
   E2E_DATABASE_URL,
+  E2E_IMAGE_SEARCH,
   E2E_PASSWORD,
   E2E_USERS,
   E2E_METADATA_ONLY,
   assertMetadataOnlyRows,
   e2eDatabaseName,
 } from "./environment";
+import { assertImageSearchFixtureRows } from "./image-search-fixtures";
 import { createE2eOssClient } from "./oss-client";
 import {
   assertE2eAssetRows,
@@ -44,7 +46,11 @@ async function ensureDatabaseExists() {
 
 async function cleanupOssObjects(rows: E2eAssetRow[]) {
   if (E2E_METADATA_ONLY) {
-    assertMetadataOnlyRows(rows);
+    if (E2E_IMAGE_SEARCH) {
+      assertImageSearchFixtureRows(rows);
+    } else {
+      assertMetadataOnlyRows(rows);
+    }
     return;
   }
   assertE2eAssetRows(rows);
@@ -72,7 +78,12 @@ async function assetRows(client: postgres.Sql) {
 async function assertMetadataOnlyDatabase(client: postgres.Sql) {
   if (!E2E_METADATA_ONLY) return;
   const uploads = await client`select source_object_key from upload_sessions`;
-  assertMetadataOnlyRows(await assetRows(client), uploads);
+  const rows = await assetRows(client);
+  if (E2E_IMAGE_SEARCH) {
+    assertImageSearchFixtureRows(rows, uploads);
+  } else {
+    assertMetadataOnlyRows(rows, uploads);
+  }
 }
 
 async function truncateE2eData(client: postgres.Sql) {
