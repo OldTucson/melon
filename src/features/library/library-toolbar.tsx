@@ -61,6 +61,7 @@ export function LibraryToolbar({
   onQueryChange,
   onShowInspector,
   onViewModeChange,
+  paletteSearchActive = false,
   query,
   resultCount,
   selectedCount,
@@ -72,11 +73,13 @@ export function LibraryToolbar({
   onQueryChange: (query: PatternQuery) => void;
   onShowInspector: () => void;
   onViewModeChange: (mode: LibraryViewMode) => void;
+  paletteSearchActive?: boolean;
   query: PatternQuery;
   resultCount: number;
   selectedCount: number;
   viewMode: LibraryViewMode;
 }) {
+  const rankedSearchActive = imageSearchActive || paletteSearchActive;
   const ownerId = useQueryOwnerId();
   const tagsQuery = useQuery({
     queryKey: queryKeys.tags(ownerId),
@@ -293,15 +296,19 @@ export function LibraryToolbar({
           <span>排序</span>
           <select
             aria-label={
-              imageSearchActive ? "以图搜图按匹配度排序" : "排序图案"
+              imageSearchActive
+                ? "以图搜图按匹配度排序"
+                : paletteSearchActive
+                  ? "配色搜索按匹配度排序"
+                  : "排序图案"
             }
-            disabled={imageSearchActive}
-            value={imageSearchActive ? "match" : pendingQuery.sort}
+            disabled={rankedSearchActive}
+            value={rankedSearchActive ? "match" : pendingQuery.sort}
             onChange={(event) =>
               patchQuery({ sort: event.target.value as PatternQuery["sort"] })
             }
           >
-            {imageSearchActive ? (
+            {rankedSearchActive ? (
               <option value="match">匹配度</option>
             ) : (
               patternSorts.map((sort) => (

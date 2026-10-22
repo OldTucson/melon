@@ -937,7 +937,7 @@ git commit -m "feat: display pattern color palettes"
 - Modify: `src/features/library/library-view.test.tsx`
 - Modify: `src/app/globals.css`
 
-- [ ] **Step 1: Write failing hook and UI tests**
+- [x] **Step 1: Write failing hook and UI tests**
 
 With fake timers, test first-color entry, unique add, selected-color removal, last-color exit, clear, sixth-color rejection with live text, exactly one request after 150 ms, abort on change, stale response rejection, previous-result retention on rerun failure, first-run failure restoration, filter-triggered rerun, owner reset, and unmount cleanup. Component tests must assert server order is unchanged and empty/error states stay inside the palette result area.
 
@@ -951,7 +951,7 @@ expect(search).toHaveBeenCalledTimes(1);
 expect(search.mock.calls[0]?.[0].colors).toEqual(["#285947", "#CC9C3F"]);
 ```
 
-- [ ] **Step 2: Run focused tests and confirm missing modules**
+- [x] **Step 2: Run focused tests and confirm missing modules**
 
 ```bash
 npx --yes --package=node@24 -c 'npm run test -- src/features/palette-search/palette-query-bar.test.tsx src/features/palette-search/palette-search-results.test.tsx src/features/palette-search/use-palette-search-session.test.tsx src/features/image-search/image-search-results.test.tsx src/features/library/library-view.test.tsx'
@@ -959,7 +959,7 @@ npx --yes --package=node@24 -c 'npm run test -- src/features/palette-search/pale
 
 Expected: FAIL because the session and result surface do not exist.
 
-- [ ] **Step 3: Implement the generic snapshot-aware session hook**
+- [x] **Step 3: Implement the generic snapshot-aware session hook**
 
 The hook's public input and result must use these explicit contracts:
 
@@ -990,11 +990,11 @@ export type PaletteSearchSession = {
 
 The hook stores one snapshot on first entry, keeps colors in insertion order, derives a canonical request signature from colors plus filters, waits 150 ms, creates a UUID and AbortController per request, and compares both run counter and echoed request state before committing. On rerun errors retain the last response. On initial failure, retain the failed colors in `retry`, restore the snapshot, and deactivate; `LibraryView` renders the retry message below the toolbar and calls `retryInitialFailure` to re-enter with the same colors.
 
-- [ ] **Step 4: Implement query bar and result surface**
+- [x] **Step 4: Implement query bar and result surface**
 
 Use `X` icons from Lucide for per-color removal and exit/clear actions, tooltip labels for icon-only controls, selected color swatches rather than text pills, `role="status"` for progress/count, `role="alert"` for errors, and a polite live region for the five-color limit. `PaletteSearchResults` renders one `PatternGrid` in response order and does not expose distance values.
 
-- [ ] **Step 5: Coordinate mutually exclusive search modes in `LibraryView`**
+- [x] **Step 5: Coordinate mutually exclusive search modes in `LibraryView`**
 
 Extract existing normal-workspace capture/restore helpers so both ranked modes use the same selection, inspector, view mode, scroll, query, and URL behavior. Required transitions:
 
@@ -1007,7 +1007,7 @@ palette -> normal: abort, clear colors, restore snapshot
 
 Pass palette callbacks through normal `PatternGrid`, `ImageSearchResults`, palette results, and `Inspector`. While palette search is active, use palette result items for selection/inspection and disable the ordinary sort control exactly as image search already does. Current filters trigger a rerun without replacing the saved snapshot.
 
-- [ ] **Step 6: Style and verify the complete session**
+- [x] **Step 6: Style and verify the complete session**
 
 ```bash
 npx --yes --package=node@24 -c 'npm run test -- src/features/palette-search/palette-query-bar.test.tsx src/features/palette-search/palette-search-results.test.tsx src/features/palette-search/use-palette-search-session.test.tsx src/features/image-search/image-search-results.test.tsx src/features/library/library-view.test.tsx'
@@ -1017,7 +1017,7 @@ npx --yes --package=node@24 -c 'npm run lint -- src/features/palette-search src/
 
 Expected: PASS; no request survives owner change or unmount.
 
-- [ ] **Step 7: Commit palette-search interaction**
+- [x] **Step 7: Commit palette-search interaction**
 
 ```bash
 git add src/features/palette-search/palette-query-bar.tsx src/features/palette-search/palette-query-bar.test.tsx src/features/palette-search/palette-search-results.tsx src/features/palette-search/palette-search-results.test.tsx src/features/palette-search/use-palette-search-session.ts src/features/palette-search/use-palette-search-session.test.tsx src/features/image-search/image-search-results.tsx src/features/image-search/image-search-results.test.tsx src/features/library/library-toolbar.tsx src/features/library/library-view.tsx src/features/library/library-view.test.tsx src/app/globals.css

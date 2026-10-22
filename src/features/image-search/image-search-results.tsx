@@ -53,9 +53,12 @@ export function ImageSearchResults({
   onFavorite,
   onInspect,
   onOpenPreview,
+  onPaletteToggle,
   onSelect,
+  paletteEnabled = false,
   response,
   selectedIds,
+  selectedPaletteColors,
   thumbnailUrl,
 }: {
   busy?: boolean;
@@ -65,9 +68,12 @@ export function ImageSearchResults({
   onFavorite: (item: PatternItem) => void;
   onInspect: (id: string) => void;
   onOpenPreview: (id: string) => void;
+  onPaletteToggle?: (hex: string) => void;
   onSelect: (id: string, modifiers: SelectionModifiers) => void;
+  paletteEnabled?: boolean;
   response: ImageSearchResponse;
   selectedIds: ReadonlySet<string>;
+  selectedPaletteColors?: ReadonlySet<string>;
   thumbnailUrl: string;
 }) {
   const groups = useMemo(
@@ -138,8 +144,11 @@ export function ImageSearchResults({
                     onFavorite={onFavorite}
                     onInspect={onInspect}
                     onOpenPreview={onOpenPreview}
+                    onPaletteToggle={onPaletteToggle}
                     onSelect={onSelect}
+                    paletteEnabled={paletteEnabled}
                     selected={selectedIds.has(item.id)}
+                    selectedPaletteColors={selectedPaletteColors}
                   />
                 ))}
               </div>

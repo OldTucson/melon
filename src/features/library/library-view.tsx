@@ -29,6 +29,8 @@ import {
   ImageSearchResults,
 } from "@/features/image-search/image-search-results";
 import { useImageSearchStore } from "@/features/image-search/image-search-store";
+import { PaletteSearchResults } from "@/features/palette-search/palette-search-results";
+import { usePaletteSearchSession } from "@/features/palette-search/use-palette-search-session";
 import {
   patternQuerySchema,
   type PatternQuery,
@@ -136,7 +138,7 @@ type ImageSearchSelection = {
   selectedIds: string[];
 };
 
-type ImageSearchWorkspaceSnapshot = {
+type LibraryWorkspaceSnapshot = {
   collapsedInspectorKey: string | null;
   query: PatternQuery;
   querySignature: string;
@@ -151,7 +153,7 @@ type ImageSearchSession = {
   filterSignature: string;
   response: ImageSearchResponse | null;
   selection: ImageSearchSelection;
-  snapshot: ImageSearchWorkspaceSnapshot;
+  snapshot: LibraryWorkspaceSnapshot;
   thumbnailUrl: string;
 };
 
@@ -335,6 +337,23 @@ export function LibraryView({
     },
     [],
   );
+  const releaseImageSearchSession = useCallback(() => {
+    const session = imageSearchSessionRef.current;
+    if (!session) return;
+    URL.revokeObjectURL(session.thumbnailUrl);
+    imageSearchSessionRef.current = null;
+    setImageSearchSession(null);
+  }, []);
+  const cancelImageSearch = useCallback(() => {
+    imageSearchRun.current += 1;
+    imageSearchAbort.current?.abort(
+      new DOMException("Image search cancelled", "AbortError"),
+    );
+    imageSearchAbort.current = null;
+    releaseImageSearchSession();
+    setImageSearchPhase("idle");
+    setImageSearchError(null);
+  }, [releaseImageSearchSession]);
   const [collapsedInspectorKey, setCollapsedInspectorKey] = useState<
     string | null
   >(null);
@@ -352,6 +371,104 @@ export function LibraryView({
   const togglePreview = useSelectionStore((state) => state.togglePreview);
   const mutation = usePatternPatchMutation(initialQuery);
   const querySignature = serializeLibrarySearchParams(initialQuery).toString();
+  const captureWorkspaceSnapshot = useCallback((): LibraryWorkspaceSnapshot => {
+    const searchParams = serializeLibrarySearchParams(initialQuery);
+    if (initialSelectedId) searchParams.set("selected", initialSelectedId);
+    const selection = useSelectionStore.getState();
+    return {
+      collapsedInspectorKey,
+      query: initialQuery,
+      querySignature,
+      scrollOffset: patternGridRef.current?.getScrollOffset() ?? 0,
+      selection: {
+        anchorId: selection.anchorId,
+        inspectorIds: [...selection.inspectorIds],
+        previewId: selection.previewId,
+        selectedIds: [...selection.selectedIds],
+      },
+      url: `${pathname}${searchParams.size > 0 ? `?${searchParams}` : ""}`,
+      viewMode,
+    };
+  }, [
+    collapsedInspectorKey,
+    initialQuery,
+    initialSelectedId,
+    pathname,
+    querySignature,
+    viewMode,
+  ]);
+  const restoreWorkspaceSnapshot = useCallback(
+    (snapshot: LibraryWorkspaceSnapshot) => {
+      const cached = queryClient.getQueryData<
+        InfiniteData<PatternPage, string | null>
+      >(queryKeys.patterns(ownerId, snapshot.query));
+      const available = new Set(
+        cached?.pages.flatMap((page) => page.items.map((item) => item.id)) ??
+          snapshot.selection.selectedIds,
+      );
+      for (const id of snapshot.selection.inspectorIds) {
+        const detail = queryClient.getQueryData<PatternPage["items"][number]>(
+          queryKeys.pattern(ownerId, id),
+        );
+        if (detail && libraryStatuses.has(detail.status)) available.add(id);
+      }
+      const restoredSelection = reconcileImageSearchSelection(
+        snapshot.selection,
+        [...available],
+      );
+      useSelectionStore.setState(restoredSelection);
+      setCollapsedInspectorKey(
+        restoredSelection.inspectorIds.length > 0
+          ? snapshot.collapsedInspectorKey
+          : null,
+      );
+      setViewMode(snapshot.viewMode);
+      restoringQuerySignature.current =
+        querySignature === snapshot.querySignature
+          ? null
+          : snapshot.querySignature;
+      router.replace(snapshot.url);
+      requestAnimationFrame(() => {
+        patternGridRef.current?.restoreScrollOffset(snapshot.scrollOffset);
+      });
+    },
+    [ownerId, queryClient, querySignature, router],
+  );
+  const preparePaletteEnter = useCallback(() => {
+    const imageSession = imageSearchSessionRef.current;
+    const snapshot = imageSession?.snapshot ?? captureWorkspaceSnapshot();
+    if (imageSession) cancelImageSearch();
+    clearSelection();
+    closeInspector();
+    closePreview();
+    setCollapsedInspectorKey(null);
+    return snapshot;
+  }, [
+    cancelImageSearch,
+    captureWorkspaceSnapshot,
+    clearSelection,
+    closeInspector,
+    closePreview,
+  ]);
+  const paletteFilters = useMemo(
+    () => toImageSearchFilters(initialQuery),
+    [initialQuery],
+  );
+  const paletteFilterSignature = useMemo(
+    () => JSON.stringify(paletteFilters),
+    [paletteFilters],
+  );
+  const paletteSearch = usePaletteSearchSession({
+    ownerId,
+    filters: paletteFilters,
+    filterSignature: paletteFilterSignature,
+    prepareEnter: preparePaletteEnter,
+    restoreSnapshot: restoreWorkspaceSnapshot,
+  });
+  const paletteSearchActiveRef = useRef(paletteSearch.active);
+  useEffect(() => {
+    paletteSearchActiveRef.current = paletteSearch.active;
+  }, [paletteSearch.active]);
   const patternsQuery = useInfiniteQuery<
     PatternPage,
     Error,
@@ -385,6 +502,16 @@ export function LibraryView({
     [imageSearchGroups],
   );
   const imageSearchActive = activeImageSearchSession !== null;
+  const paletteSearchItems = useMemo(
+    () => paletteSearch.response?.items ?? [],
+    [paletteSearch.response],
+  );
+  const rankedSearchActive = imageSearchActive || paletteSearch.active;
+  const rankedSearchItems = imageSearchActive
+    ? imageSearchItems
+    : paletteSearch.active
+      ? paletteSearchItems
+      : null;
   const visibleInspectorIds = activeImageSearchSession
     ? activeImageSearchSession.selection.inspectorIds
     : inspectorIds;
@@ -397,7 +524,7 @@ export function LibraryView({
   const soleInspectorId =
     visibleInspectorIds.length === 1 ? visibleInspectorIds[0] : undefined;
   const soleInspectorPattern = soleInspectorId
-    ? (imageSearchActive ? imageSearchItems : items).find(
+    ? (rankedSearchItems ?? items).find(
         (pattern) => pattern.id === soleInspectorId,
       )
     : undefined;
@@ -416,7 +543,7 @@ export function LibraryView({
     [uploadTasks],
   );
   const watchedPatternId =
-    !imageSearchActive &&
+    !rankedSearchActive &&
     soleInspectorId &&
     (!soleInspectorPattern || isTransientPatternStatus(soleInspectorPattern.status))
       ? soleInspectorId
@@ -475,32 +602,35 @@ export function LibraryView({
         : items,
     [items, inspectedDetailPattern],
   );
-  const displayItems = imageSearchActive
-    ? imageSearchItems
-    : normalDisplayItems;
+  const displayItems = rankedSearchItems ?? normalDisplayItems;
   const orderedIds = useMemo(
     () => displayItems.map((item) => item.id),
     [displayItems],
   );
   const availableIds = useMemo(
     () => {
+      if (rankedSearchActive) return orderedIds;
       const detailId = inspectedDetailPattern?.id ?? initialSelectedId;
       return detailId && !orderedIds.includes(detailId)
         ? [...orderedIds, detailId]
         : orderedIds;
     },
-    [initialSelectedId, inspectedDetailPattern, orderedIds],
+    [initialSelectedId, inspectedDetailPattern, orderedIds, rankedSearchActive],
   );
   const patternsById = useMemo(() => {
     const result = new Map(displayItems.map((item) => [item.id, item]));
-    if (!imageSearchActive && inspectedDetailPattern) {
+    if (!rankedSearchActive && inspectedDetailPattern) {
       result.set(inspectedDetailPattern.id, inspectedDetailPattern);
     }
     return result;
-  }, [displayItems, imageSearchActive, inspectedDetailPattern]);
+  }, [displayItems, inspectedDetailPattern, rankedSearchActive]);
   const selectedSet = useMemo(
     () => new Set(visibleSelectedIds),
     [visibleSelectedIds],
+  );
+  const selectedPaletteColors = useMemo(
+    () => new Set(paletteSearch.colors),
+    [paletteSearch.colors],
   );
   const inspectorPatterns = useMemo(
     () =>
@@ -524,25 +654,6 @@ export function LibraryView({
           !libraryStatuses.has(inspectedPatternQuery.data.status))),
   );
 
-  const releaseImageSearchSession = useCallback(() => {
-    const session = imageSearchSessionRef.current;
-    if (!session) return;
-    URL.revokeObjectURL(session.thumbnailUrl);
-    imageSearchSessionRef.current = null;
-    setImageSearchSession(null);
-  }, []);
-
-  const cancelImageSearch = useCallback(() => {
-    imageSearchRun.current += 1;
-    imageSearchAbort.current?.abort(
-      new DOMException("Image search cancelled", "AbortError"),
-    );
-    imageSearchAbort.current = null;
-    releaseImageSearchSession();
-    setImageSearchPhase("idle");
-    setImageSearchError(null);
-  }, [releaseImageSearchSession]);
-
   useEffect(() => {
     resetImageSearchForOwner(ownerId);
     return () => {
@@ -557,12 +668,34 @@ export function LibraryView({
     };
   }, [ownerId, resetImageSearchForOwner]);
 
+  const paletteSearchActive = paletteSearch.active;
+  const paletteSearchClear = paletteSearch.clear;
+  const paletteSearchRetry = paletteSearch.retry;
+  useEffect(() => {
+    if (
+      imageSearchDialogOpen &&
+      (paletteSearchActive || paletteSearchRetry !== null)
+    ) {
+      paletteSearchClear();
+    }
+  }, [
+    imageSearchDialogOpen,
+    paletteSearchActive,
+    paletteSearchClear,
+    paletteSearchRetry,
+  ]);
+
   useEffect(() => {
     if (restoringQuerySignature.current === querySignature) {
       restoringQuerySignature.current = null;
       return;
     }
-    if (imageSearchSessionRef.current?.response) return;
+    if (
+      imageSearchSessionRef.current?.response ||
+      paletteSearchActiveRef.current
+    ) {
+      return;
+    }
     clearSelection();
     closePreview();
     if (initialSelectedId) openInspector([initialSelectedId]);
@@ -623,7 +756,7 @@ export function LibraryView({
   ]);
 
   useEffect(() => {
-    if (imageSearchActive || !inspectedDetailPattern) return;
+    if (rankedSearchActive || !inspectedDetailPattern) return;
     queryClient.setQueryData<InfiniteData<PatternPage, string | null>>(
       queryKeys.patterns(ownerId, initialQuery),
       (current) =>
@@ -641,7 +774,13 @@ export function LibraryView({
             }
           : current,
     );
-  }, [imageSearchActive, initialQuery, inspectedDetailPattern, ownerId, queryClient]);
+  }, [
+    initialQuery,
+    inspectedDetailPattern,
+    ownerId,
+    queryClient,
+    rankedSearchActive,
+  ]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -780,29 +919,12 @@ export function LibraryView({
       }
       if (controller.signal.aborted || imageSearchRun.current !== run) return;
 
-      const searchParams = serializeLibrarySearchParams(initialQuery);
-      if (initialSelectedId) searchParams.set("selected", initialSelectedId);
-      const selection = useSelectionStore.getState();
       const session: ImageSearchSession = {
         file: submittedFile,
         filterSignature: querySignature,
         response: null,
         selection: emptyImageSearchSelection(),
-        snapshot:
-          previousSnapshot ?? {
-            collapsedInspectorKey,
-            query: initialQuery,
-            querySignature,
-            scrollOffset: patternGridRef.current?.getScrollOffset() ?? 0,
-            selection: {
-              anchorId: selection.anchorId,
-              inspectorIds: [...selection.inspectorIds],
-              previewId: selection.previewId,
-              selectedIds: [...selection.selectedIds],
-            },
-            url: `${pathname}${searchParams.size > 0 ? `?${searchParams}` : ""}`,
-            viewMode,
-          },
+        snapshot: previousSnapshot ?? captureWorkspaceSnapshot(),
         thumbnailUrl: URL.createObjectURL(submittedFile),
       };
       imageSearchSessionRef.current = session;
@@ -944,42 +1066,11 @@ export function LibraryView({
     imageSearchAbort.current = null;
 
     const snapshot = session.snapshot;
-    const cached = queryClient.getQueryData<
-      InfiniteData<PatternPage, string | null>
-    >(queryKeys.patterns(ownerId, snapshot.query));
-    const available = new Set(
-      cached?.pages.flatMap((page) => page.items.map((item) => item.id)) ??
-        snapshot.selection.selectedIds,
-    );
-    for (const id of snapshot.selection.inspectorIds) {
-      const detail = queryClient.getQueryData<PatternPage["items"][number]>(
-        queryKeys.pattern(ownerId, id),
-      );
-      if (detail && libraryStatuses.has(detail.status)) available.add(id);
-    }
-    const restoredSelection = reconcileImageSearchSelection(
-      snapshot.selection,
-      [...available],
-    );
-    useSelectionStore.setState(restoredSelection);
-    setCollapsedInspectorKey(
-      restoredSelection.inspectorIds.length > 0
-        ? snapshot.collapsedInspectorKey
-        : null,
-    );
-    setViewMode(snapshot.viewMode);
-    restoringQuerySignature.current =
-      querySignature === snapshot.querySignature
-        ? null
-        : snapshot.querySignature;
     releaseImageSearchSession();
     setImageSearchError(null);
     setImageSearchPhase("idle");
-    router.replace(snapshot.url);
-    requestAnimationFrame(() => {
-      patternGridRef.current?.restoreScrollOffset(snapshot.scrollOffset);
-    });
-  }, [ownerId, queryClient, querySignature, releaseImageSearchSession, router]);
+    restoreWorkspaceSnapshot(snapshot);
+  }, [releaseImageSearchSession, restoreWorkspaceSnapshot]);
 
   const selectVisiblePattern = (
     id: string,
@@ -1082,7 +1173,7 @@ export function LibraryView({
                 aria-label="包含子文件夹内容"
                 checked={initialQuery.includeDescendants !== false}
                 onChange={(event) => {
-                  if (!imageSearchActive) {
+                  if (!rankedSearchActive) {
                     clearSelection();
                     closePreview();
                   }
@@ -1107,16 +1198,29 @@ export function LibraryView({
             onQueryChange={updateQuery}
             onShowInspector={() => setCollapsedInspectorKey(null)}
             onViewModeChange={setViewMode}
+            paletteSearchActive={paletteSearch.active}
             query={initialQuery}
             resultCount={displayItems.length}
             selectedCount={visibleSelectedIds.length}
             viewMode={viewMode}
           />
-          {!imageSearchActive ? (
+          {!rankedSearchActive ? (
             <BulkActionBar
               activeQuery={initialQuery}
               loadedPatterns={displayItems}
             />
+          ) : null}
+          {paletteSearch.retry ? (
+            <div className="palette-search-retry" role="alert">
+              <span>{paletteSearch.retry.message}</span>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={paletteSearch.retryInitialFailure}
+              >
+                重试配色搜索
+              </button>
+            </div>
           ) : null}
         </div>
 
@@ -1129,10 +1233,32 @@ export function LibraryView({
             onFavorite={favoriteVisiblePattern}
             onInspect={inspectVisiblePattern}
             onOpenPreview={openVisiblePreview}
+            onPaletteToggle={
+              paletteEnabled ? paletteSearch.toggleColor : undefined
+            }
             onSelect={selectVisiblePattern}
+            paletteEnabled={paletteEnabled}
             response={activeImageSearchSession.response}
             selectedIds={selectedSet}
+            selectedPaletteColors={selectedPaletteColors}
             thumbnailUrl={activeImageSearchSession.thumbnailUrl}
+          />
+        ) : paletteSearch.active ? (
+          <PaletteSearchResults
+            busy={paletteSearch.busy}
+            colors={paletteSearch.colors}
+            error={paletteSearch.error}
+            limitMessage={paletteSearch.limitMessage}
+            mode={viewMode}
+            onClear={paletteSearch.clear}
+            onFavorite={favoriteVisiblePattern}
+            onInspect={inspectVisiblePattern}
+            onOpenPreview={openVisiblePreview}
+            onPaletteToggle={paletteSearch.toggleColor}
+            onRemoveColor={paletteSearch.removeColor}
+            onSelect={selectVisiblePattern}
+            response={paletteSearch.response}
+            selectedIds={selectedSet}
           />
         ) : patternsQuery.isPending ? (
           <div className="library-state" aria-live="polite">
@@ -1166,9 +1292,13 @@ export function LibraryView({
             onLoadMore={() => void patternsQuery.fetchNextPage()}
             onInspect={inspectVisiblePattern}
             onOpenPreview={openVisiblePreview}
+            onPaletteToggle={
+              paletteEnabled ? paletteSearch.toggleColor : undefined
+            }
             onSelect={selectVisiblePattern}
             paletteEnabled={paletteEnabled}
             selectedIds={selectedSet}
+            selectedPaletteColors={selectedPaletteColors}
           />
         )}
       </section>
@@ -1178,10 +1308,14 @@ export function LibraryView({
           key={inspectorPatterns[0]!.id}
           activeQuery={initialQuery}
           onCollapse={() => setCollapsedInspectorKey(inspectorKey)}
+          onPaletteToggle={
+            paletteEnabled ? paletteSearch.toggleColor : undefined
+          }
           paletteEnabled={paletteEnabled}
           pattern={inspectorPatterns[0]!}
+          selectedPaletteColors={selectedPaletteColors}
           statusCheck={
-            !imageSearchActive &&
+            !rankedSearchActive &&
             isTransientPatternStatus(inspectorPatterns[0]!.status)
               ? {
                   isError: inspectedPatternQuery.isError,
@@ -1200,7 +1334,7 @@ export function LibraryView({
         />
       ) : null}
 
-      {imageSearchDialogOpen ? (
+      {imageSearchDialogOpen && !paletteSearch.active ? (
         <ImageSearchDialog
           key={`${ownerId}:${imageSearchOpenRequest}`}
           error={imageSearchError}

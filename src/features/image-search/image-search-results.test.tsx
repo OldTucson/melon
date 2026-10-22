@@ -149,4 +149,32 @@ describe("image search results", () => {
     expect(props.onSelect).not.toHaveBeenCalled();
     expect(props.onInspect).toHaveBeenCalledWith(item.id);
   });
+
+  it("allows a result palette to enter or extend palette search", () => {
+    const item = {
+      ...makeResult(1, "probable_source"),
+      paletteStatus: "ready" as const,
+      palette: [
+        { hex: "#285947", coverage: 0.5 },
+        { hex: "#CC9C3F", coverage: 0.3 },
+        { hex: "#8F4038", coverage: 0.2 },
+      ],
+    };
+    const onPaletteToggle = vi.fn();
+    const props = renderResults(
+      [{ kind: "probable_source", items: [item] }],
+      {
+        onPaletteToggle,
+        paletteEnabled: true,
+        selectedPaletteColors: new Set(["#285947"]),
+      },
+    );
+    const card = screen.getByRole("listitem", { name: /Match 1/ });
+
+    fireEvent.click(
+      within(card).getByRole("button", { name: "按颜色 #285947 搜索" }),
+    );
+    expect(onPaletteToggle).toHaveBeenCalledWith("#285947");
+    expect(props.onInspect).not.toHaveBeenCalled();
+  });
 });

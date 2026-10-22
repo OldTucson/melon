@@ -189,7 +189,9 @@ describe("Mac-first workspace", () => {
     const client = createClient([item]);
     const rendered = render(libraryTree(client));
 
-    expect(screen.getByLabelText("#285947，覆盖率 50%")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "按颜色 #285947 搜索" }),
+    ).toBeVisible();
     inspectPattern(item.name);
     const inspector = screen.getByRole("complementary", {
       name: "图案检查器",
@@ -200,8 +202,203 @@ describe("Mac-first workspace", () => {
     rendered.unmount();
     render(libraryTree(client, query, undefined, false));
     expect(
-      screen.queryByLabelText("#285947，覆盖率 50%"),
+      screen.queryByRole("button", { name: "按颜色 #285947 搜索" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("searches from a card palette in server order and restores the workspace on clear", async () => {
+    const items = [1, 2, 3].map((index) => ({
+      ...makePattern(index),
+      paletteStatus: "ready" as const,
+      palette: [
+        { hex: "#285947", coverage: 0.5 },
+        { hex: "#CC9C3F", coverage: 0.3 },
+        { hex: "#8F4038", coverage: 0.2 },
+      ],
+    }));
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      if (input === "/api/palette-search") {
+        return Response.json({
+          query: { colors: ["#285947"] },
+          items: [items[2], items[0]],
+          timing: { totalMs: 17 },
+        });
+      }
+      return new Promise(() => {});
+    });
+    vi.stubGlobal("fetch", fetcher);
+    renderLibrary(items);
+
+    selectPattern("Pattern 1");
+    inspectPattern("Pattern 1");
+    const normalScroller = screen.getByRole("region", { name: "图案结果" });
+    normalScroller.scrollTop = 91;
+    const firstCard = screen.getByRole("listitem", { name: /Pattern 1/ });
+    fireEvent.click(
+      within(firstCard).getByRole("button", {
+        name: "按颜色 #285947 搜索",
+      }),
+    );
+
+    const paletteRegion = await screen.findByRole("region", {
+      name: "配色搜索结果",
+    });
+    await waitFor(() =>
+      expect(fetcher).toHaveBeenCalledWith(
+        "/api/palette-search",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+    await waitFor(() =>
+      expect(
+        within(paletteRegion)
+          .getAllByRole("listitem")
+          .map((item) => item.getAttribute("aria-label")),
+      ).toEqual(["Pattern 3, PNG", "Pattern 1, PNG"]),
+    );
+    expect(
+      screen.getByRole("combobox", {
+        name: "配色搜索按匹配度排序",
+      }),
+    ).toBeDisabled();
+    expect(
+      screen.queryByRole("complementary", { name: "图案检查器" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "清除配色" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("region", { name: "图案结果" }),
+      ).toHaveProperty("scrollTop", 91),
+    );
+    expect(
+      screen.getByRole("checkbox", { name: "选择 Pattern 1" }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("complementary", { name: "图案检查器" }),
+    ).toHaveTextContent("Pattern 1");
+  });
+
+  it("reruns palette search for filters without replacing the saved snapshot", async () => {
+    const item = {
+      ...makePattern(1),
+      paletteStatus: "ready" as const,
+      palette: [
+        { hex: "#285947", coverage: 0.5 },
+        { hex: "#CC9C3F", coverage: 0.3 },
+        { hex: "#8F4038", coverage: 0.2 },
+      ],
+    };
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      if (input === "/api/palette-search") {
+        const body = JSON.parse(String(init?.body));
+        return Response.json({
+          query: { colors: body.colors },
+          items: [item],
+          timing: { totalMs: 14 },
+        });
+      }
+      return new Promise(() => {});
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const view = renderLibrary([item]);
+
+    fireEvent.click(
+      within(screen.getByRole("listitem", { name: /Pattern 1/ })).getByRole(
+        "button",
+        { name: "按颜色 #285947 搜索" },
+      ),
+    );
+    await waitFor(() =>
+      expect(
+        fetcher.mock.calls.filter(([input]) => input === "/api/palette-search"),
+      ).toHaveLength(1),
+    );
+    fireEvent.change(screen.getByRole("combobox", { name: "按格式筛选" }), {
+      target: { value: "png" },
+    });
+    const nextQuery: PatternQuery = { ...query, formats: ["png"] };
+    act(() => {
+      view.client.setQueryData(queryKeys.patterns(ownerId, nextQuery), {
+        pages: [{ items: [item], nextCursor: null }],
+        pageParams: [null],
+      });
+      view.rerender(libraryTree(view.client, nextQuery));
+    });
+
+    await waitFor(() =>
+      expect(
+        fetcher.mock.calls.filter(([input]) => input === "/api/palette-search"),
+      ).toHaveLength(2),
+    );
+    const secondCall = fetcher.mock.calls.filter(
+      ([input]) => input === "/api/palette-search",
+    )[1]!;
+    expect(JSON.parse(String(secondCall[1]?.body)).filters).toMatchObject({
+      formats: ["png"],
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "清除配色" }));
+    expect(navigation.replace).toHaveBeenLastCalledWith("/library");
+  });
+
+  it("restores the normal library after an initial palette failure and supports retry", async () => {
+    const item = {
+      ...makePattern(1),
+      paletteStatus: "ready" as const,
+      palette: [
+        { hex: "#285947", coverage: 0.5 },
+        { hex: "#CC9C3F", coverage: 0.3 },
+        { hex: "#8F4038", coverage: 0.2 },
+      ],
+    };
+    let attempts = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) => {
+        if (input !== "/api/palette-search") return new Promise(() => {});
+        attempts += 1;
+        if (attempts === 1) {
+          return Response.json(
+            {
+              error: {
+                code: "PALETTE_SEARCH_UNAVAILABLE",
+                message: "unavailable",
+              },
+            },
+            { status: 503 },
+          );
+        }
+        return Response.json({
+          query: { colors: ["#285947"] },
+          items: [],
+          timing: { totalMs: 15 },
+        });
+      }),
+    );
+    renderLibrary([item]);
+
+    fireEvent.click(
+      within(screen.getByRole("listitem", { name: /Pattern 1/ })).getByRole(
+        "button",
+        { name: "按颜色 #285947 搜索" },
+      ),
+    );
+    const retry = await screen.findByRole("button", {
+      name: "重试配色搜索",
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "配色搜索暂时不可用",
+    );
+    expect(screen.getByRole("region", { name: "图案结果" })).toBeVisible();
+
+    fireEvent.click(retry);
+    const region = await screen.findByRole("region", {
+      name: "配色搜索结果",
+    });
+    expect(
+      await within(region).findByText("没有找到接近这组配色的图案"),
+    ).toBeVisible();
   });
 
   it("preserves an inspected deep link through StrictMode effect replay", () => {
@@ -1053,6 +1250,82 @@ describe("Mac-first workspace", () => {
     expect(navigation.replace).toHaveBeenLastCalledWith("/library");
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:library-query");
     view.unmount();
+  });
+
+  it("switches between image and palette search without retaining both sessions", async () => {
+    const user = userEvent.setup();
+    const normal = makePattern(1);
+    const imageResult = {
+      ...makePattern(2),
+      matchKind: "probable_source" as const,
+      paletteStatus: "ready" as const,
+      palette: [
+        { hex: "#285947", coverage: 0.5 },
+        { hex: "#CC9C3F", coverage: 0.3 },
+        { hex: "#8F4038", coverage: 0.2 },
+      ],
+    };
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL: vi
+        .fn()
+        .mockReturnValueOnce("blob:dialog-query")
+        .mockReturnValueOnce("blob:library-query")
+        .mockReturnValueOnce("blob:next-dialog-query"),
+      revokeObjectURL,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input, init) => {
+        if (input === "/api/image-search") {
+          return Response.json({
+            query: { width: 640, height: 480 },
+            groups: [{ kind: "probable_source", items: [imageResult] }],
+            timing: { totalMs: 20 },
+          });
+        }
+        if (input === "/api/palette-search") {
+          const body = JSON.parse(String(init?.body));
+          return Response.json({
+            query: { colors: body.colors },
+            items: [imageResult],
+            timing: { totalMs: 16 },
+          });
+        }
+        return new Promise(() => {});
+      }),
+    );
+    renderLibrary([normal]);
+
+    act(() => useImageSearchStore.getState().requestOpen());
+    await user.upload(
+      screen.getByLabelText("选择搜索图片"),
+      new File(["jpeg"], "query.jpg", { type: "image/jpeg" }),
+    );
+    await user.click(screen.getByRole("button", { name: "开始搜索" }));
+    const imageRegion = await screen.findByLabelText("以图搜图结果");
+    fireEvent.click(
+      within(imageRegion).getByRole("button", {
+        name: "按颜色 #285947 搜索",
+      }),
+    );
+
+    expect(
+      await screen.findByRole("region", { name: "配色搜索结果" }),
+    ).toBeVisible();
+    await waitFor(() =>
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:library-query"),
+    );
+    expect(screen.queryByLabelText("以图搜图结果")).not.toBeInTheDocument();
+
+    act(() => useImageSearchStore.getState().requestOpen());
+    expect(
+      await screen.findByRole("dialog", { name: "以图搜图" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("region", { name: "配色搜索结果" }),
+    ).not.toBeInTheDocument();
   });
 
   it("reruns active image search when filters change and fixes sorting to match rank", async () => {
