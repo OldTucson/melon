@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -27,15 +28,18 @@ from melon_visual_search.embedding import (
 )
 from melon_visual_search.image_io import IMAGE_SEARCH_INVALID_FILE, ImageSearchError
 from melon_visual_search.local_features import deserialize_local_features
+from melon_visual_search.palette import PaletteExtractionError
 from melon_visual_search.repository import (
     EmbeddingRecord,
     LeaseLostError,
+    PaletteColorRecord,
     PreviewUnavailableError,
     Repository,
 )
 from melon_visual_search.settings import Settings
 from melon_visual_search.storage import InMemoryStorage, build_derived_key
 from melon_visual_search.worker import (
+    INDEX_PALETTE_EXTRACTION_FAILED,
     CleanupRefusedError,
     IndexWorker,
     _is_retryable_database_error,
@@ -196,6 +200,14 @@ def publication_embeddings() -> tuple[EmbeddingRecord, ...]:
     )
 
 
+def publication_palette() -> tuple[PaletteColorRecord, ...]:
+    return (
+        PaletteColorRecord(0, "#285947", (0.42, -0.08, 0.03), 0.5),
+        PaletteColorRecord(1, "#CC9C3F", (0.72, 0.03, 0.11), 0.3),
+        PaletteColorRecord(2, "#8F4038", (0.48, 0.1, 0.05), 0.2),
+    )
+
+
 def publish_claimed_job(
     repository: Repository,
     job,
@@ -219,6 +231,7 @@ def publish_claimed_job(
             preview_hash,
         ),
         embeddings=publication_embeddings(),
+        palette=publication_palette(),
         now=NOW,
     )
 
@@ -309,6 +322,25 @@ def seed_ready_document(
                     vector_literal(index),
                 ),
             )
+        for color in publication_palette():
+            connection.execute(
+                """
+                INSERT INTO visual_search_palette_colors (
+                    document_id, owner_id, pattern_id, color_index,
+                    display_hex, oklab_l, oklab_a, oklab_b, coverage
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    document_id,
+                    job.owner_id,
+                    job.pattern_id,
+                    color.color_index,
+                    color.display_hex,
+                    *color.oklab,
+                    color.coverage,
+                ),
+            )
     return document_id
 
 
@@ -354,6 +386,49 @@ def reject_ready_publications(
                 sql.SQL("DROP TRIGGER IF EXISTS {} ON visual_search_documents").format(
                     sql.Identifier(trigger_name)
                 )
+            )
+            connection.execute(
+                sql.SQL("DROP FUNCTION IF EXISTS {}()").format(
+                    sql.Identifier(function_name)
+                )
+            )
+
+
+@contextmanager
+def reject_palette_publications(database_url: str) -> Iterator[None]:
+    suffix = uuid4().hex
+    function_name = f"test_reject_palette_{suffix}"
+    trigger_name = f"test_reject_palette_trigger_{suffix}"
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        connection.execute(
+            sql.SQL(
+                """
+                CREATE FUNCTION {}() RETURNS trigger AS $$
+                BEGIN
+                  RAISE EXCEPTION 'forced palette publication failure'
+                    USING ERRCODE = '23514';
+                END;
+                $$ LANGUAGE plpgsql
+                """
+            ).format(sql.Identifier(function_name))
+        )
+        connection.execute(
+            sql.SQL(
+                """
+                CREATE TRIGGER {}
+                BEFORE INSERT ON visual_search_palette_colors
+                FOR EACH ROW EXECUTE FUNCTION {}()
+                """
+            ).format(sql.Identifier(trigger_name), sql.Identifier(function_name))
+        )
+    try:
+        yield
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as connection:
+            connection.execute(
+                sql.SQL(
+                    "DROP TRIGGER IF EXISTS {} ON visual_search_palette_colors"
+                ).format(sql.Identifier(trigger_name))
             )
             connection.execute(
                 sql.SQL("DROP FUNCTION IF EXISTS {}()").format(
@@ -414,10 +489,23 @@ def test_worker_publishes_one_document_and_exactly_ten_vectors(
             """,
             (seeded_job.owner_id, seeded_job.pattern_id),
         ).fetchone()
+        palette_rows = connection.execute(
+            """
+            SELECT color_index, display_hex, coverage
+            FROM visual_search_palette_colors
+            WHERE owner_id = %s AND pattern_id = %s
+            ORDER BY color_index
+            """,
+            (seeded_job.owner_id, seeded_job.pattern_id),
+        ).fetchall()
 
     assert job_row == ("complete", 1, preview_hash)
     assert document_row == ("ready", preview_hash, 512, 512, expected_key)
     assert embedding_row == (10, 0, 9, 1, 9, 384, 384)
+    assert 3 <= len(palette_rows) <= 5
+    assert [row[0] for row in palette_rows] == list(range(len(palette_rows)))
+    assert all(re.fullmatch(r"#[0-9A-F]{6}", row[1]) for row in palette_rows)
+    assert sum(row[2] for row in palette_rows) == pytest.approx(1.0)
     assert embedder.calls == 1
     assert expected_key in storage.object_keys
     local = deserialize_local_features(
@@ -449,6 +537,34 @@ def test_worker_publishes_one_document_and_exactly_ten_vectors(
 )
 def test_temporary_database_errors_are_retryable(error: psycopg.Error) -> None:
     assert _is_retryable_database_error(error)
+
+
+def test_palette_extraction_failure_is_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+    repository,
+    seeded_job: SeededJob,
+) -> None:
+    storage = InMemoryStorage()
+    seed_preview(storage, seeded_job)
+
+    def fail_palette(*args, **kwargs):
+        raise PaletteExtractionError("forced extraction failure")
+
+    monkeypatch.setattr("melon_visual_search.worker.extract_palette", fail_palette)
+    worker = IndexWorker(
+        repository,
+        storage,
+        DeterministicEmbedder(),
+        worker_id="worker-palette-failure",
+        index_version=INDEX_VERSION,
+        clock=lambda: NOW,
+    )
+
+    assert worker.run_once(now=NOW) == "failed"
+    job = repository.get_job(seeded_job.id)
+    assert job is not None
+    assert job.status == "failed"
+    assert job.last_error_code == INDEX_PALETTE_EXTRACTION_FAILED
 
 
 @pytest.mark.parametrize(
@@ -534,6 +650,50 @@ def test_permanent_publication_failure_deletes_new_object_and_is_terminal(
     assert outcome == "failed"
     assert job_row == ("failed", 1, "INDEX_DATABASE_PERMANENT_FAILURE")
     assert document_count == 0
+    assert storage.object_keys == (seeded_job.preview_object_key,)
+
+
+def test_palette_insert_failure_rolls_back_document_and_embeddings(
+    repository,
+    seeded_job: SeededJob,
+    database_url: str,
+) -> None:
+    storage = InMemoryStorage()
+    seed_preview(storage, seeded_job)
+    worker = IndexWorker(
+        repository,
+        storage,
+        DeterministicEmbedder(),
+        worker_id="worker-palette-rollback",
+        index_version=INDEX_VERSION,
+        clock=lambda: NOW,
+    )
+
+    with reject_palette_publications(database_url):
+        outcome = worker.run_once(now=NOW)
+
+    with psycopg.connect(database_url) as connection:
+        job_row = connection.execute(
+            """
+            SELECT status, last_error_code
+            FROM visual_search_jobs
+            WHERE id = %s
+            """,
+            (seeded_job.id,),
+        ).fetchone()
+        counts = connection.execute(
+            """
+            SELECT
+              (SELECT count(*)::int FROM visual_search_documents WHERE owner_id = %s),
+              (SELECT count(*)::int FROM visual_search_embeddings WHERE owner_id = %s),
+              (SELECT count(*)::int FROM visual_search_palette_colors WHERE owner_id = %s)
+            """,
+            (seeded_job.owner_id, seeded_job.owner_id, seeded_job.owner_id),
+        ).fetchone()
+
+    assert outcome == "failed"
+    assert job_row == ("failed", "INDEX_DATABASE_PERMANENT_FAILURE")
+    assert counts == (0, 0, 0)
     assert storage.object_keys == (seeded_job.preview_object_key,)
 
 

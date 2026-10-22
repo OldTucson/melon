@@ -16,14 +16,16 @@ from alibabacloud_credentials.exceptions import CredentialException  # type: ign
 from alibabacloud_oss_v2.exceptions import BaseError as OssError  # type: ignore[import-untyped]
 
 from .embedding import EmbeddingRuntimeUnavailableError
-from .image_io import ImageSearchError, Region, decode_image, make_regions
+from .image_io import ImageSearchError, Region, decode_image_inputs, make_regions
 from .local_features import extract_local_features, serialize_local_features
+from .palette import PaletteExtractionError, extract_palette
 from .repository import (
     HEARTBEAT_INTERVAL_SECONDS,
     LEASE_DURATION,
     EmbeddingRecord,
     IndexJob,
     LeaseLostError,
+    PaletteColorRecord,
     PreviewUnavailableError,
     Repository,
 )
@@ -40,6 +42,7 @@ WorkerOutcome = Literal["idle", "completed", "retried", "failed", "stale"]
 INDEX_EMBEDDING_INVALID = "INDEX_EMBEDDING_INVALID"
 INDEX_DATABASE_PERMANENT_FAILURE = "INDEX_DATABASE_PERMANENT_FAILURE"
 INDEX_PREVIEW_HASH_MISMATCH = "INDEX_PREVIEW_HASH_MISMATCH"
+INDEX_PALETTE_EXTRACTION_FAILED = "INDEX_PALETTE_EXTRACTION_FAILED"
 INDEX_TEMPORARY_FAILURE = "INDEX_TEMPORARY_FAILURE"
 HEARTBEAT_SHUTDOWN_TIMEOUT_SECONDS = 40.0
 
@@ -403,7 +406,25 @@ class IndexWorker:
         ):
             return "completed"
 
-        image = decode_image(encoded)
+        decoded = decode_image_inputs(encoded)
+        image = decoded.embedding_rgb
+        try:
+            extracted_palette = extract_palette(
+                decoded.palette_rgb,
+                decoded.palette_alpha,
+                fallback_rgb=image,
+            )
+        except (PaletteExtractionError, ValueError) as error:
+            raise _TerminalFailure(INDEX_PALETTE_EXTRACTION_FAILED) from error
+        palette = tuple(
+            PaletteColorRecord(
+                color_index=index,
+                display_hex=color.display_hex,
+                oklab=color.oklab,
+                coverage=color.coverage,
+            )
+            for index, color in enumerate(extracted_palette)
+        )
         regions = make_regions(image)
         vectors = self._validated_vectors(self._embedder.embed(regions))
         local_features = extract_local_features(image)
@@ -430,6 +451,7 @@ class IndexWorker:
                 phash=local_features.phash,
                 local_feature_object_key=write.key,
                 embeddings=self._embedding_records(regions, vectors),
+                palette=palette,
                 now=self._clock(),
             )
         except Exception:

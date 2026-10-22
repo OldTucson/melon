@@ -19,6 +19,10 @@ _FALLBACK_LIGHTNESS_STEPS = (0.03, 0.06)
 _HEX_PATTERN = re.compile(r"^#[0-9A-F]{6}$")
 
 
+class PaletteExtractionError(RuntimeError):
+    code = "INDEX_PALETTE_EXTRACTION_FAILED"
+
+
 @dataclass(frozen=True)
 class PaletteColor:
     display_hex: str
@@ -182,7 +186,7 @@ def _display_hex(oklab: npt.NDArray[np.float64]) -> str:
     red, green, blue = oklab_to_srgb(oklab).tolist()
     result = f"#{red:02X}{green:02X}{blue:02X}"
     if _HEX_PATTERN.fullmatch(result) is None:
-        raise RuntimeError("PALETTE_HEX_INVALID")
+        raise PaletteExtractionError("palette HEX conversion failed")
     return result
 
 
@@ -194,14 +198,17 @@ def _initial_clusters(
     cluster_count = min(TARGET_COLOR_COUNT, unique_count)
     samples = np.ascontiguousarray(srgb_to_oklab(colors).astype(np.float32))
     cv2.setRNGSeed(KMEANS_SEED)
-    _, raw_labels, _ = cv2.kmeans(
-        samples,
-        cluster_count,
-        np.empty((0, 1), dtype=np.int32),
-        (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER, 100, 1e-6),
-        1,
-        cv2.KMEANS_PP_CENTERS,
-    )
+    try:
+        _, raw_labels, _ = cv2.kmeans(
+            samples,
+            cluster_count,
+            np.empty((0, 1), dtype=np.int32),
+            (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER, 100, 1e-6),
+            1,
+            cv2.KMEANS_PP_CENTERS,
+        )
+    except cv2.error as error:
+        raise PaletteExtractionError("palette clustering failed") from error
     labels = np.asarray(raw_labels).reshape(-1)
     clusters: list[_Cluster] = []
     for index in range(cluster_count):
@@ -287,7 +294,7 @@ def _expand_dominant_cluster(clusters: list[_Cluster]) -> list[_Cluster]:
             expanded.append(_Cluster(adjusted, dominant.weight / 3.0))
         if len({_display_hex(cluster.oklab) for cluster in expanded}) == 3:
             return clusters[:dominant_index] + expanded + clusters[dominant_index + 1 :]
-    raise RuntimeError("PALETTE_FALLBACK_COLORS_NOT_DISTINCT")
+    raise PaletteExtractionError("palette fallback colors are not distinct")
 
 
 def extract_palette(
@@ -308,7 +315,7 @@ def extract_palette(
     if len(clusters) < MIN_COLOR_COUNT:
         clusters = _coalesce_display_duplicates(_expand_dominant_cluster(clusters))
     if not MIN_COLOR_COUNT <= len(clusters) <= TARGET_COLOR_COUNT:
-        raise RuntimeError("PALETTE_COLOR_COUNT_INVALID")
+        raise PaletteExtractionError("palette color count is invalid")
 
     total_weight = math.fsum(cluster.weight for cluster in clusters)
     palette = [

@@ -136,6 +136,10 @@ class SeedFactory:
             if self.owner_ids:
                 owner_ids = list(self.owner_ids)
                 connection.execute(
+                    "DELETE FROM visual_search_palette_colors WHERE owner_id = ANY(%s)",
+                    (owner_ids,),
+                )
+                connection.execute(
                     "DELETE FROM visual_search_embeddings WHERE owner_id = ANY(%s)",
                     (owner_ids,),
                 )

@@ -90,6 +90,14 @@ class EmbeddingRecord:
 
 
 @dataclass(frozen=True)
+class PaletteColorRecord:
+    color_index: int
+    display_hex: str
+    oklab: tuple[float, float, float]
+    coverage: float
+
+
+@dataclass(frozen=True)
 class PublicationResult:
     replayed: bool
     superseded_hashes: tuple[str, ...] = ()
@@ -1083,9 +1091,10 @@ class Repository:
         phash: str,
         local_feature_object_key: str,
         embeddings: Sequence[EmbeddingRecord],
+        palette: Sequence[PaletteColorRecord],
         now: datetime | None = None,
     ) -> PublicationResult:
-        self._validate_publication(width, height, phash, embeddings)
+        self._validate_publication(width, height, phash, embeddings, palette)
         worker_id = _validate_worker_id(worker_id)
         publication_time = now or _utc_now()
         document_id = uuid4()
@@ -1196,6 +1205,10 @@ class Repository:
                 "DELETE FROM visual_search_embeddings WHERE document_id = %s",
                 (active_document_id,),
             )
+            connection.execute(
+                "DELETE FROM visual_search_palette_colors WHERE document_id = %s",
+                (active_document_id,),
+            )
             with connection.cursor() as cursor:
                 cursor.executemany(
                     """
@@ -1219,6 +1232,29 @@ class Repository:
                             item.embedding,
                         )
                         for item in embeddings
+                    ],
+                )
+                cursor.executemany(
+                    """
+                    INSERT INTO visual_search_palette_colors (
+                        document_id, owner_id, pattern_id, color_index,
+                        display_hex, oklab_l, oklab_a, oklab_b, coverage
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    [
+                        (
+                            active_document_id,
+                            job.owner_id,
+                            job.pattern_id,
+                            item.color_index,
+                            item.display_hex,
+                            item.oklab[0],
+                            item.oklab[1],
+                            item.oklab[2],
+                            item.coverage,
+                        )
+                        for item in palette
                     ],
                 )
             published = connection.execute(
@@ -1259,6 +1295,7 @@ class Repository:
         height: int,
         phash: str,
         embeddings: Sequence[EmbeddingRecord],
+        palette: Sequence[PaletteColorRecord],
     ) -> None:
         if width <= 0 or height <= 0 or not re.fullmatch(r"[0-9a-f]{16}", phash):
             raise ValueError("invalid publication metadata")
@@ -1277,6 +1314,31 @@ class Repository:
                 )
             ):
                 raise ValueError("invalid publication embedding")
+        if not 3 <= len(palette) <= 5:
+            raise ValueError("publication palette requires three to five colors")
+        if [color.color_index for color in palette] != list(range(len(palette))):
+            raise ValueError("publication palette indexes must be consecutive")
+        if len({color.display_hex for color in palette}) != len(palette):
+            raise ValueError("publication palette colors must be unique")
+        for color in palette:
+            if (
+                re.fullmatch(r"#[0-9A-F]{6}", color.display_hex) is None
+                or len(color.oklab) != 3
+                or not all(math.isfinite(value) for value in color.oklab)
+                or not 0.0 <= color.oklab[0] <= 1.0
+                or not -0.5 <= color.oklab[1] <= 0.5
+                or not -0.5 <= color.oklab[2] <= 0.5
+                or not math.isfinite(color.coverage)
+                or not 0.0 < color.coverage <= 1.0
+            ):
+                raise ValueError("invalid publication palette color")
+        if not math.isclose(
+            math.fsum(color.coverage for color in palette),
+            1.0,
+            rel_tol=0.0,
+            abs_tol=1e-5,
+        ):
+            raise ValueError("publication palette coverage must sum to one")
 
     def _lock_lease(
         self,

@@ -6,11 +6,109 @@ from dataclasses import replace
 from datetime import timedelta
 from uuid import uuid4
 
+import numpy as np
 import psycopg
 import pytest
 from conftest import INDEX_VERSION, NOW, SeededJob, SeedFactory
 
-from melon_visual_search.repository import LeaseLostError
+from melon_visual_search.repository import (
+    EmbeddingRecord,
+    LeaseLostError,
+    PaletteColorRecord,
+    Repository,
+)
+
+
+def valid_publication_embeddings() -> tuple[EmbeddingRecord, ...]:
+    return tuple(
+        EmbeddingRecord(
+            region_index=index,
+            region_kind="global" if index == 0 else "tile",
+            x=0.0,
+            y=0.0,
+            width=1.0,
+            height=1.0,
+            embedding=np.eye(10, 384, dtype=np.float32)[index],
+        )
+        for index in range(10)
+    )
+
+
+def valid_publication_palette() -> tuple[PaletteColorRecord, ...]:
+    return (
+        PaletteColorRecord(0, "#285947", (0.42, -0.08, 0.03), 0.5),
+        PaletteColorRecord(1, "#CC9C3F", (0.72, 0.03, 0.11), 0.3),
+        PaletteColorRecord(2, "#8F4038", (0.48, 0.1, 0.05), 0.2),
+    )
+
+
+def test_publication_accepts_three_to_five_valid_palette_colors() -> None:
+    Repository._validate_publication(
+        512,
+        512,
+        "0" * 16,
+        valid_publication_embeddings(),
+        valid_publication_palette(),
+    )
+
+
+@pytest.mark.parametrize(
+    "palette",
+    [
+        valid_publication_palette()[:2],
+        valid_publication_palette()
+        + (
+            PaletteColorRecord(3, "#102030", (0.2, 0.0, 0.0), 0.04),
+            PaletteColorRecord(4, "#203040", (0.3, 0.0, 0.0), 0.03),
+            PaletteColorRecord(5, "#304050", (0.4, 0.0, 0.0), 0.03),
+        ),
+        (
+            PaletteColorRecord(0, "#285947", (0.42, -0.08, 0.03), 0.5),
+            PaletteColorRecord(2, "#CC9C3F", (0.72, 0.03, 0.11), 0.3),
+            PaletteColorRecord(3, "#8F4038", (0.48, 0.1, 0.05), 0.2),
+        ),
+        (
+            PaletteColorRecord(0, "#285947", (0.42, -0.08, 0.03), 0.5),
+            PaletteColorRecord(1, "#285947", (0.72, 0.03, 0.11), 0.3),
+            PaletteColorRecord(2, "#8F4038", (0.48, 0.1, 0.05), 0.2),
+        ),
+        (
+            PaletteColorRecord(0, "#285947", (0.42, -0.08, 0.03), 0.5),
+            PaletteColorRecord(1, "#cc9c3f", (0.72, 0.03, 0.11), 0.3),
+            PaletteColorRecord(2, "#8F4038", (0.48, 0.1, 0.05), 0.2),
+        ),
+        (
+            PaletteColorRecord(0, "#285947", (float("nan"), 0.0, 0.0), 0.5),
+            PaletteColorRecord(1, "#CC9C3F", (0.72, 0.03, 0.11), 0.3),
+            PaletteColorRecord(2, "#8F4038", (0.48, 0.1, 0.05), 0.2),
+        ),
+        (
+            PaletteColorRecord(0, "#285947", (0.42, -0.08, 0.03), 0.4),
+            PaletteColorRecord(1, "#CC9C3F", (0.72, 0.03, 0.11), 0.3),
+            PaletteColorRecord(2, "#8F4038", (0.48, 0.1, 0.05), 0.2),
+        ),
+    ],
+    ids=[
+        "too-few",
+        "too-many",
+        "nonconsecutive-indexes",
+        "duplicate-hex",
+        "lowercase-hex",
+        "nonfinite-oklab",
+        "coverage-does-not-sum-to-one",
+    ],
+)
+def test_publication_rejects_invalid_palettes(
+    palette: tuple[PaletteColorRecord, ...],
+) -> None:
+    with pytest.raises(ValueError, match="palette"):
+        Repository._validate_publication(
+            512,
+            512,
+            "0" * 16,
+            valid_publication_embeddings(),
+            palette,
+        )
 
 
 def test_workers_cannot_claim_the_same_job(repository, seeded_job: SeededJob) -> None:

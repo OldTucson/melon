@@ -361,7 +361,7 @@ git commit -m "feat: extract deterministic image palettes"
 - Modify: `services/visual-search/tests/test_worker.py`
 - Modify: `services/visual-search/tests/conftest.py`
 
-- [ ] **Step 1: Add failing repository and worker tests**
+- [x] **Step 1: Add failing repository and worker tests**
 
 Test publication rejects 2 or 6 colors, repeated/non-contiguous indexes, lowercase HEX, nonfinite OKLab, and coverage totals outside `1 +/- 1e-5`. Force the palette insert to fail and assert the document never becomes `ready` and no embedding survives. Update the worker fake repository to record palette arguments and assert one decode supplies both embeddings and palette extraction.
 
@@ -373,7 +373,7 @@ assert published.palette == (
 )
 ```
 
-- [ ] **Step 2: Run the focused tests and confirm signature failures**
+- [x] **Step 2: Run the focused tests and confirm signature failures**
 
 ```bash
 .venv-visual-search/bin/uv run --project services/visual-search pytest services/visual-search/tests/test_repository.py services/visual-search/tests/test_worker.py -q
@@ -381,7 +381,7 @@ assert published.palette == (
 
 Expected: FAIL because `Repository.publish` does not accept palette records.
 
-- [ ] **Step 3: Add publication records and strict validation**
+- [x] **Step 3: Add publication records and strict validation**
 
 ```python
 @dataclass(frozen=True)
@@ -394,7 +394,7 @@ class PaletteColorRecord:
 
 Extend `_validate_publication` to return validated embedding and palette sequences. In the existing transaction, delete the current document's embedding and palette rows, insert both collections, supersede the prior ready document, then mark the new document ready. Use `executemany` for the 3-5 rows and keep the lease ownership predicate on the final job update.
 
-- [ ] **Step 4: Wire extraction into the worker**
+- [x] **Step 4: Wire extraction into the worker**
 
 ```python
 decoded = decode_image_inputs(encoded)
@@ -409,7 +409,7 @@ palette = tuple(
 
 Pass `palette=palette` to `publish`. Treat extraction exceptions through the existing stable job failure/retry path; do not mutate `patterns.status` or `preview_status`.
 
-- [ ] **Step 5: Verify publication and transaction behavior**
+- [x] **Step 5: Verify publication and transaction behavior**
 
 ```bash
 .venv-visual-search/bin/uv run --project services/visual-search pytest services/visual-search/tests/test_repository.py services/visual-search/tests/test_worker.py -q
@@ -418,7 +418,7 @@ Pass `palette=palette` to `publish`. Treat extraction exceptions through the exi
 
 Expected: PASS, including rollback tests.
 
-- [ ] **Step 6: Commit atomic publication**
+- [x] **Step 6: Commit atomic publication**
 
 ```bash
 git add services/visual-search/src/melon_visual_search/repository.py services/visual-search/src/melon_visual_search/worker.py services/visual-search/tests/test_repository.py services/visual-search/tests/test_worker.py services/visual-search/tests/conftest.py
