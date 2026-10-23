@@ -12,7 +12,7 @@ import {
   type VisualSearchBackfillPage,
 } from "./index-repository";
 
-export const ACTIVE_VISUAL_SEARCH_INDEX_VERSION = "visual-search-v1";
+export const ACTIVE_VISUAL_SEARCH_INDEX_VERSION = "visual-search-v2";
 const VISUAL_SEARCH_BACKFILL_PAGE_SIZE = 500;
 
 export type EnqueueVisualSearchIndexJobInput = {

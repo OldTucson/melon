@@ -1092,7 +1092,7 @@ git commit -m "test: cover palette search end to end"
 - Modify: `docs/operations/visual-search.md`
 - Create: `docs/verification/2026-10-22-palette-search.md`
 
-- [ ] **Step 1: Write failing active-version tests**
+- [x] **Step 1: Write failing active-version tests**
 
 Update Node and Python settings tests to require `visual-search-v2` as the fallback, while still accepting an explicitly configured older version during a staged deployment.
 
@@ -1105,7 +1105,7 @@ settings = Settings(internal_token="x" * 32)
 assert settings.active_version == "visual-search-v2"
 ```
 
-- [ ] **Step 2: Run focused version tests and confirm old defaults**
+- [x] **Step 2: Run focused version tests and confirm old defaults**
 
 ```bash
 npx --yes --package=node@24 -c 'npm run test:integration -- src/features/image-search/index-service.integration.test.ts'
@@ -1114,11 +1114,11 @@ npx --yes --package=node@24 -c 'npm run test:integration -- src/features/image-s
 
 Expected: FAIL because defaults still reference `visual-search-v1`.
 
-- [ ] **Step 3: Bump defaults and document staged rollout**
+- [x] **Step 3: Bump defaults and document staged rollout**
 
 Change the two fallbacks and examples to `visual-search-v2`. Update the operations guide with this exact safe sequence: migrate schema; deploy API and worker with v2 support but keep the application active version at v1; enqueue `visual-search-v2`; wait for every eligible preview to reach complete or an investigated terminal failure; run quality and 10k benchmark gates; switch API, worker, and Next.js active version together; then enable the existing feature flag. Rollback changes the active version/flag only and never drops palette data.
 
-- [ ] **Step 4: Run all automated verification before touching local runtime state**
+- [x] **Step 4: Run all automated verification before touching local runtime state**
 
 ```bash
 .venv-visual-search/bin/uv run --project services/visual-search pytest services/visual-search/tests -q
@@ -1134,7 +1134,7 @@ E2E_IMAGE_SEARCH=1 npx --yes --package=node@24 -c 'npm run test:e2e -- tests/e2e
 
 Expected: every command PASS. Record exact counts and durations in the verification document.
 
-- [ ] **Step 5: Rebuild the local index and verify publication counts**
+- [x] **Step 5: Rebuild the local index and verify publication counts**
 
 Stop any stale local API/worker processes, migrate the database, set the Next.js, API, and worker active-version environments to `visual-search-v2`, restart the API and single worker, and run:
 
@@ -1145,7 +1145,7 @@ npx --yes --package=node@24 -c 'npm run image-search:backfill -- --version visua
 
 Wait until the queue is drained. Query counts by owner/version and assert every v2 `ready` document has 3-5 palette rows, consecutive indexes, unique HEX values, and coverage sum within tolerance. Investigate terminal failures rather than hiding them.
 
-- [ ] **Step 6: Run local smoke tests and inspect screenshots**
+- [x] **Step 6: Run local smoke tests and inspect screenshots**
 
 Open `http://127.0.0.1:3000/library`. Verify normal grid, list, inspector, one/three/five colors, remove/clear, current filters, no-result state, service-down error, image-search switching, manual-preview replacement, keyboard operation, mobile width, light theme, and dark theme. Use Playwright screenshots and inspect them visually before recording the result.
 
@@ -1157,7 +1157,9 @@ Open `http://127.0.0.1:3000/library`. Verify normal grid, list, inspector, one/t
 
 Local results are diagnostic. Repeat the same command on the production-equivalent ECS and require palette API P95 at or below 1,000 ms before enabling the feature in production. Record CPU, memory, p50, p95, image digest, and host class without recording query colors.
 
-- [ ] **Step 8: Review the complete diff and commit rollout evidence**
+Local diagnostic completed on Apple M1 Pro: p50 242.339125 ms, p95 280.935333 ms, and peak RSS 154,435,584 bytes. The production-equivalent ECS run remains open, so this step and the production feature flag remain unchecked.
+
+- [x] **Step 8: Review the complete diff and commit rollout evidence**
 
 ```bash
 git diff --check
@@ -1172,13 +1174,13 @@ Do not claim production readiness if the ECS performance or real-library quality
 
 ## Final Acceptance Checklist
 
-- [ ] Every active-version ready preview has exactly 3-5 valid, unique, deterministic colors.
-- [ ] Embeddings and palettes become visible in one publication transaction.
-- [ ] Public and internal endpoints enforce authentication, tenant scope, canonical contracts, result bounds, cancellation, and no-store behavior.
-- [ ] One to five selected colors rank by `0.8 * queryCoverage + 0.2 * candidateFit`, with stable ties and a 30-item cap.
-- [ ] Card, list, inspector, image-search results, and palette-search results use the same accessible swatch component.
-- [ ] Palette and image search are mutually exclusive and both restore the pre-search workspace correctly.
-- [ ] Current folder, tag, favorite, format, authorization, and trash filters continue to define the allowed Pattern scope.
-- [ ] Fast changes cannot let an old request overwrite the current palette result.
-- [ ] Automated Python, Vitest, integration, typecheck, lint, build, and Playwright gates pass.
+- [x] Every active-version ready preview has exactly 3-5 valid, unique, deterministic colors.
+- [x] Embeddings and palettes become visible in one publication transaction.
+- [x] Public and internal endpoints enforce authentication, tenant scope, canonical contracts, result bounds, cancellation, and no-store behavior.
+- [x] One to five selected colors rank by `0.8 * queryCoverage + 0.2 * candidateFit`, with stable ties and a 30-item cap.
+- [x] Card, list, inspector, image-search results, and palette-search results use the same accessible swatch component.
+- [x] Palette and image search are mutually exclusive and both restore the pre-search workspace correctly.
+- [x] Current folder, tag, favorite, format, authorization, and trash filters continue to define the allowed Pattern scope.
+- [x] Fast changes cannot let an old request overwrite the current palette result.
+- [x] Automated Python, Vitest, integration, typecheck, lint, build, and Playwright gates pass.
 - [ ] Production-equivalent 10,000-pattern P95 is at most one second before the existing feature flag is enabled.

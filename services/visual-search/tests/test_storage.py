@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 from datetime import timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -12,6 +14,7 @@ from conftest import NOW
 from melon_visual_search.storage import (
     AlibabaOssStorage,
     InMemoryStorage,
+    LocalFeatureStorage,
     PreviewNotFoundError,
     StorageKeyError,
     StoredObject,
@@ -227,6 +230,93 @@ def test_memory_storage_lists_and_deletes_only_one_canonical_prefix() -> None:
     storage.delete_features(OWNER_ID, PATTERN_ID, INDEX_VERSION, PREVIEW_HASH)
     assert storage.list_features(OWNER_ID, PATTERN_ID, INDEX_VERSION) == ()
     assert len(storage.object_keys) == 2
+
+
+def test_local_feature_storage_persists_features_across_process_adapters(
+    tmp_path: Path,
+) -> None:
+    preview_storage = InMemoryStorage()
+    key = preview_key()
+    preview_storage.seed_preview(key, b"preview", last_modified=NOW)
+    root = tmp_path / "visual-search-features"
+    writer = LocalFeatureStorage(preview_storage, root=root)
+    reader = LocalFeatureStorage(preview_storage, root=root)
+
+    created = writer.write_features(
+        OWNER_ID,
+        PATTERN_ID,
+        INDEX_VERSION,
+        PREVIEW_HASH,
+        b"features",
+        now=NOW,
+    )
+    replay = reader.write_features(
+        OWNER_ID,
+        PATTERN_ID,
+        INDEX_VERSION,
+        PREVIEW_HASH,
+        b"different",
+        now=NOW + timedelta(hours=1),
+    )
+
+    assert reader.read_preview(OWNER_ID, PATTERN_ID, key) == b"preview"
+    assert created.created is True
+    assert replay == type(created)(key=created.key, created=False)
+    assert reader.read_features(
+        OWNER_ID,
+        PATTERN_ID,
+        INDEX_VERSION,
+        PREVIEW_HASH,
+    ) == b"features"
+    assert reader.list_features(OWNER_ID, PATTERN_ID, INDEX_VERSION) == (
+        StoredObject(key=created.key, last_modified=NOW),
+    )
+
+    reader.delete_features(
+        OWNER_ID,
+        PATTERN_ID,
+        INDEX_VERSION,
+        PREVIEW_HASH,
+    )
+
+    assert writer.list_features(OWNER_ID, PATTERN_ID, INDEX_VERSION) == ()
+
+
+def test_local_feature_storage_publishes_only_complete_feature_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "visual-search-features"
+    storage = LocalFeatureStorage(InMemoryStorage(), root=root)
+    real_link = os.link
+    observed: list[tuple[Path, Path]] = []
+
+    def observe_link(source: os.PathLike[str], destination: os.PathLike[str]) -> None:
+        source_path = Path(source)
+        destination_path = Path(destination)
+        assert source_path.read_bytes() == b"complete-features"
+        assert not destination_path.exists()
+        observed.append((source_path, destination_path))
+        real_link(source, destination)
+
+    monkeypatch.setattr(os, "link", observe_link)
+
+    created = storage.write_features(
+        OWNER_ID,
+        PATTERN_ID,
+        INDEX_VERSION,
+        PREVIEW_HASH,
+        b"complete-features",
+        now=NOW,
+    )
+    destination = root.joinpath(*created.key.split("/"))
+
+    assert len(observed) == 1
+    staging_path, published_path = observed[0]
+    assert published_path == destination
+    assert staging_path.parent == root / ".staging"
+    assert not staging_path.exists()
+    assert destination.read_bytes() == b"complete-features"
 
 
 @pytest.mark.parametrize(

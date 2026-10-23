@@ -1434,7 +1434,7 @@ describe("upload service lifecycle", () => {
         ownerId: ownerA,
         patternId: initialized.pattern.id,
         previewAssetId: previewId,
-        indexVersion: "visual-search-v1",
+        indexVersion: "visual-search-v2",
         status: "pending",
         attemptCount: 0,
         maxAttempts: 5,

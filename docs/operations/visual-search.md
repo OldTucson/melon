@@ -1,6 +1,6 @@
 # 以图搜图生产运行手册
 
-本文适用于 `visual-search-v1`。Python API 是 Next.js 的内部依赖，不是公网服务；正式启用前必须完成真实图库质量和生产 ECS 性能门禁。当前验证记录仍将这两项标为未完成，因此默认保持 `IMAGE_SEARCH_ENABLED=false`。
+本文适用于带配色色卡的 `visual-search-v2`，并保留 `visual-search-v1` 作为版本化回滚目标。Python API 是 Next.js 的内部依赖，不是公网服务；正式启用前必须完成真实图库质量和生产 ECS 性能门禁。当前验证记录仍将这些生产门禁标为未完成，因此生产环境保持 `IMAGE_SEARCH_ENABLED=false`。
 
 ## 安全边界
 
@@ -39,7 +39,7 @@ sha256sum /opt/melon/models/dinov2-small.onnx
 VISUAL_SEARCH_IMAGE=registry.example.com/melon-visual-search@sha256:replace-with-image-digest
 VISUAL_SEARCH_DATABASE_URL=postgres://replace-with-runtime-connection
 VISUAL_SEARCH_INTERNAL_TOKEN=replace-with-one-random-token-at-least-32-characters
-VISUAL_SEARCH_ACTIVE_VERSION=visual-search-v1
+VISUAL_SEARCH_ACTIVE_VERSION=visual-search-v2
 VISUAL_SEARCH_MODEL_SHA256=e306c964ab0a1a9bdb334af89ab657d58448417b830a6a7f7b742f85d4441ae8
 VISUAL_SEARCH_MODEL_HOST_PATH=/opt/melon/models/dinov2-small.onnx
 VISUAL_SEARCH_TEMP_HOST_PATH=/var/lib/melon/visual-search/tmp
@@ -55,15 +55,17 @@ Next.js 的 `IMAGE_SEARCH_INTERNAL_TOKEN` 必须与上面的 `VISUAL_SEARCH_INTE
 
 Python OSS SDK V2 的 `VISUAL_SEARCH_OSS_REGION` 使用 `cn-hangzhou` 形式，不带 `oss-` 前缀；Next.js 使用的 `ALIYUN_OSS_REGION` 仍保持 `oss-cn-hangzhou` 形式。两者不要直接复用。
 
-## 首次上线顺序
+本地 RAM 身份尚未获得派生特征目录写权限时，可在非生产环境设置绝对路径 `VISUAL_SEARCH_FEATURE_STORAGE_DIR`。预览仍从真实 OSS 读取，局部特征归档则由 API 与 worker 共享该本机目录；目录应设为仅当前用户可读写，且两个进程必须使用同一路径。生产配置会拒绝此变量，ECS 仍必须使用前述最小权限 RAM Role 和 OSS 存储。
+
+上述值是最终目标配置。由 v1 升级到 v2 时，在完成回填和门禁前，API、worker 与 Next.js 必须继续使用 `visual-search-v1`，不得提前使用示例中的 v2 值。
+
+## v2 上线顺序
 
 必须严格按下列顺序执行：
 
-1. 对 PostgreSQL 做可恢复备份。在目标数据库确认有权执行 `CREATE EXTENSION vector`，运行迁移后用 `select extversion from pg_extension where extname = 'vector';` 验证 pgvector 版本不低于 `0.8.0`。
-2. 保持 Next.js 的 `IMAGE_SEARCH_ENABLED=false`，部署并执行 `npm run db:migrate`。此时现有图库功能仍独立可用。
-3. 给 ECS 绑定专用 ECS 实例 RAM 角色，验证 IMDSv2 可取得临时凭证且 IMDSv1 已禁用。不要给浏览器 STS 角色增加 search 派生对象权限。
-4. 按上一节安装并校验 ONNX 文件，构建镜像后以 registry digest 填写 `VISUAL_SEARCH_IMAGE`。启动过程中禁止下载模型。
-5. 安装并启动 API 与单并发 worker，随后验证带鉴权的 loopback health：
+1. 对 PostgreSQL 做可恢复备份。在目标数据库确认有权执行 `CREATE EXTENSION vector`，然后保持 `IMAGE_SEARCH_ENABLED=false` 并运行 `npm run db:migrate`。用 `select extversion from pg_extension where extname = 'vector';` 验证 pgvector 版本不低于 `0.8.0`。
+2. 给 ECS 绑定专用实例 RAM 角色，验证 IMDSv2 可取得临时凭证且 IMDSv1 已禁用。按上一节校验 ONNX 文件，以 registry digest 部署支持 v2 的同一版 API 与 worker，但暂时把 API、worker 的 `VISUAL_SEARCH_ACTIVE_VERSION` 和 Next.js 的 `IMAGE_SEARCH_ACTIVE_VERSION` 都保持为 `visual-search-v1`。启动过程中禁止下载模型。
+3. 安装并启动 API 与单并发 worker，随后验证带鉴权的 loopback health 仍报告 v1：
 
    ```bash
    sudo install -o root -g root -m 0644 deploy/systemd/melon-visual-search*.service /etc/systemd/system/
@@ -75,16 +77,18 @@ Python OSS SDK V2 的 `VISUAL_SEARCH_OSS_REGION` 使用 `cn-hangzhou` 形式，�
      http://127.0.0.1:8091/internal/health
    ```
 
-6. 从应用目录运行幂等回填：
+4. 从应用目录幂等地排入 v2 回填；这一步只新增版本化任务，不切换线上读路径：
 
    ```bash
-   npm run image-search:backfill -- --version visual-search-v1
+   npm run image-search:backfill -- --version visual-search-v2
    ```
 
-7. 在设置页观察 ready/failed/积压与 worker 心跳。选定一个拥有至少 100 个 ready 索引的真实图库 owner，运行固定基准：
+5. 在设置页和数据库按 owner/version 观察 ready、failed、积压与 worker 心跳。必须等每个符合条件的 preview 都成为 v2 `complete`/`ready`，或逐项调查并记录 terminal failure；不得通过忽略 failed 项宣称回填完成。每个 v2 ready 文档必须有 3-5 个连续索引、HEX 唯一且 coverage 总和在 `1 ± 1e-5` 内的色卡。
+6. 选定一个拥有至少 100 个 v2 ready 索引的真实图库 owner，显式用 v2 运行原图质量门禁：
 
    ```bash
    docker compose -f deploy/compose.visual-search.yaml --profile tools run --rm \
+     -e VISUAL_SEARCH_ACTIVE_VERSION=visual-search-v2 \
      visual-search-cli benchmark \
      --owner-id "$MELON_OWNER_ID" \
      --count 100 \
@@ -92,8 +96,20 @@ Python OSS SDK V2 的 `VISUAL_SEARCH_OSS_REGION` 使用 `cn-hangzhou` 形式，�
      --output /reports/melon-visual-search-production.json
    ```
 
-8. 在同规格生产 ECS 记录搜索 P95、峰值内存和重启/OOM 情况。要求 P95 不超过 8 秒且无 OOM；开发 Mac 的结果不能替代该门禁。确认报告不含图片、对象 key、签名 URL或密钥，并确认临时目录没有超过请求超时仍残留的查询图。
-9. 只有真实图库所有质量门槛、跨 owner 隔离、ECS 性能和内存门槛全部通过后，才在 Next.js 环境设置 `IMAGE_SEARCH_ENABLED=true` 并重启应用。用 JPG、粘贴、裁剪和筛选变更各做一次 smoke test。
+7. 在同规格生产 ECS 运行 10,000 候选配色基准，并记录 CPU、内存、镜像 digest、主机规格、p50 与 p95；报告不得记录查询色值：
+
+   ```bash
+   docker compose -f deploy/compose.visual-search.yaml --profile tools run --rm \
+     visual-search-cli palette-benchmark \
+     --count 10000 \
+     --iterations 30 \
+     --seed 20261022 \
+     --output /reports/melon-palette-search-production.json
+   ```
+
+   原图搜索 P95 必须不超过 8 秒，配色 API P95 必须不超过 1,000 ms，且全程无 OOM。开发 Mac 的结果不能替代 ECS 门禁。确认报告不含图片、对象 key、签名 URL、密钥或查询色值，并确认临时目录没有超过请求超时仍残留的查询图。
+8. 只有回填、真实图库质量、跨 owner 隔离和两项 ECS 性能门禁全部通过后，才把 API/worker 的 `VISUAL_SEARCH_ACTIVE_VERSION` 与 Next.js 的 `IMAGE_SEARCH_ACTIVE_VERSION` **同时**改为 `visual-search-v2`，并在同一个发布窗口重启 API、单 worker 和 Next.js。health 必须报告 v2，三者版本不一致时立即停止发布。
+9. 版本切换确认后才设置现有的 `IMAGE_SEARCH_ENABLED=true` 并重启 Next.js。分别 smoke test 正常图库、JPG/粘贴/裁剪搜图、单色/三色/五色配色搜索、筛选重算、清除恢复以及两种搜索互斥。
 
 任何一步失败都停止上线，不得通过放宽“高概率原图”阈值掩盖召回问题。
 
@@ -112,10 +128,10 @@ API systemd unit 设置 `MemoryMax`、启动退避、private temp 和带 token �
 
 ## 回滚
 
-回滚时先将 Next.js 的 `IMAGE_SEARCH_ENABLED=false` 并重启应用，然后停止两个服务：
+回滚只改配置，不删除索引数据。先将 Next.js 的 `IMAGE_SEARCH_ENABLED=false` 并重启应用，再把 Next.js 的 `IMAGE_SEARCH_ACTIVE_VERSION` 以及 API/worker 的 `VISUAL_SEARCH_ACTIVE_VERSION` 一起改回 `visual-search-v1`，随后重启三者并核对 health：
 
 ```bash
-sudo systemctl stop melon-visual-search-worker.service melon-visual-search.service
+sudo systemctl restart melon-visual-search.service melon-visual-search-worker.service
 ```
 
-回滚不 drop 表、不回退已应用迁移、不删除 ready 索引或 OSS 派生特征。保留数据便于修复后恢复；只有经过单独审核的清理流程才能删除派生对象。文字搜索、上传、下载和普通图库浏览应继续工作。
+回滚不 drop 表、不回退已应用迁移、不删除 v2 palette 行、ready 索引或 OSS 派生特征。保留数据便于修复后再次切换；只有经过单独审核的清理流程才能删除派生对象。文字搜索、上传、下载和普通图库浏览应继续工作。

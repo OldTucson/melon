@@ -20,7 +20,7 @@ from .palette_benchmark import PaletteBenchmarkError, run_palette_benchmark
 from .repository import Repository
 from .search import SearchService
 from .settings import Settings, get_settings
-from .storage import AlibabaOssStorage
+from .storage import AlibabaOssStorage, FeatureStorage, LocalFeatureStorage
 from .worker import (
     CleanupRefusedError,
     IndexWorker,
@@ -119,13 +119,16 @@ def _required_text(value: str | None) -> str:
     return value
 
 
-def _build_storage(settings: Settings) -> AlibabaOssStorage:
-    return AlibabaOssStorage(
+def build_storage(settings: Settings) -> FeatureStorage:
+    remote = AlibabaOssStorage(
         region=_required_text(settings.oss_region),
         bucket=_required_text(settings.oss_bucket),
         endpoint=_required_text(settings.oss_endpoint),
         environment=settings.environment,
     )
+    if settings.feature_storage_dir is None:
+        return remote
+    return LocalFeatureStorage(remote, root=settings.feature_storage_dir)
 
 
 def load_embedding_runtime(
@@ -146,7 +149,7 @@ def load_embedding_runtime(
 def _run_worker(settings: Settings) -> int:
     repository = Repository(_database_url(settings))
     try:
-        storage = _build_storage(settings)
+        storage = build_storage(settings)
         runtime = load_embedding_runtime(settings)
         worker = IndexWorker(
             repository,
@@ -171,7 +174,7 @@ def _run_cleanup(settings: Settings, *, older_than_hours: float) -> int:
         )
         report = cleanup_orphans(
             repository,
-            _build_storage(settings),
+            build_storage(settings),
             index_version=settings.active_version,
             older_than=timedelta(hours=older_than_hours),
             production_database_name=settings.production_database_name,
@@ -201,7 +204,7 @@ def _run_benchmark(
 ) -> int:
     repository = Repository(_database_url(settings))
     try:
-        storage = _build_storage(settings)
+        storage = build_storage(settings)
         service = SearchService(
             repository,
             storage,

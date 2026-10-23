@@ -41,10 +41,11 @@ class Settings(BaseSettings):
     oss_bucket: str | None = None
     oss_endpoint: str | None = None
     internal_token: SecretStr = Field(min_length=32)
-    active_version: str = "visual-search-v1"
+    active_version: str = "visual-search-v2"
     model_path: Path | None = None
     model_sha256: str | None = None
     production_database_name: str | None = None
+    feature_storage_dir: Path | None = None
     temp_dir: Path = Path("/tmp/melon-visual-search")
     max_concurrency: int = Field(default=1, gt=0)
     host: str = "127.0.0.1"
@@ -116,11 +117,18 @@ class Settings(BaseSettings):
             raise ValueError("active version must be lowercase and URL-safe")
         return value
 
-    @field_validator("model_path", "temp_dir", mode="before")
+    @field_validator("model_path", "feature_storage_dir", "temp_dir", mode="before")
     @classmethod
     def validate_path(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
             raise ValueError("path must not be empty")
+        return value
+
+    @field_validator("feature_storage_dir")
+    @classmethod
+    def validate_feature_storage_dir(cls, value: Path | None) -> Path | None:
+        if value is not None and not value.is_absolute():
+            raise ValueError("local feature storage directory must be absolute")
         return value
 
     @field_validator("model_sha256")
@@ -148,6 +156,9 @@ class Settings(BaseSettings):
     def validate_production_contract(self) -> Settings:
         if self.environment != "production":
             return self
+
+        if self.feature_storage_dir is not None:
+            raise ValueError("local feature storage is forbidden in production")
 
         if self.host not in {"127.0.0.1", "::1"}:
             raise ValueError("production host must be 127.0.0.1 or ::1")

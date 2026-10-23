@@ -20,7 +20,9 @@ import { resetDatabase } from "@/test/database";
 import {
   ACTIVE_VISUAL_SEARCH_INDEX_VERSION,
   enqueueVisualSearchIndexJob,
+  getActiveVisualSearchIndexVersion,
   listVisualSearchBackfillCandidates,
+  validateVisualSearchIndexVersion,
 } from "./index-service";
 
 const NOW = new Date("2026-10-20T08:00:00.000Z");
@@ -130,6 +132,13 @@ describe("visual search index service", () => {
   beforeEach(async () => resetDatabase());
   afterAll(async () => closeDatabase());
 
+  it("defaults to v2 while accepting an explicit v1 staged override", () => {
+    expect(getActiveVisualSearchIndexVersion()).toBe("visual-search-v2");
+    expect(validateVisualSearchIndexVersion("visual-search-v1")).toBe(
+      "visual-search-v1",
+    );
+  });
+
   it("enqueues one canonical pending job and reports conflict-driven idempotency", async () => {
     const ownerId = await seedUser("index-job@example.test");
     const { patternId, assetId } = await seedPatternWithPreview({ ownerId });
@@ -165,7 +174,7 @@ describe("visual search index service", () => {
       patternId,
       previewAssetId: assetId,
       previewHash: null,
-      indexVersion: "visual-search-v1",
+      indexVersion: "visual-search-v2",
       status: "pending",
       attemptCount: 0,
       maxAttempts: 5,
@@ -605,7 +614,7 @@ describe("visual search index service", () => {
       .where(eq(visualSearchJobs.patternId, patternId));
     expect(jobs.map((job) => job.indexVersion).sort()).toEqual([
       "visual-search-old",
-      "visual-search-v1",
+      "visual-search-v2",
     ]);
     expect(await db.select().from(visualSearchDocuments)).toEqual([
       expect.objectContaining({

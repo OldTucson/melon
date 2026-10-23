@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -310,6 +313,128 @@ class InMemoryStorage:
             for key, value in sorted(self._objects.items())
             if key.startswith(prefix)
         )
+
+
+class LocalFeatureStorage:
+    """Keep private previews in OSS while persisting dev features locally."""
+
+    def __init__(self, preview_storage: FeatureStorage, *, root: Path) -> None:
+        if not root.is_absolute():
+            raise ValueError("local feature storage root must be absolute")
+        self._preview_storage = preview_storage
+        self._root = root.resolve(strict=False)
+        self._root.mkdir(parents=True, mode=0o700, exist_ok=True)
+        self._staging = self._root / ".staging"
+        self._staging.mkdir(mode=0o700, exist_ok=True)
+
+    def _path(self, key: str) -> Path:
+        return self._root.joinpath(*key.split("/"))
+
+    def read_preview(
+        self,
+        owner_id: UUID,
+        pattern_id: UUID,
+        key: str,
+    ) -> bytes:
+        return self._preview_storage.read_preview(owner_id, pattern_id, key)
+
+    def write_features(
+        self,
+        owner_id: UUID,
+        pattern_id: UUID,
+        index_version: str,
+        preview_hash: str,
+        payload: bytes,
+        *,
+        now: datetime | None = None,
+    ) -> WriteResult:
+        key = build_derived_key(
+            owner_id,
+            pattern_id,
+            index_version,
+            preview_hash,
+        )
+        encoded = _validated_bytes(payload)
+        path = self._path(key)
+        path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        descriptor, staging_name = tempfile.mkstemp(
+            prefix="feature-",
+            suffix=".tmp",
+            dir=self._staging,
+        )
+        staging_path = Path(staging_name)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "wb") as output:
+                descriptor = -1
+                output.write(encoded)
+                output.flush()
+                os.fsync(output.fileno())
+            if now is not None:
+                timestamp = _validated_time(now).timestamp()
+                os.utime(staging_path, (timestamp, timestamp))
+            try:
+                os.link(staging_path, path)
+            except FileExistsError:
+                return WriteResult(key=key, created=False)
+            return WriteResult(key=key, created=True)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            staging_path.unlink(missing_ok=True)
+
+    def read_features(
+        self,
+        owner_id: UUID,
+        pattern_id: UUID,
+        index_version: str,
+        preview_hash: str,
+    ) -> bytes:
+        key = build_derived_key(owner_id, pattern_id, index_version, preview_hash)
+        return self._path(key).read_bytes()
+
+    def delete_features(
+        self,
+        owner_id: UUID,
+        pattern_id: UUID,
+        index_version: str,
+        preview_hash: str,
+    ) -> None:
+        key = build_derived_key(owner_id, pattern_id, index_version, preview_hash)
+        self._path(key).unlink(missing_ok=True)
+
+    def list_features(
+        self,
+        owner_id: UUID,
+        pattern_id: UUID,
+        index_version: str,
+    ) -> tuple[StoredObject, ...]:
+        prefix = derived_prefix(owner_id, pattern_id, index_version)
+        directory = self._path(prefix.removesuffix("/"))
+        if not directory.exists():
+            return ()
+        objects: list[StoredObject] = []
+        for path in sorted(directory.iterdir()):
+            if not path.is_file():
+                raise RuntimeError("INDEX_STORAGE_RESPONSE_INVALID")
+            key = path.relative_to(self._root).as_posix()
+            parsed_owner, parsed_pattern, parsed_version, _ = parse_derived_key(key)
+            if (
+                parsed_owner != owner_id
+                or parsed_pattern != pattern_id
+                or parsed_version != index_version
+            ):
+                raise RuntimeError("INDEX_STORAGE_RESPONSE_INVALID")
+            objects.append(
+                StoredObject(
+                    key=key,
+                    last_modified=datetime.fromtimestamp(
+                        path.stat().st_mtime,
+                        timezone.utc,
+                    ),
+                )
+            )
+        return tuple(objects)
 
 
 # OSS requires this base at runtime; its untyped SDK exposes the base as Any.

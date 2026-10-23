@@ -21,7 +21,7 @@ import {
 } from "./index-admin-service";
 
 const NOW = new Date("2026-10-20T08:00:00.000Z");
-const INDEX_VERSION = "visual-search-v1";
+const INDEX_VERSION = "visual-search-v2";
 
 async function seedUser(email: string) {
   const id = randomUUID();

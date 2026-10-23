@@ -24,7 +24,12 @@ from starlette.formparsers import MultiPartException, MultiPartParser
 from starlette.requests import Request
 
 from .auth import require_internal_token
-from .cli import MODEL_LOCK_PATH, CliConfigurationError, load_embedding_runtime
+from .cli import (
+    MODEL_LOCK_PATH,
+    CliConfigurationError,
+    build_storage,
+    load_embedding_runtime,
+)
 from .image_io import (
     IMAGE_SEARCH_IMAGE_TOO_LARGE,
     IMAGE_SEARCH_INVALID_FILE,
@@ -41,7 +46,6 @@ from .search import (
     SearchUnavailableError,
 )
 from .settings import Settings, get_settings
-from .storage import AlibabaOssStorage
 
 SEARCH_TIMEOUT_SECONDS = 11.0
 UPLOAD_CHUNK_BYTES = 1024 * 1024
@@ -199,12 +203,6 @@ def model_artifact_matches(settings: Settings) -> bool:
     return secrets.compare_digest(digest.hexdigest(), expected_checksum)
 
 
-def _required_text(value: str | None) -> str:
-    if value is None:
-        raise CliConfigurationError()
-    return value
-
-
 @lru_cache(maxsize=1)
 def _get_search_service() -> SearchService:
     settings = get_settings()
@@ -213,12 +211,7 @@ def _get_search_service() -> SearchService:
     repository = Repository(settings.database_url.get_secret_value())
     try:
         repository.require_pgvector_compatible()
-        storage = AlibabaOssStorage(
-            region=_required_text(settings.oss_region),
-            bucket=_required_text(settings.oss_bucket),
-            endpoint=_required_text(settings.oss_endpoint),
-            environment=settings.environment,
-        )
+        storage = build_storage(settings)
         runtime = load_embedding_runtime(settings, lock_path=MODEL_LOCK_PATH)
         return SearchService(
             repository,

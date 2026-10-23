@@ -71,6 +71,43 @@ def make_settings(tmp_path: Path, **overrides: object) -> Settings:
     return Settings(**values)
 
 
+def test_settings_default_to_v2_and_accept_v1_staged_override() -> None:
+    default = Settings(internal_token=INTERNAL_TOKEN)
+    staged = Settings(
+        internal_token=INTERNAL_TOKEN,
+        active_version="visual-search-v1",
+    )
+
+    assert default.active_version == "visual-search-v2"
+    assert staged.active_version == "visual-search-v1"
+
+
+def test_nonproduction_accepts_absolute_local_feature_storage_dir(
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(
+        tmp_path,
+        feature_storage_dir=tmp_path / "features",
+    )
+
+    assert settings.feature_storage_dir == tmp_path / "features"
+
+
+def test_rejects_relative_or_production_local_feature_storage_dir(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(tmp_path, feature_storage_dir=Path("relative/features"))
+
+    with pytest.raises(ValidationError):
+        Settings(
+            **production_settings(
+                tmp_path,
+                feature_storage_dir=tmp_path / "features",
+            )
+        )
+
+
 def production_settings(tmp_path: Path, **overrides: object) -> dict[str, object]:
     model_path = tmp_path / "model.onnx"
     model_path.write_bytes(b"model")
@@ -1714,7 +1751,7 @@ def test_search_service_cold_start_is_single_flight(
 
     monkeypatch.setattr(app_module, "get_settings", lambda: settings)
     monkeypatch.setattr(app_module, "Repository", CountingRepository)
-    monkeypatch.setattr(app_module, "AlibabaOssStorage", lambda **kwargs: object())
+    monkeypatch.setattr(app_module, "build_storage", lambda settings: object())
     monkeypatch.setattr(
         app_module,
         "load_embedding_runtime",
