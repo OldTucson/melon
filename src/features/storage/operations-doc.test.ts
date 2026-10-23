@@ -182,4 +182,55 @@ describe("web systemd operations contract", () => {
       );
     }
   });
+
+  it("documents a recoverable production release and rollback", async () => {
+    const [operations, readme] = await Promise.all([
+      readRepositoryFile("docs/operations/web-production.md"),
+      readRepositoryFile("README.md"),
+    ]);
+
+    expect(operations).toMatch(/Node\.js 24/);
+    expect(operations).toMatch(/用户[\s\S]*`melon`/);
+    expect(operations).toContain("/opt/melon/releases");
+    expect(operations).toContain("/opt/melon/current");
+    expect(operations).toMatch(/root[\s\S]*0600[\s\S]*\/etc\/melon\/web\.env/);
+    expect(operations).toContain(
+      "npm ci --registry=https://registry.npmjs.org",
+    );
+    for (const command of [
+      "npm audit --omit=dev --registry=https://registry.npmjs.org",
+      "npm test",
+      "npm run test:integration",
+      "npm run typecheck",
+      "npm run lint",
+      "npm run build",
+      "npm run test:e2e",
+      "npm run prod:check",
+    ]) {
+      expect(operations).toContain(command);
+    }
+
+    expect(operations).toMatch(/pg_dump[\s\S]*pg_restore/);
+    expect(operations).toMatch(/恢复演练/);
+    expect(operations).toMatch(
+      /IMAGE_SEARCH_ENABLED=false[\s\S]*npm run db:migrate/,
+    );
+    expect(operations).toMatch(/\.next\/static[\s\S]*\.next\/standalone/);
+    expect(operations).toMatch(/public[\s\S]*目录存在/);
+    expect(operations).toContain("npm prune --omit=dev");
+    expect(operations).toContain("systemd-analyze verify");
+    expect(operations).toMatch(/systemctl enable --now[\s\S]*melon-web/);
+    expect(operations).toMatch(/curl[\s\S]*\/api\/health\/live/);
+    expect(operations).toMatch(/curl[\s\S]*\/api\/health\/ready/);
+    expect(operations).toMatch(/TLS[\s\S]*X-Forwarded-For[\s\S]*覆盖/);
+    expect(operations).toMatch(/180 天|六个月/);
+    expect(operations).toMatch(/timer[\s\S]*告警/i);
+    expect(operations).toMatch(/回滚[\s\S]*ln -sfn/);
+    expect(operations).toMatch(/数据库迁移[\s\S]*不回滚/);
+    expect(operations).toMatch(/OSS[\s\S]*RAM[\s\S]*ECS/);
+    expect(operations).toMatch(/100[\s\S]*图片/);
+
+    expect(readme).toContain("docs/operations/web-production.md");
+    expect(readme).toContain("npm run prod:check");
+  });
 });

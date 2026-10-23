@@ -18,6 +18,14 @@ OSS、RAM、CORS、加密与生命周期配置见 [阿里云 OSS 运行配置](d
 
 以图搜图的镜像、模型挂载、systemd、回填、100 图基准、监控与回滚顺序见[以图搜图生产运行手册](docs/operations/visual-search.md)。模型不会在容器启动时下载，API 只能从宿主机 loopback 访问。
 
+主站正式发布、环境预检、RDS 备份恢复、standalone 制品、systemd 定时任务、TLS 代理和回滚流程见[主站生产运行手册](docs/operations/web-production.md)。每次上线前先在目标环境执行：
+
+```bash
+npm run prod:check
+```
+
+该命令必须输出 `Production preflight: PASS`；本地开发配置预期会失败，不能据此声称生产环境已经就绪。
+
 ## 本地启动
 
 安装依赖并启动 PostgreSQL：
@@ -141,5 +149,6 @@ RUN_REAL_OSS_TESTS=1 npm run test:integration -- src/features/storage/oss-adapte
 - [MVP 实施路线图](docs/superpowers/plans/2026-10-08-melon-mvp-roadmap.md)
 - [第一阶段实施计划](docs/superpowers/plans/2026-10-08-melon-01-foundation-library.md)
 - [阿里云 OSS 运行配置](docs/operations/aliyun-oss.md)
+- [主站生产运行手册](docs/operations/web-production.md)
 - [以图搜图生产运行手册](docs/operations/visual-search.md)
 - [以图搜图验证记录](docs/verification/2026-10-20-visual-search.md)
