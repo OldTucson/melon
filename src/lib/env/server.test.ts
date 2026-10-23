@@ -42,6 +42,65 @@ describe("parseServerEnv", () => {
     ).toThrow();
   });
 
+  it("parses optional public legal metadata", () => {
+    const parsed = parseServerEnv({
+      ...validEnv,
+      SITE_OPERATOR_NAME: "  Melon Studio  ",
+      SITE_CONTACT_EMAIL: "privacy@example.test",
+      SITE_LEGAL_EFFECTIVE_DATE: "2026-10-23",
+      ICP_FILING_NUMBER: "  浙ICP备00000000号-1  ",
+    });
+
+    expect(parsed.SITE_OPERATOR_NAME).toBe("Melon Studio");
+    expect(parsed.SITE_CONTACT_EMAIL).toBe("privacy@example.test");
+    expect(parsed.ICP_FILING_NUMBER).toBe("浙ICP备00000000号-1");
+  });
+
+  it("requires the public-security number and URL together", () => {
+    expect(() =>
+      parseServerEnv({
+        ...validEnv,
+        PUBLIC_SECURITY_FILING_NUMBER: "浙公网安备 00000000000000号",
+      }),
+    ).toThrow(/together/i);
+    expect(() =>
+      parseServerEnv({
+        ...validEnv,
+        PUBLIC_SECURITY_FILING_URL:
+          "https://www.beian.gov.cn/portal/registerSystemInfo",
+      }),
+    ).toThrow(/together/i);
+  });
+
+  it.each([
+    ["invalid email", { SITE_CONTACT_EMAIL: "not-an-email" }],
+    ["non-ISO date", { SITE_LEGAL_EFFECTIVE_DATE: "2026/10/23" }],
+    ["invalid calendar date", { SITE_LEGAL_EFFECTIVE_DATE: "2026-02-30" }],
+    [
+      "non-HTTPS filing URL",
+      {
+        PUBLIC_SECURITY_FILING_NUMBER: "浙公网安备 00000000000000号",
+        PUBLIC_SECURITY_FILING_URL:
+          "http://www.beian.gov.cn/portal/registerSystemInfo",
+      },
+    ],
+  ])("rejects invalid public legal metadata: %s", (_name, values) => {
+    expect(() => parseServerEnv({ ...validEnv, ...values })).toThrow();
+  });
+
+  it("normalizes blank optional legal metadata to undefined", () => {
+    const parsed = parseServerEnv({
+      ...validEnv,
+      SITE_OPERATOR_NAME: "   ",
+      SITE_CONTACT_EMAIL: "",
+      ICP_FILING_NUMBER: "  ",
+    });
+
+    expect(parsed.SITE_OPERATOR_NAME).toBeUndefined();
+    expect(parsed.SITE_CONTACT_EMAIL).toBeUndefined();
+    expect(parsed.ICP_FILING_NUMBER).toBeUndefined();
+  });
+
   it.each([
     "not-a-url",
     "http://assets.example.test",

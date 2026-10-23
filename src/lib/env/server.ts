@@ -4,10 +4,42 @@ import { z } from "zod";
 
 import { httpsOriginSchema } from "@/features/storage/validation";
 
+const blankToUndefined = (value: unknown) =>
+  typeof value === "string" && value.trim() === "" ? undefined : value;
+
 const optionalNonBlankString = z.preprocess(
-  (value) =>
-    typeof value === "string" && value.trim() === "" ? undefined : value,
+  blankToUndefined,
   z.string().min(1).optional(),
+);
+
+const optionalTrimmedNonBlankString = z.preprocess(
+  blankToUndefined,
+  z.string().trim().min(1).optional(),
+);
+
+const optionalEmail = z.preprocess(
+  blankToUndefined,
+  z.string().trim().email().optional(),
+);
+
+const optionalIsoDate = z.preprocess(
+  blankToUndefined,
+  z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .refine((value) => {
+      const parsed = new Date(`${value}T00:00:00.000Z`);
+      return (
+        !Number.isNaN(parsed.getTime()) &&
+        parsed.toISOString().slice(0, 10) === value
+      );
+    }, "Date must be a valid ISO calendar date")
+    .optional(),
+);
+
+const optionalHttpsUrl = z.preprocess(
+  blankToUndefined,
+  z.string().trim().url().startsWith("https://").optional(),
 );
 
 const optionalBoolean = z
@@ -43,6 +75,12 @@ const serverEnvSchema = z
     AUTH_SECRET: z.string().min(32),
     AUTH_TRUST_PROXY: optionalBoolean,
     APP_ORIGIN: z.string().url(),
+    SITE_OPERATOR_NAME: optionalTrimmedNonBlankString,
+    SITE_CONTACT_EMAIL: optionalEmail,
+    SITE_LEGAL_EFFECTIVE_DATE: optionalIsoDate,
+    ICP_FILING_NUMBER: optionalTrimmedNonBlankString,
+    PUBLIC_SECURITY_FILING_NUMBER: optionalTrimmedNonBlankString,
+    PUBLIC_SECURITY_FILING_URL: optionalHttpsUrl,
     ALIYUN_OSS_REGION: z.string().min(1),
     ALIYUN_OSS_BUCKET: z
       .string()
@@ -62,6 +100,17 @@ const serverEnvSchema = z
     IMAGE_SEARCH_MODEL_SHA256: optionalNonBlankString,
   })
   .superRefine((value, context) => {
+    if (
+      Boolean(value.PUBLIC_SECURITY_FILING_NUMBER) !==
+      Boolean(value.PUBLIC_SECURITY_FILING_URL)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["PUBLIC_SECURITY_FILING_NUMBER"],
+        message: "Public-security filing number and URL must be provided together",
+      });
+    }
+
     if (
       Boolean(value.ALIBABA_CLOUD_ACCESS_KEY_ID) !==
       Boolean(value.ALIBABA_CLOUD_ACCESS_KEY_SECRET)
