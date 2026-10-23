@@ -1,6 +1,10 @@
 import type { NextConfig } from "next";
 
-import { SECURITY_HEADERS } from "./src/lib/http/security-headers";
+import { createSecurityHeaders } from "./src/lib/http/security-headers";
+
+const securityHeaders = createSecurityHeaders({
+  allowUnsafeEval: process.env.NODE_ENV === "development",
+});
 
 const nextConfig: NextConfig = {
   output: "standalone",
@@ -10,7 +14,7 @@ const nextConfig: NextConfig = {
     return [
       {
         source: "/:path*",
-        headers: [...SECURITY_HEADERS],
+        headers: [...securityHeaders],
       },
     ];
   },

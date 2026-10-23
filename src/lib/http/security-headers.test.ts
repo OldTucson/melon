@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { SECURITY_HEADERS } from "./security-headers";
+import {
+  createSecurityHeaders,
+  SECURITY_HEADERS,
+} from "./security-headers";
 
 describe("SECURITY_HEADERS", () => {
   it("defines the baseline browser security policy", () => {
@@ -25,5 +28,19 @@ describe("SECURITY_HEADERS", () => {
     expect(csp).toContain("img-src 'self' blob: data: https:");
     expect(csp).toContain("connect-src 'self' https:");
     expect(csp).toContain("worker-src 'self' blob:");
+    expect(csp).not.toContain("'unsafe-eval'");
+  });
+
+  it("allows React debugging eval only in the development policy", () => {
+    const headers = Object.fromEntries(
+      createSecurityHeaders({ allowUnsafeEval: true }).map(({ key, value }) => [
+        key,
+        value,
+      ]),
+    );
+
+    expect(headers["Content-Security-Policy"]).toContain(
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+    );
   });
 });
