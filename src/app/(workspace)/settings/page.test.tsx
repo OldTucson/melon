@@ -7,9 +7,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthenticatedThemeProvider } from "@/features/theme/authenticated-theme-provider";
 import { QueryOwnerProvider } from "@/lib/query/provider";
 
-const requireUser = vi.hoisted(() => vi.fn());
+const mocks = vi.hoisted(() => ({
+  requireUser: vi.fn(),
+  getServerEnv: vi.fn(),
+}));
 
-vi.mock("@/features/auth/session", () => ({ requireUser }));
+vi.mock("@/features/auth/session", () => ({ requireUser: mocks.requireUser }));
+vi.mock("@/lib/env/server", () => ({ getServerEnv: mocks.getServerEnv }));
 vi.mock("next-themes", () => ({ useTheme: vi.fn() }));
 
 describe("settings page", () => {
@@ -19,6 +23,15 @@ describe("settings page", () => {
   });
 
   it("loads the current user and renders their server-backed theme", async () => {
+    mocks.getServerEnv.mockReturnValue({
+      SITE_OPERATOR_NAME: "Melon Studio",
+      SITE_CONTACT_EMAIL: "privacy@example.test",
+      SITE_LEGAL_EFFECTIVE_DATE: "2026-10-23",
+      ICP_FILING_NUMBER: "浙ICP备00000000号-1",
+      PUBLIC_SECURITY_FILING_NUMBER: "浙公网安备 00000000000000号",
+      PUBLIC_SECURITY_FILING_URL:
+        "https://www.beian.gov.cn/portal/registerSystemInfo?recordcode=00000000000000",
+    });
     const setTheme = vi.fn();
     vi.mocked(useTheme).mockReturnValue({
       setTheme,
@@ -52,7 +65,7 @@ describe("settings page", () => {
       themePreference: "dark" as const,
       sessionVersion: 0,
     };
-    requireUser.mockResolvedValue(user);
+    mocks.requireUser.mockResolvedValue(user);
     const { default: SettingsPage } = await import("./page");
 
     const client = new QueryClient({
@@ -71,7 +84,7 @@ describe("settings page", () => {
       </AuthenticatedThemeProvider>,
     );
 
-    expect(requireUser).toHaveBeenCalledTimes(1);
+    expect(mocks.requireUser).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("heading", { name: "设置" })).toBeInTheDocument();
     expect(
       await screen.findByRole("heading", { name: "图像搜索索引" }),
@@ -81,5 +94,21 @@ describe("settings page", () => {
     expect(fetch).toHaveBeenCalledWith(
       "/api/authorization-fields?includeArchived=true",
     );
+    expect(
+      screen.getByRole("heading", { name: "法律与备案" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "隐私政策" })).toHaveAttribute(
+      "href",
+      "/privacy",
+    );
+    expect(screen.getByRole("link", { name: "服务协议" })).toHaveAttribute(
+      "href",
+      "/terms",
+    );
+    expect(screen.getByText("Melon Studio")).toBeInTheDocument();
+    expect(screen.getByText("浙ICP备00000000号-1")).toBeInTheDocument();
+    expect(
+      screen.getByText("浙公网安备 00000000000000号"),
+    ).toBeInTheDocument();
   });
 });

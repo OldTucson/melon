@@ -1,10 +1,14 @@
 import { requireUser } from "@/features/auth/session";
 import { AuthorizationFieldSettings } from "@/features/authorizations/field-settings";
 import { ImageSearchIndexSettings } from "@/features/image-search/index-settings";
+import { toPublicLegalConfig } from "@/features/legal/legal-config";
+import { LegalLinks } from "@/features/legal/legal-links";
 import { ThemeControl } from "@/features/theme/theme-control";
+import { getServerEnv } from "@/lib/env/server";
 
 export default async function SettingsPage() {
   await requireUser();
+  const legalConfig = toPublicLegalConfig(getServerEnv());
 
   return (
     <main className="settings-page">
@@ -34,6 +38,16 @@ export default async function SettingsPage() {
           <p>查看当前索引覆盖和后台处理状态。</p>
         </div>
         <ImageSearchIndexSettings />
+      </section>
+      <section
+        className="settings-section"
+        aria-labelledby="legal-settings-title"
+      >
+        <div className="settings-section-label">
+          <h2 id="legal-settings-title">法律与备案</h2>
+          <p>查看服务政策、运营者联系方式与已配置的备案信息。</p>
+        </div>
+        <LegalLinks className="settings-legal-links" config={legalConfig} />
       </section>
     </main>
   );

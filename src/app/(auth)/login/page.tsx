@@ -2,6 +2,9 @@ import { redirect } from "next/navigation";
 
 import { auth } from "@/auth";
 import { loadSessionUser } from "@/features/auth/session";
+import { toPublicLegalConfig } from "@/features/legal/legal-config";
+import { LegalLinks } from "@/features/legal/legal-links";
+import { getServerEnv } from "@/lib/env/server";
 
 import { LoginForm } from "./login-form";
 
@@ -18,6 +21,8 @@ export default async function LoginPage() {
     }
   }
 
+  const legalConfig = toPublicLegalConfig(getServerEnv());
+
   return (
     <main className="auth-shell">
       <section className="auth-panel" aria-labelledby="login-title">
@@ -25,6 +30,7 @@ export default async function LoginPage() {
         <h1 id="login-title">登录</h1>
         <LoginForm />
       </section>
+      <LegalLinks className="auth-legal" config={legalConfig} />
     </main>
   );
 }
