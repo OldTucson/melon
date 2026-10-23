@@ -34,8 +34,12 @@ async function createFolder(page: Page, name: string) {
 }
 
 async function selectSeedPatterns(page: Page) {
-  for (const pattern of E2E_PATTERN_SEEDS.folderWorkflow) {
-    await page.getByRole("checkbox", { name: `选择 ${pattern.name}` }).click();
+  for (const [index, pattern] of E2E_PATTERN_SEEDS.folderWorkflow.entries()) {
+    const checkbox = page.getByRole("checkbox", {
+      name: `选择 ${pattern.name}`,
+    });
+    if (index === 0) await checkbox.click();
+    else await checkbox.click({ modifiers: ["Meta"] });
   }
 }
 

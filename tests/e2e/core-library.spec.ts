@@ -23,24 +23,20 @@ test("uploads, tags, filters, previews, favorites, and downloads", async ({
   let card = page.getByRole("listitem", {
     name: new RegExp(filename.replace(".png", ""), "i"),
   });
-  await expect
-    .poll(async () => {
-      const [inspectorVisible, cardVisible] = await Promise.all([
-        inspectorDialog.isVisible(),
-        card.isVisible(),
-      ]);
-      return inspectorVisible || cardVisible;
+  await expect(card).toBeVisible();
+  await card
+    .getByRole("button", {
+      name: `打开 ${filename.replace(".png", "")} 检查器`,
     })
-    .toBe(true);
+    .click();
+  const nameInput = page.getByLabel("图案名称");
+  await expect(nameInput).toBeVisible();
   const inspectorIsModal = await inspectorDialog.isVisible();
-  if (!inspectorIsModal) await expect(card).toBeVisible();
   if (!inspectorIsModal) {
     await page.getByRole("button", { name: "收起上传队列" }).click();
     await expect(page.getByRole("button", { name: "展开上传队列" })).toHaveAttribute("aria-expanded", "false");
   }
 
-  const nameInput = page.getByLabel("图案名称");
-  await expect(nameInput).toBeVisible();
   await nameInput.fill(patternName);
   await Promise.all([
     page.waitForResponse((response) =>
