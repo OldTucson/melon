@@ -1,0 +1,35 @@
+[Unit]
+Description=Melon web application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=melon
+Group=melon
+EnvironmentFile=/etc/melon/web.env
+Environment=NODE_ENV=production
+Environment=HOSTNAME=127.0.0.1
+Environment=PORT=3000
+WorkingDirectory=/opt/melon/current
+ExecStartPre=/usr/bin/npm run prod:check
+ExecStart=/usr/bin/node /opt/melon/current/.next/standalone/server.js
+ExecStartPost=/bin/sh -ec 'for attempt in $$(seq 1 60); do /usr/bin/curl -fsS http://127.0.0.1:3000/api/health/ready >/dev/null && exit 0; sleep 1; done; exit 1'
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=120s
+TimeoutStopSec=30s
+MemoryMax=2G
+TasksMax=256
+UMask=0077
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

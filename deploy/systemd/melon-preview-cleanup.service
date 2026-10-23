@@ -1,0 +1,22 @@
+[Unit]
+Description=Clean expired Melon manual preview sessions
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=melon
+Group=melon
+EnvironmentFile=/etc/melon/web.env
+Environment=NODE_ENV=production
+WorkingDirectory=/opt/melon/current
+ExecStart=/usr/bin/npm run preview:cleanup
+TimeoutStartSec=4min
+UMask=0077
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true

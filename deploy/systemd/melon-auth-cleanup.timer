@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Melon login rate-limit cleanup daily
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=30m
+Persistent=true
+Unit=melon-auth-cleanup.service
+
+[Install]
+WantedBy=timers.target

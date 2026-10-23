@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Melon trash cleanup daily
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=30m
+Persistent=true
+Unit=melon-trash-cleanup.service
+
+[Install]
+WantedBy=timers.target

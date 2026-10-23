@@ -119,3 +119,67 @@ describe("OSS operations contract", () => {
     expect(timer).toMatch(/Persistent=true/);
   });
 });
+
+describe("web systemd operations contract", () => {
+  it("runs the standalone web service privately and probes readiness", async () => {
+    const webUnit = await readRepositoryFile(
+      "deploy/systemd/melon-web.service",
+    );
+
+    expect(webUnit).toMatch(/User=melon/);
+    expect(webUnit).toMatch(/Group=melon/);
+    expect(webUnit).toMatch(/EnvironmentFile=\/etc\/melon\/web\.env/);
+    expect(webUnit).toMatch(/WorkingDirectory=\/opt\/melon\/current/);
+    expect(webUnit).toMatch(/Environment=HOSTNAME=127\.0\.0\.1/);
+    expect(webUnit).toMatch(/Environment=PORT=3000/);
+    expect(webUnit).toMatch(/ExecStartPre=\/usr\/bin\/npm run prod:check/);
+    expect(webUnit).toMatch(
+      /ExecStart=\/usr\/bin\/node \/opt\/melon\/current\/\.next\/standalone\/server\.js/,
+    );
+    expect(webUnit).toMatch(/ExecStartPost=.*\/api\/health\/ready/);
+    expect(webUnit).toMatch(/Restart=on-failure/);
+    expect(webUnit).toMatch(/NoNewPrivileges=true/);
+    expect(webUnit).toMatch(/ProtectSystem=full/);
+    expect(webUnit).toMatch(/ProtectHome=true/);
+  });
+
+  it("schedules all maintenance commands with hardened one-shot units", async () => {
+    const [previewService, previewTimer, trashService, trashTimer, authService, authTimer] =
+      await Promise.all([
+        readRepositoryFile("deploy/systemd/melon-preview-cleanup.service"),
+        readRepositoryFile("deploy/systemd/melon-preview-cleanup.timer"),
+        readRepositoryFile("deploy/systemd/melon-trash-cleanup.service"),
+        readRepositoryFile("deploy/systemd/melon-trash-cleanup.timer"),
+        readRepositoryFile("deploy/systemd/melon-auth-cleanup.service"),
+        readRepositoryFile("deploy/systemd/melon-auth-cleanup.timer"),
+      ]);
+
+    expect(previewTimer).toMatch(/OnUnitActiveSec=5min/);
+    expect(trashTimer).toMatch(/OnCalendar=daily/);
+    expect(authTimer).toMatch(/OnCalendar=daily/);
+    for (const timer of [previewTimer, trashTimer, authTimer]) {
+      expect(timer).toMatch(/Persistent=true/);
+      expect(timer).toMatch(/WantedBy=timers\.target/);
+    }
+
+    for (const [service, command] of [
+      [previewService, "preview:cleanup"],
+      [trashService, "trash:cleanup"],
+      [authService, "auth:cleanup"],
+    ]) {
+      expect(service).toMatch(/Type=oneshot/);
+      expect(service).toMatch(/User=melon/);
+      expect(service).toMatch(/EnvironmentFile=\/etc\/melon\/web\.env/);
+      expect(service).toMatch(/WorkingDirectory=\/opt\/melon\/current/);
+      expect(service).toContain(`ExecStart=/usr/bin/npm run ${command}`);
+      expect(service).toMatch(/TimeoutStartSec=/);
+      expect(service).toMatch(/PrivateTmp=true/);
+      expect(service).toMatch(/ProtectSystem=full/);
+      expect(service).toMatch(/ProtectHome=true/);
+      expect(service).toMatch(/NoNewPrivileges=true/);
+      expect(service).not.toMatch(
+        /(?:AUTH_SECRET|DATABASE_URL|ACCESS_KEY|INTERNAL_TOKEN)=/,
+      );
+    }
+  });
+});
