@@ -25,6 +25,7 @@
     "trash:cleanup": "node --conditions=react-server --import tsx scripts/cleanup-trash.ts",
     "preview:cleanup": "node --conditions=react-server --import tsx scripts/cleanup-manual-previews.ts",
     "auth:cleanup": "node --conditions=react-server --import tsx scripts/cleanup-auth-rate-limits.ts",
+    "prod:check": "node --conditions=react-server --import tsx scripts/check-production.ts",
     "image-search:backfill": "node --conditions=react-server --import tsx scripts/backfill-image-search.ts"
   },
   "dependencies": {
