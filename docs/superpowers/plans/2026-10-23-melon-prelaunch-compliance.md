@@ -303,4 +303,3 @@ Expected: all commands exit 0; build lists `/privacy` and `/terms` as public rou
 - [ ] **Step 2: Browser smoke at desktop and mobile widths**
 
 Open `/login`, `/privacy`, `/terms`, and `/settings` at 1440×900 and 390×844. Verify no horizontal overflow, no footer/form overlap, readable policy text, keyboard-visible links, and no empty filing placeholders.
-

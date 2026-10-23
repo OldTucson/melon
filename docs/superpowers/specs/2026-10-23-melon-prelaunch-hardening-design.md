@@ -1,6 +1,6 @@
 # Melon 上线前加固设计
 
-日期：2026-10-23  
+日期：2026-10-23
 状态：已确认
 
 ## 背景
@@ -185,4 +185,3 @@ npm run test:e2e
 ```
 
 目标 ECS 仍需额外执行 `systemd-analyze verify`、服务启动、timer、备份恢复、SLB/WAF、OSS/RAM 和视觉检索生产门禁验证；本地 macOS 的静态检查不能替代这些证据。
-

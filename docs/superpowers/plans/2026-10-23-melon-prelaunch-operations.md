@@ -372,4 +372,3 @@ git diff --check origin/main...HEAD
 ```
 
 Expected: only intentional branch commits, a clean worktree, and no whitespace failures.
-
