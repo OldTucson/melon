@@ -94,6 +94,7 @@ const serverEnvSchema = z
     ALIBABA_CLOUD_ACCESS_KEY_ID: optionalNonBlankString,
     ALIBABA_CLOUD_ACCESS_KEY_SECRET: optionalNonBlankString,
     IMAGE_SEARCH_ENABLED: optionalBoolean,
+    IMAGE_SEARCH_RELEASE_APPROVED: optionalBoolean,
     IMAGE_SEARCH_SERVICE_URL: optionalNonBlankString,
     IMAGE_SEARCH_INTERNAL_TOKEN: optionalNonBlankString,
     IMAGE_SEARCH_ACTIVE_VERSION: optionalNonBlankString,
@@ -131,6 +132,18 @@ const serverEnvSchema = z
     }
 
     if (value.IMAGE_SEARCH_ENABLED) {
+      if (
+        value.NODE_ENV === "production" &&
+        !value.IMAGE_SEARCH_RELEASE_APPROVED
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["IMAGE_SEARCH_RELEASE_APPROVED"],
+          message:
+            "Image search release approval is required in production",
+        });
+      }
+
       const required = [
         "IMAGE_SEARCH_SERVICE_URL",
         "IMAGE_SEARCH_INTERNAL_TOKEN",

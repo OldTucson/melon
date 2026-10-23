@@ -227,6 +227,25 @@ describe("parseServerEnv", () => {
     expect(parsed.IMAGE_SEARCH_ENABLED).toBe(true);
   });
 
+  it("requires explicit production approval when image search is enabled", () => {
+    expect(() =>
+      parseServerEnv({
+        ...validEnv,
+        ...enabledImageSearchEnv,
+        NODE_ENV: "production",
+      }),
+    ).toThrow(/release approval/i);
+
+    expect(
+      parseServerEnv({
+        ...validEnv,
+        ...enabledImageSearchEnv,
+        NODE_ENV: "production",
+        IMAGE_SEARCH_RELEASE_APPROVED: "true",
+      }).IMAGE_SEARCH_RELEASE_APPROVED,
+    ).toBe(true);
+  });
+
   it.each([
     "https://127.0.0.1:8091",
     "http://visual-search:8091",
