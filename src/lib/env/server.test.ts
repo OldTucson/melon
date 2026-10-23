@@ -28,6 +28,20 @@ describe("parseServerEnv", () => {
     expect(parseServerEnv(validEnv).ALIYUN_OSS_CNAME).toBe(true);
   });
 
+  it("defaults proxy trust to disabled", () => {
+    expect(parseServerEnv(validEnv).AUTH_TRUST_PROXY).toBe(false);
+  });
+
+  it("enables proxy trust only for the literal true value", () => {
+    expect(
+      parseServerEnv({ ...validEnv, AUTH_TRUST_PROXY: "true" })
+        .AUTH_TRUST_PROXY,
+    ).toBe(true);
+    expect(() =>
+      parseServerEnv({ ...validEnv, AUTH_TRUST_PROXY: "1" }),
+    ).toThrow();
+  });
+
   it.each([
     "not-a-url",
     "http://assets.example.test",

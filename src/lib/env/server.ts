@@ -41,6 +41,7 @@ const serverEnvSchema = z
       .default("development"),
     DATABASE_URL: z.string().url(),
     AUTH_SECRET: z.string().min(32),
+    AUTH_TRUST_PROXY: optionalBoolean,
     APP_ORIGIN: z.string().url(),
     ALIYUN_OSS_REGION: z.string().min(1),
     ALIYUN_OSS_BUCKET: z
