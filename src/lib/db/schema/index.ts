@@ -1,4 +1,5 @@
 export * from "./assets";
+export * from "./auth";
 export * from "./authorizations";
 export * from "./change-log";
 export * from "./folders";

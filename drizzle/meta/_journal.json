@@ -50,6 +50,13 @@
       "when": 1792653400338,
       "tag": "0006_melon_palette_search",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792746306676,
+      "tag": "0007_melon_auth_rate_limits",
+      "breakpoints": true
     }
   ]
 }

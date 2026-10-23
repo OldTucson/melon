@@ -28,6 +28,7 @@ export const resetDatabase = async (
     await database.execute(
       sql.raw(`
         TRUNCATE TABLE
+          "auth_login_rate_limits",
           "visual_search_palette_colors",
           "visual_search_embeddings",
           "visual_search_documents",
