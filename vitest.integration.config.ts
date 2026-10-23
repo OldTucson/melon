@@ -5,6 +5,7 @@ const sharedIntegrationEnv = {
   NODE_ENV: "test" as const,
   DATABASE_URL: "postgres://melon:melon@localhost:55432/melon_test",
   AUTH_SECRET: "test-only-auth-secret-at-least-32-characters",
+  AUTH_TRUST_PROXY: "true",
   APP_ORIGIN: "http://localhost:3000",
 };
 

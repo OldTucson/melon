@@ -24,6 +24,7 @@
     "user:reset-password": "node --conditions=react-server --import tsx scripts/reset-password.ts",
     "trash:cleanup": "node --conditions=react-server --import tsx scripts/cleanup-trash.ts",
     "preview:cleanup": "node --conditions=react-server --import tsx scripts/cleanup-manual-previews.ts",
+    "auth:cleanup": "node --conditions=react-server --import tsx scripts/cleanup-auth-rate-limits.ts",
     "image-search:backfill": "node --conditions=react-server --import tsx scripts/backfill-image-search.ts"
   },
   "dependencies": {
