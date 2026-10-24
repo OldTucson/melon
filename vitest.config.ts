@@ -15,6 +15,7 @@ export default defineConfig({
     setupFiles: ["./src/test/setup.ts"],
     exclude: [
       ...configDefaults.exclude,
+      ".worktrees/**",
       "tests/e2e/**",
       "**/*.integration.test.ts",
     ],

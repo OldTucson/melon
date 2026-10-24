@@ -7,6 +7,7 @@ export default defineConfig([
     ignores: [
       ".next-e2e/**",
       ".venv-visual-search/**",
+      ".worktrees/**",
       "services/visual-search/.venv/**",
     ],
   },
