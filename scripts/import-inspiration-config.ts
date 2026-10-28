@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { lstat, open, rename, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse as parseDotEnv } from "dotenv";
 
 const MAX_CSV_BYTES = 64 * 1024;
 const ENV_NAMES = ["INSPIRATION_ENABLED", "DASHSCOPE_API_KEY", "DASHSCOPE_OPENAI_BASE_URL", "DASHSCOPE_NATIVE_BASE_URL", "DASHSCOPE_WORKSPACE_ID"] as const;
@@ -84,29 +85,83 @@ function envValue(value: string) {
   throw invalid();
 }
 
+type EnvBlock = { text: string; name?: string };
+
+function sameEnv(left: Record<string, string>, right: Record<string, string>) {
+  const names = Object.keys(left);
+  return names.length === Object.keys(right).length &&
+    names.every((name) => Object.hasOwn(right, name) && left[name] === right[name]);
+}
+
+function envBlocks(existing: string): EnvBlock[] {
+  const lines = existing.match(/[^\r\n]*(?:\r\n|\n|\r|$)/g)?.filter(Boolean) ?? [];
+  const blocks: EnvBlock[] = [];
+  const semantic: Record<string, string> = Object.create(null);
+  const withoutEnding = (line: string) => line.replace(/(?:\r\n|\r|\n)$/, "");
+  for (let index = 0; index < lines.length; index++) {
+    let text = lines[index]!;
+    let content = withoutEnding(text);
+    if (/^\s*(?:#.*)?$/.test(content)) { blocks.push({ text }); continue; }
+    // Match dotenv's key grammar and its two assignment forms. Horizontal
+    // whitespace is deliberate: cross-line assignment syntax is unsupported.
+    const assignment = content.match(/^[^\S\r\n]*(?:export[^\S\r\n]+)?([\w.-]+)(?:[^\S\r\n]*=[^\S\r\n]*|:[^\S\r\n]+)([^\r\n]*)$/);
+    if (!assignment) throw invalid();
+    const name = assignment[1]!, value = assignment[2]!;
+    const quote = ['"', "'", "`"].includes(value[0] ?? "") ? value[0] : undefined;
+    if (quote) {
+      let offset = content.length - value.length + 1, closed = false;
+      while (!closed) {
+        let backslashes = 0;
+        for (let cursor = offset; cursor < content.length; cursor++) {
+          const char = content[cursor]!;
+          if (char === quote && backslashes % 2 === 0) {
+            if (!/^[^\S\r\n]*(?:#.*)?$/.test(content.slice(cursor + 1))) throw invalid();
+            closed = true;
+            break;
+          }
+          backslashes = char === "\\" ? backslashes + 1 : 0;
+        }
+        if (!closed) {
+          if (++index >= lines.length) throw invalid();
+          const next = lines[index]!;
+          text += next;
+          content = withoutEnding(next);
+          offset = 0;
+        }
+      }
+    }
+    // Let the installed dependency own value semantics. A block must parse as
+    // exactly its lexical assignment, and the complete file must agree too.
+    const parsed = parseDotEnv(text);
+    if (Object.keys(parsed).length !== 1 || !Object.hasOwn(parsed, name)) throw invalid();
+    semantic[name] = parsed[name]!;
+    blocks.push({ text, name });
+  }
+  if (!sameEnv(semantic, parseDotEnv(existing))) throw invalid();
+  return blocks;
+}
+
 export function upsertEnv(existing: string, values: InspirationConfig): string {
   const newline = existing.includes("\r\n") ? "\r\n" : "\n";
   const pending = new Set<string>(ENV_NAMES);
-  const lines = existing.match(/[^\r\n]*(?:\r\n|\n|\r|$)/g)?.filter(Boolean) ?? [];
+  const blocks = envBlocks(existing);
   let result = "";
-  for (let index = 0; index < lines.length; index++) {
-    let block = lines[index]!;
-    const assignment = block.match(/^\s*(?:export\s+)?([A-Za-z_][\w]*)\s*=\s*([^\r\n]*)/);
-    const value = assignment?.[2] ?? "";
-    const quote = ['"', "'", "`"].includes(value[0] ?? "") ? value[0]! : undefined;
-    if (quote) {
-      // Treat multiline assignments as one block, so their contents cannot be
-      // mistaken for independent settings that should be replaced.
-      const closed = () => new RegExp(`(?<!\\\\)${quote}`).test(block.slice(block.indexOf(quote) + 1));
-      while (!closed() && index + 1 < lines.length) block += lines[++index]!;
-    }
-    const name = assignment?.[1];
+  for (const { text, name } of blocks) {
     if (name && ENV_NAMES.includes(name as (typeof ENV_NAMES)[number])) {
       if (pending.delete(name)) result += `${name}=${envValue(values[name as keyof InspirationConfig])}${newline}`;
-    } else result += block;
+    } else result += text;
   }
   if (pending.size && result && !/[\r\n]$/.test(result)) result += newline;
   for (const name of ENV_NAMES) if (pending.has(name)) result += `${name}=${envValue(values[name])}${newline}`;
+
+  const before = parseDotEnv(existing), after = parseDotEnv(result);
+  const updatedBlocks = envBlocks(result);
+  for (const name of ENV_NAMES) {
+    if (after[name] !== values[name] || updatedBlocks.filter((block) => block.name === name).length !== 1) throw invalid();
+    delete before[name];
+    delete after[name];
+  }
+  if (!sameEnv(before, after)) throw invalid();
   return result;
 }
 

@@ -2,7 +2,9 @@ import path from "node:path";
 import react from "@vitejs/plugin-react";
 import { configDefaults, defineConfig } from "vitest/config";
 
+// Real-service tests load their explicitly allowed local settings only under opt-in flags.
 export default defineConfig({
+  envDir: false,
   plugins: [react()],
   resolve: {
     alias: {

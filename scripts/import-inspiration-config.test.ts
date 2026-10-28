@@ -148,3 +148,58 @@ describe("inspiration CSV import", () => {
     expect(readdirSync(dir).sort()).toEqual([".env.local", "input.csv"]);
   });
 });
+
+describe("dotenv lexical safety regressions", () => {
+  function assertSafeUpdate(existing: string) {
+    const updated = upsertEnv(existing, parseInspirationConfigCsv(csv));
+    const before = parseEnv(existing), after = parseEnv(updated);
+    expect(after.DASHSCOPE_API_KEY).toBe(secret);
+    for (const [name, value] of Object.entries(before)) {
+      if (name === "INSPIRATION_ENABLED" || name.startsWith("DASHSCOPE_")) continue;
+      expect(after[name]).toBe(value);
+      expect(after[name]).not.toContain(secret);
+    }
+    return updated;
+  }
+  it("keeps a colon-assigned public multiline value byte-identical", () => {
+    const banner = 'NEXT_PUBLIC_BANNER: "intro\nDASHSCOPE_API_KEY=placeholder\nend"\n';
+    expect(assertSafeUpdate(banner).startsWith(banner)).toBe(true);
+  });
+  it("replaces equals, colon and export-colon target duplicates exactly once", () => {
+    const updated = assertSafeUpdate('DASHSCOPE_API_KEY=old\nDASHSCOPE_API_KEY: stale\nexport DASHSCOPE_API_KEY: exported\nKEEP=yes\n');
+    expect(updated).not.toMatch(/old|stale|exported/);
+    expect(updated.match(/^DASHSCOPE_API_KEY=sk-test-secret\r?$/gm)).toHaveLength(1);
+    expect(updated.indexOf(`DASHSCOPE_API_KEY=${secret}`)).toBeLessThan(updated.indexOf("KEEP=yes"));
+  });
+  it.each(["public.banner", "public-banner", "1PUBLIC", ".PUBLIC", "-PUBLIC"])("protects multiline values under dotenv key %s", (name) => {
+    const existing = `${name}: \`intro\nDASHSCOPE_API_KEY=placeholder\nend\`\n`;
+    expect(assertSafeUpdate(existing).startsWith(existing)).toBe(true);
+  });
+  it.each(['"', "'", "`"])("protects escaped %s quotes and an even backslash closing boundary", (quote) => {
+    const odd = `NEXT_PUBLIC_ODD=${quote}intro\\${quote}\nDASHSCOPE_API_KEY=placeholder\nend${quote}\n`;
+    const even = `NEXT_PUBLIC_EVEN=${quote}ends\\\\${quote}\nKEEP=yes\n`;
+    const existing = odd + even + "DASHSCOPE_API_KEY=stale\n";
+    const updated = assertSafeUpdate(existing);
+    expect(updated.startsWith(odd + even)).toBe(true);
+    expect(updated).not.toContain("stale");
+    expect(updated.match(/^DASHSCOPE_API_KEY=sk-test-secret\r?$/gm)).toHaveLength(1);
+  });
+  it("preserves CRLF bytes around colon multiline blocks and duplicate removal", () => {
+    const block = 'NEXT_PUBLIC_BANNER: "intro\r\nDASHSCOPE_API_KEY=placeholder\r\nend"\r\n# unchanged\r\n';
+    const updated = assertSafeUpdate(block + 'DASHSCOPE_API_KEY: stale\r\nexport DASHSCOPE_API_KEY=old\r\nKEEP=yes\r\n');
+    expect(updated.startsWith(block)).toBe(true);
+    expect(updated.replaceAll("\r\n", "")).not.toContain("\n");
+    expect(updated.match(/^DASHSCOPE_API_KEY=sk-test-secret\r?$/gm)).toHaveLength(1);
+  });
+  it.each(['DASHSCOPE_API_KEY="old\nDATABASE_URL=postgres://example\nKEEP=yes', 'NEXT_PUBLIC_BANNER: "intro\nDATABASE_URL=postgres://example\nKEEP=yes', "OTHER='intro\nKEEP=yes", 'OTHER=`intro\nKEEP=yes', 'OTHER="closed" trailing\nKEEP=yes'])
+  ("rejects malformed or unterminated quotes without changing the target %#", (existing) => {
+    expect(() => upsertEnv(existing, parseInspirationConfigCsv(csv))).toThrow();
+    const dir = sandbox(); const target = path.join(dir, ".env.local");
+    writeFileSync(target, existing);
+    const result = cli(dir);
+    expect(result.status).toBe(1); expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("Configuration write error\n");
+    expect(readFileSync(target, "utf8")).toBe(existing);
+    expect(readdirSync(dir).sort()).toEqual([".env.local", "input.csv"]);
+  });
+});
