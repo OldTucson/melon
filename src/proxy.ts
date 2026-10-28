@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 
-const protectedPath = /^\/(library|dashboard|trash|settings)(?:\/|$)/;
+const protectedPath =
+  /^\/(library|dashboard|trash|settings|inspiration)(?:\/|$)/;
 const sessionCookieNames = [
   "authjs.session-token",
   "__Secure-authjs.session-token",
@@ -31,5 +32,6 @@ export const config = {
     "/dashboard/:path*",
     "/trash/:path*",
     "/settings/:path*",
+    "/inspiration/:path*",
   ],
 };

@@ -3,6 +3,7 @@ export * from "./auth";
 export * from "./authorizations";
 export * from "./change-log";
 export * from "./folders";
+export * from "./inspiration-analyses";
 export * from "./operations";
 export * from "./patterns";
 export * from "./tags";

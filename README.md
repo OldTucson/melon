@@ -67,6 +67,28 @@ uv run --project services/visual-search melon-visual-search worker
 
 先保持 `IMAGE_SEARCH_ENABLED=false` 完成迁移、模型校验、worker 回填和质量基准，再按运行手册启用。Next.js 的 `IMAGE_SEARCH_INTERNAL_TOKEN` 与 Python 的 `VISUAL_SEARCH_INTERNAL_TOKEN` 必须相同。
 
+## 设计灵感分析
+
+登录后访问 `/inspiration`，提交 5–1000 字的设计需求。分析先检索近 30 天公开网络信号，再生成带来源的市场观察、六个设计维度、参考款式与 3–5 个灵感方向。内容不是官方销量或销售排名；公开资料不足时应按页面提示判断证据边界。
+
+功能默认关闭。从阿里云 Model Studio 导出的业务空间 CSV 在本机执行安全配置：
+
+```bash
+npm run inspiration:configure -- '/absolute/path/to/model-studio-export.csv'
+```
+
+命令只接受一个 CSV 路径，验证同一工作空间的 HTTPS 接口后，以 0600 权限原子更新被 Git 忽略的 `.env.local`，保留其他本地设置。目标文件不能是符号链接，项目目录须归当前用户所有且不可由组或其他用户写入。成功输出只有固定提示，不打印密钥或接口地址。CSV 和 `.env.local` 均含凭据，不得提交、分享或粘贴到日志；API key 仅用于服务端，不能设置为 `NEXT_PUBLIC_*`。
+
+导入器采用保守的环境变量规则：非目标配置中的未转义 `$NAME`、`${NAME}`、默认值和嵌套展开都会被拒绝，即使当前引用看似无害；请先在本机改成明确的字面值。注释和被 `\$` 转义的字面 dollar 可保留，其他变量不能再次引用它们。畸形引号、循环或不支持的展开，以及超过 1 MiB 的配置值也会拒绝导入，原文件保持不变。
+
+真实 Qwen smoke 会调用付费服务，使用固定中文需求验证实际 provider 与来源引用，不输出请求、响应或凭据：
+
+```bash
+npm run test:inspiration:real
+```
+
+只有 `RUN_REAL_INSPIRATION_TESTS=1` 才会加载 `.env.local` 中明确列出的灵感配置并访问外部服务；普通 `npm test` 跳过此测试。浏览器中可重新打开历史分析，并创建、撤销公开分享；分享链接持有者无需登录即可访问，撤销后旧链接立即失效。
+
 ## 文件夹与回收站
 
 文件夹和图案都只属于创建它们的私有账号，服务端不会接受其他账号的文件夹、图案或回收批次 ID。每个图案最多归属一个文件夹；`folder_id` 为 `NULL` 的图案显示在“未分类”。移动图案或重命名文件夹只修改 PostgreSQL 中的归属或名称，不移动 OSS 对象，对象 key 在整个生命周期内保持稳定。

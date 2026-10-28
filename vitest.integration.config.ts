@@ -25,7 +25,9 @@ export function buildIntegrationTestEnv(runRealOssTests: boolean) {
   };
 }
 
+// Real-service tests load their explicitly allowed local settings only under opt-in flags.
 export default defineConfig({
+  envDir: false,
   resolve: {
     alias: {
       "@": path.resolve(process.cwd(), "src"),

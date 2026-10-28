@@ -44,6 +44,7 @@ export const resetDatabase = async (
           "tags",
           "patterns",
           "folders",
+          "inspiration_analyses",
           "users"
         RESTART IDENTITY CASCADE
       `),
