@@ -536,7 +536,9 @@ export function InspirationView() {
                       loading={visuals.isPending}
                       error={
                         visuals.isError ||
-                        (selectedVisualMutation && refreshVisuals.isError)
+                        (selectedVisualMutation &&
+                          refreshVisuals.isError &&
+                          visuals.data === undefined)
                       }
                       refreshing={
                         selectedVisualMutation && refreshVisuals.isPending

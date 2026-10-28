@@ -189,7 +189,7 @@ describe("inspiration library matcher", () => {
     expect(JSON.stringify(matched)).not.toMatch(/ownerId|objectKey|distance/i);
   });
 
-  it("caps the combined result at the board contract limit", async () => {
+  it("queries every direction and fairly caps the combined board result", async () => {
     const ownerId = randomUUID();
     const search = vi.fn(async (input: PaletteSearchInput) => ({
       query: { colors: [...input.colors] },
@@ -212,10 +212,20 @@ describe("inspiration library matcher", () => {
     );
 
     expect(matched.assets).toHaveLength(20);
-    expect(matched.assets.at(-1)).toMatchObject({
-      ordinal: 19,
-      directionIndex: 3,
-    });
+    expect(search).toHaveBeenCalledTimes(6);
+    expect(
+      new Set(matched.assets.map(({ directionIndex }) => directionIndex)),
+    ).toEqual(new Set([null, 0, 1, 2, 3, 4]));
+    expect(
+      matched.assets.filter(({ directionIndex }) => directionIndex === null),
+    ).toHaveLength(8);
+    expect(
+      matched.assets.reduce<Record<string, number>>((counts, asset) => {
+        const key = String(asset.directionIndex);
+        counts[key] = (counts[key] ?? 0) + 1;
+        return counts;
+      }, {}),
+    ).toEqual({ null: 8, "0": 3, "1": 3, "2": 2, "3": 2, "4": 2 });
   });
 
   it("returns an empty warning without searching when the report has no exact colors", async () => {
@@ -256,6 +266,54 @@ describe("inspiration library matcher", () => {
     );
 
     expect(matched).toEqual({ assets: [], warnings: [warning] });
+  });
+
+  it("continues with direction palettes after a recoverable overview failure", async () => {
+    const ownerId = randomUUID();
+    let callIndex = 0;
+    const search = vi.fn(async (input: PaletteSearchInput) => {
+      callIndex += 1;
+      if (callIndex === 1) {
+        throw new AppError(
+          "PALETTE_SEARCH_TIMEOUT",
+          503,
+          "overview timed out",
+        );
+      }
+      return {
+        query: { colors: [...input.colors] },
+        items: Array.from({ length: 3 }, (_, index) =>
+          pattern(ownerId, { name: `方向 ${callIndex - 1}-${index}` }),
+        ),
+        timing: { totalMs: 1 },
+      };
+    });
+
+    const matched = await matchLibraryPatterns(
+      {
+        ownerId,
+        result: withPalettes(
+          ["#112233"],
+          [["#223344"], ["#334455"], []],
+        ),
+        signal: new AbortController().signal,
+      },
+      { isEnabled: () => true, search },
+    );
+
+    expect(search).toHaveBeenCalledTimes(3);
+    expect(matched.assets).toHaveLength(6);
+    expect(matched.assets.map(({ directionIndex }) => directionIndex)).toEqual([
+      0,
+      0,
+      0,
+      1,
+      1,
+      1,
+    ]);
+    expect(matched.warnings).toEqual([
+      "INSPIRATION_LIBRARY_MATCH_UNAVAILABLE",
+    ]);
   });
 
   it("honors the image-search release gate", async () => {

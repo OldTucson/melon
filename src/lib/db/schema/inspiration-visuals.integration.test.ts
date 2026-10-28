@@ -352,4 +352,41 @@ describe("inspiration visual schema", () => {
     await db.delete(inspirationAnalyses).where(eq(inspirationAnalyses.id, analysisA));
     expect(await db.select().from(inspirationVisualJobs)).toHaveLength(0);
   });
+
+  it("keeps a generated concept tombstone after its saved pattern is deleted", async () => {
+    const saveOperationId = randomUUID();
+    const [job] = await insertJob({
+      kind: "concept_image",
+      directionIndex: 0,
+      status: "completed",
+      completedAt: new Date(),
+    });
+    await db.insert(inspirationVisualAssets).values({
+      id: randomUUID(),
+      ownerId: ownerA,
+      analysisId: analysisA,
+      jobId: job!.id,
+      kind: "generated_concept",
+      ordinal: 0,
+      directionIndex: 0,
+      title: "自然通勤概念",
+      altText: "自然通勤女装概念图",
+      savedPatternId: patternA,
+      saveOperationId,
+      objectKey: "inspiration/concepts/saved.webp",
+      contentType: "image/webp",
+      width: 1200,
+      height: 900,
+    });
+
+    await expect(
+      db.delete(patterns).where(eq(patterns.id, patternA)),
+    ).resolves.toBeDefined();
+    expect(await db.select().from(inspirationVisualAssets)).toEqual([
+      expect.objectContaining({
+        savedPatternId: null,
+        saveOperationId,
+      }),
+    ]);
+  });
 });

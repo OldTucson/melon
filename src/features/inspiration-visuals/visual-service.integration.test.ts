@@ -257,6 +257,7 @@ describe("inspiration visual service", () => {
       warnings: ["INSPIRATION_WEB_VISUALS_UNAVAILABLE"],
     });
     expect(board.refreshJob).toBeNull();
+    expect(board.refreshAvailable).toBe(false);
     expect(board.libraryMatches).toEqual([
       {
         id: expect.any(String),
@@ -368,6 +369,56 @@ describe("inspiration visual service", () => {
     }
     await request;
   });
+
+  it.each(["trashed", "missing preview"] as const)(
+    "rejects a refresh whose matched pattern becomes %s before completion",
+    async (failure) => {
+      const previous = await seedPattern({ name: "旧图案" });
+      const candidatePattern = await seedPattern({ name: "失效图案" });
+      const active = await seedJob();
+      await seedVisualAsset(active.id, previous.patternId);
+      const started = deferred();
+      const release = deferred();
+      const request = create(
+        randomUUID(),
+        vi.fn(async () => {
+          started.resolve();
+          await release.promise;
+          return {
+            assets: [candidate(candidatePattern.patternId)],
+            warnings: [],
+          };
+        }),
+      );
+
+      await started.promise;
+      if (failure === "trashed") {
+        await db
+          .update(patterns)
+          .set({ status: "trashed", trashedAt: new Date() })
+          .where(eq(patterns.id, candidatePattern.patternId));
+      } else {
+        await db
+          .delete(storageAssets)
+          .where(eq(storageAssets.id, candidatePattern.assetId));
+      }
+      release.resolve();
+
+      await expect(request).rejects.toMatchObject({
+        code: "INSPIRATION_VISUALS_EMPTY",
+        status: 503,
+      });
+      const board = await getInspirationVisualBoard({ ownerId, analysisId });
+      expect(board.activeJob?.id).toBe(active.id);
+      expect(board.libraryMatches.map(({ patternId }) => patternId)).toEqual([
+        previous.patternId,
+      ]);
+      expect(board.refreshJob).toMatchObject({
+        status: "failed",
+        errorCode: "INSPIRATION_VISUALS_EMPTY",
+      });
+    },
+  );
 
   it("repairs stale pending research jobs as interrupted", async () => {
     const stale = new Date(Date.now() - 4 * 60_000);

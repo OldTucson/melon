@@ -131,12 +131,12 @@ export async function matchLibraryPatterns(
   const search = dependencies.search ?? searchPatternsByPalette;
   const createRequestId = dependencies.createRequestId ?? randomUUID;
   const filters = imageSearchFiltersSchema.parse({});
-  const assets: LibraryMatchCandidate[] = [];
+  const matches: Array<
+    Array<Omit<LibraryMatchCandidate, "ordinal">>
+  > = [];
   const warnings = new Set<VisualWarning>();
 
   for (const group of groups) {
-    if (assets.length === MAX_TOTAL_MATCHES) break;
-
     let items: PatternItem[];
     try {
       const response = await search({
@@ -152,29 +152,54 @@ export async function matchLibraryPatterns(
       const warning = paletteWarning(error);
       if (warning === undefined) throw error;
       warnings.add(warning);
-      break;
+      matches.push([]);
+      continue;
     }
 
     const seen = new Set<string>();
-    let accepted = 0;
+    const accepted: Array<Omit<LibraryMatchCandidate, "ordinal">> = [];
     for (const item of items) {
-      if (accepted === group.limit || assets.length === MAX_TOTAL_MATCHES) break;
+      if (accepted.length === group.limit) break;
       if (seen.has(item.id) || !isUsablePattern(item, input.ownerId)) continue;
       seen.add(item.id);
 
       const title = item.name.trim();
       if (title.length === 0) continue;
-      assets.push({
+      accepted.push({
         kind: "library_match",
-        ordinal: assets.length,
         directionIndex: group.directionIndex,
         title,
         altText: `${title} 的图库图案预览`,
         patternId: item.id,
       });
-      accepted += 1;
     }
+    matches.push(accepted);
   }
+
+  const overview =
+    groups[0]?.directionIndex === null ? (matches.shift() ?? []) : [];
+  if (groups[0]?.directionIndex === null) groups.shift();
+  const selected = overview.slice(0, MAX_OVERVIEW_MATCHES);
+  const quotas = Array(matches.length).fill(0) as number[];
+  let remaining = MAX_TOTAL_MATCHES - selected.length;
+  let round = 0;
+  while (remaining > 0) {
+    let allocated = false;
+    for (let index = 0; index < matches.length && remaining > 0; index += 1) {
+      if (matches[index]![round] === undefined) continue;
+      quotas[index] = (quotas[index] ?? 0) + 1;
+      remaining -= 1;
+      allocated = true;
+    }
+    if (!allocated) break;
+    round += 1;
+  }
+  selected.push(
+    ...matches.flatMap((group, index) =>
+      group.slice(0, quotas[index] ?? 0),
+    ),
+  );
+  const assets = selected.map((asset, ordinal) => ({ ...asset, ordinal }));
 
   if (assets.length === 0 && warnings.size === 0) {
     warnings.add("INSPIRATION_LIBRARY_MATCH_EMPTY");

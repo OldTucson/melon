@@ -199,6 +199,7 @@ const conceptJobSchema = inspirationVisualJobDtoSchema.refine(
 
 export const inspirationVisualBoardDtoSchema = z
   .object({
+    refreshAvailable: z.boolean(),
     activeJob: activeResearchJobSchema.nullable(),
     refreshJob: refreshResearchJobSchema.nullable(),
     webEvidence: z.array(webEvidenceAssetDtoSchema).max(8),

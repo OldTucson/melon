@@ -248,7 +248,7 @@ export const inspirationVisualAssets = pgTable(
     ),
     check(
       "inspiration_visual_assets_save_state_check",
-      sql`(${table.savedPatternId} is null) = (${table.saveOperationId} is null)`,
+      sql`${table.savedPatternId} is null or ${table.saveOperationId} is not null`,
     ),
     check(
       "inspiration_visual_assets_kind_check",

@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-img-element -- asset routes require the browser session */
 import { ExternalLink, ImagePlus, RefreshCw } from "lucide-react";
 
 import type {
@@ -96,7 +97,7 @@ export function InspirationVisualBoard({
           <p className={styles.sectionKicker}>VISUAL EVIDENCE</p>
           <h3>视觉摘要</h3>
         </div>
-        {onRefresh && !loading && (
+        {onRefresh && board?.refreshAvailable && !loading && (
           <button
             className={styles.button}
             type="button"

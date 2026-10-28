@@ -53,6 +53,7 @@ export const generatedConceptAssetFixture = {
 };
 
 export const visualBoardFixture = {
+  refreshAvailable: true,
   activeJob: visualJobFixture,
   refreshJob: null,
   webEvidence: [webEvidenceAssetFixture],

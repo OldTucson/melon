@@ -1,0 +1,2 @@
+ALTER TABLE "inspiration_visual_assets" DROP CONSTRAINT "inspiration_visual_assets_save_state_check";--> statement-breakpoint
+ALTER TABLE "inspiration_visual_assets" ADD CONSTRAINT "inspiration_visual_assets_save_state_check" CHECK ("inspiration_visual_assets"."saved_pattern_id" is null or "inspiration_visual_assets"."save_operation_id" is not null);

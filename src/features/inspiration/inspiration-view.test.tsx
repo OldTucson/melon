@@ -73,6 +73,7 @@ const failed: InspirationDetailDto = {
 };
 const emptyVisualBoard: InspirationVisualBoardDto =
   inspirationVisualBoardDtoSchema.parse({
+    refreshAvailable: true,
     activeJob: null,
     refreshJob: null,
     webEvidence: [],
@@ -371,6 +372,25 @@ describe("inspiration workspace", () => {
     expect(firstOperation).toMatch(/^[\da-f-]{36}$/);
     expect(secondOperation).toMatch(/^[\da-f-]{36}$/);
     expect(secondOperation).not.toBe(firstOperation);
+  });
+
+  it("hides visual refresh when the server reports that it is unavailable", async () => {
+    record = completed;
+    visualMocks.get.mockResolvedValue({
+      ...emptyVisualBoard,
+      refreshAvailable: false,
+    });
+    renderWorkspace();
+
+    expect(
+      await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: /视觉素材/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "新建调研" }),
+    ).toBeEnabled();
   });
 
   it("keeps the active library mosaic while a visual refresh is pending", async () => {

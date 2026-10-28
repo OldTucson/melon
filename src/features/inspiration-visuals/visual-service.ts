@@ -12,6 +12,7 @@ import {
   requireOwnedInspiration,
 } from "@/features/inspiration/analysis-service";
 import { AppError } from "@/lib/http/app-error";
+import { getServerEnv } from "@/lib/env/server";
 
 import {
   inspirationVisualBoardDtoSchema,
@@ -129,6 +130,7 @@ async function assembleBoard(ownerId: string, analysisId: string) {
     : [];
 
   return parseInspirationStored(inspirationVisualBoardDtoSchema, {
+    refreshAvailable: getServerEnv().IMAGE_SEARCH_ENABLED,
     activeJob: active ? toJobDto(active) : null,
     refreshJob: refresh ? toJobDto(refresh) : null,
     webEvidence: visible
@@ -317,9 +319,11 @@ export async function createResearchVisuals(
     );
   }
 
-  let completed: repository.VisualJobRow | undefined;
+  let completion: Awaited<
+    ReturnType<typeof repository.completeResearchJob>
+  >;
   try {
-    completed = await repository.completeResearchJob(
+    completion = await repository.completeResearchJob(
       parsed.ownerId,
       job.id,
       matched.assets,
@@ -336,9 +340,12 @@ export async function createResearchVisuals(
       now(),
     );
   }
-  if (!completed) {
+  if (!completion) {
     await requireOwnedInspiration(parsed.ownerId, parsed.analysisId);
     throw visualBusy();
+  }
+  if (completion.state === "empty") {
+    throw visualFailure("INSPIRATION_VISUALS_EMPTY", completion.job.id);
   }
 
   return assembleBoard(parsed.ownerId, parsed.analysisId);

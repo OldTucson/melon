@@ -8,6 +8,7 @@ import {
   desc,
   eq,
   getTableColumns,
+  inArray,
   isNotNull,
   lt,
   ne,
@@ -136,6 +137,86 @@ export async function completeResearchJob(
   completedAt: Date,
 ) {
   return db.transaction(async (tx) => {
+    const libraryPatternIds = [
+      ...new Set(
+        assets.flatMap((asset) =>
+          asset.kind === "library_match" && asset.patternId
+            ? [asset.patternId]
+            : [],
+        ),
+      ),
+    ].sort();
+    const eligiblePatternIds = new Set<string>();
+    if (libraryPatternIds.length > 0) {
+      const lockedPatterns = await tx
+        .select({
+          id: patterns.id,
+          status: patterns.status,
+          trashedAt: patterns.trashedAt,
+          deletedAt: patterns.deletedAt,
+        })
+        .from(patterns)
+        .where(
+          and(
+            eq(patterns.ownerId, ownerId),
+            inArray(patterns.id, libraryPatternIds),
+          ),
+        )
+        .orderBy(asc(patterns.id))
+        .for("update");
+      const usablePatternIds = lockedPatterns
+        .filter(
+          (pattern) =>
+            pattern.status === "ready" &&
+            pattern.trashedAt === null &&
+            pattern.deletedAt === null,
+        )
+        .map(({ id }) => id);
+      if (usablePatternIds.length > 0) {
+        const imageAssets = await tx
+          .select({ patternId: storageAssets.patternId })
+          .from(storageAssets)
+          .where(
+            and(
+              eq(storageAssets.ownerId, ownerId),
+              inArray(storageAssets.patternId, usablePatternIds),
+              inArray(storageAssets.role, ["thumbnail", "preview"]),
+            ),
+          )
+          .orderBy(asc(storageAssets.patternId), asc(storageAssets.id))
+          .for("update");
+        for (const asset of imageAssets) {
+          eligiblePatternIds.add(asset.patternId);
+        }
+      }
+    }
+    const eligibleAssets = assets.filter(
+      (asset) =>
+        asset.kind !== "library_match" ||
+        (typeof asset.patternId === "string" &&
+          eligiblePatternIds.has(asset.patternId)),
+    );
+    if (eligibleAssets.length === 0) {
+      const [failed] = await tx
+        .update(visualJobs)
+        .set({
+          status: "failed",
+          warnings: [...warnings],
+          errorCode: "INSPIRATION_VISUALS_EMPTY",
+          completedAt,
+          updatedAt: completedAt,
+        })
+        .where(
+          and(
+            ownedJob(ownerId, jobId),
+            eq(visualJobs.kind, "research_visuals"),
+            eq(visualJobs.status, "pending"),
+          ),
+        )
+        .returning();
+      return failed ? { state: "empty" as const, job: failed } : undefined;
+    }
+
     const [job] = await tx
       .update(visualJobs)
       .set({
@@ -154,9 +235,9 @@ export async function completeResearchJob(
       .returning();
     if (!job) return undefined;
 
-    if (assets.length > 0) {
+    if (eligibleAssets.length > 0) {
       await tx.insert(visualAssets).values(
-        assets.map((asset) => ({
+        eligibleAssets.map((asset) => ({
           ...asset,
           id: randomUUID(),
           ownerId: job.ownerId,
@@ -166,7 +247,7 @@ export async function completeResearchJob(
         })),
       );
     }
-    return job;
+    return { state: "completed" as const, job };
   });
 }
 
