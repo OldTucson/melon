@@ -141,10 +141,100 @@ function envBlocks(existing: string): EnvBlock[] {
   return blocks;
 }
 
+function nextExpansionReferences(value: string): Set<string> {
+  const references = new Set<string>();
+  let defaults = 0;
+  for (let index = 0; index < value.length; index++) {
+    const char = value[index]!;
+    if (char === "}" && defaults > 0) { defaults--; continue; }
+    // Installed @next/env treats any immediately preceding backslash as an
+    // escape, rather than applying shell-style backslash parity to dollars.
+    if (char !== "$" || value[index - 1] === "\\") {
+      if (defaults && (char === "{" || char === "\\")) throw invalid();
+      continue;
+    }
+    const braced = value[index + 1] === "{";
+    const start = index + (braced ? 2 : 1);
+    const name = value.slice(start).match(/^\w+/)?.[0];
+    if (!name) throw invalid();
+    references.add(name);
+    index = start + name.length - 1;
+    if (braced) {
+      if (value[index + 1] === "}") index++;
+      else if (value.slice(index + 1, index + 3) === ":-") { defaults++; index += 2; }
+      else throw invalid();
+    }
+  }
+  if (defaults) throw invalid();
+  return references;
+}
+
+function assertNoTargetExpansion(parsed: Record<string, string>) {
+  const targets = new Set<string>(ENV_NAMES);
+  const reverse = new Map<string, Set<string>>();
+  const degree = new Map<string, number>();
+  for (const [name, value] of Object.entries(parsed)) {
+    const dependencies = nextExpansionReferences(value);
+    let count = 0;
+    for (const dependency of dependencies) {
+      const dependents = reverse.get(dependency) ?? new Set<string>();
+      dependents.add(name);
+      reverse.set(dependency, dependents);
+      if (Object.hasOwn(parsed, dependency)) count++;
+    }
+    degree.set(name, count);
+  }
+  // Iterative topological traversal rejects cycles without recursive overflow.
+  const ready = [...degree].filter(([, count]) => count === 0).map(([name]) => name);
+  for (let index = 0; index < ready.length; index++) {
+    for (const dependent of reverse.get(ready[index]!) ?? []) {
+      const count = degree.get(dependent)! - 1;
+      degree.set(dependent, count);
+      if (count === 0) ready.push(dependent);
+    }
+  }
+  if (ready.length !== degree.size) throw invalid();
+
+  const tainted = new Set<string>(ENV_NAMES), pending: string[] = [...ENV_NAMES];
+  for (let index = 0; index < pending.length; index++) {
+    for (const dependent of reverse.get(pending[index]!) ?? []) {
+      if (!targets.has(dependent)) throw invalid();
+      if (!tainted.has(dependent)) { tainted.add(dependent); pending.push(dependent); }
+    }
+  }
+
+  // Next recursively interpolates substituted text, so references can also be
+  // assembled ("${PREFIX}API_KEY") or activated through a previously unescaped
+  // alias. Check those order-sensitive cases using pure, bounded symbolic values.
+  // Never pass local values to @next/env or mutate ambient process.env here.
+  const symbolic = new Map(Object.entries(parsed));
+  for (const name of ENV_NAMES) symbolic.set(name, `\0inspiration:${name}\0`);
+  let remaining = 10_000;
+  for (const [name, original] of symbolic) {
+    let value = original;
+    while (true) {
+      let dollar = value.length - 1;
+      while (dollar >= 0 && (value[dollar] !== "$" || value[dollar - 1] === "\\")) dollar--;
+      if (dollar < 0) break;
+      if (--remaining < 0 || value.length > 1024 * 1024) throw invalid();
+      // This is the installed Next interpolation token grammar. Unsupported
+      // original syntax has already been rejected by the dependency scanner.
+      const token = value.slice(dollar).match(/^\$\{?(\w+)(?::-([^}\\]*))?}?/);
+      if (!token) throw invalid();
+      const dependency = token[1]!;
+      if (!targets.has(name) && targets.has(dependency)) throw invalid();
+      const replacement = token[2] || symbolic.get(dependency) || "";
+      value = value.replace(token[0], replacement);
+    }
+    symbolic.set(name, value.replace(/\\\$/g, "$"));
+  }
+}
+
 export function upsertEnv(existing: string, values: InspirationConfig): string {
   const newline = existing.includes("\r\n") ? "\r\n" : "\n";
   const pending = new Set<string>(ENV_NAMES);
   const blocks = envBlocks(existing);
+  assertNoTargetExpansion(parseDotEnv(existing));
   let result = "";
   for (const { text, name } of blocks) {
     if (name && ENV_NAMES.includes(name as (typeof ENV_NAMES)[number])) {
@@ -156,6 +246,7 @@ export function upsertEnv(existing: string, values: InspirationConfig): string {
 
   const before = parseDotEnv(existing), after = parseDotEnv(result);
   const updatedBlocks = envBlocks(result);
+  assertNoTargetExpansion(after);
   for (const name of ENV_NAMES) {
     if (after[name] !== values[name] || updatedBlocks.filter((block) => block.name === name).length !== 1) throw invalid();
     delete before[name];

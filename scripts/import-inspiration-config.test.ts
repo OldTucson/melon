@@ -203,3 +203,84 @@ describe("dotenv lexical safety regressions", () => {
     expect(readdirSync(dir).sort()).toEqual([".env.local", "input.csv"]);
   });
 });
+
+describe("Next env expansion safety regressions", () => {
+  function expandFake(contents: string): Record<string, string> {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", `
+      import nextEnv from '@next/env';
+      let input = ''; for await (const chunk of process.stdin) input += chunk;
+      const [, expanded] = nextEnv.processEnv([{path:'.env.local',contents:JSON.parse(input),env:{}}],process.cwd(),{info(){},error(){}},true);
+      process.stdout.write(JSON.stringify(expanded));
+    `], { cwd: process.cwd(), env: { NODE_ENV: "test" }, input: JSON.stringify(contents), encoding: "utf8", timeout: 5000 });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    return JSON.parse(result.stdout) as Record<string, string>;
+  }
+  it("characterizes installed Next expansion of a fake key into public values", () => {
+    const expanded = expandFake('DASHSCOPE_API_KEY=sk-test-secret\nNEXT_PUBLIC_BANNER=${DASHSCOPE_API_KEY}\n');
+    expect(expanded.NEXT_PUBLIC_BANNER).toBe(secret);
+  });
+  const dangerous = [
+    'NEXT_PUBLIC_BANNER=$DASHSCOPE_API_KEY\n',
+    'NEXT_PUBLIC_BANNER=${DASHSCOPE_API_KEY}\n',
+    'PRIVATE_ALIAS=$DASHSCOPE_API_KEY\n',
+    'PRIVATE_ALIAS=${DASHSCOPE_API_KEY}\n',
+    'NEXT_PUBLIC_X=${ALIAS}\nALIAS=${DASHSCOPE_API_KEY}\n',
+    'NEXT_PUBLIC_X=${MISSING:-${DASHSCOPE_API_KEY}}\n',
+    'NEXT_PUBLIC_X=${DASHSCOPE_API_KEY:-fallback}\n',
+    "NEXT_PUBLIC_X='$DASHSCOPE_API_KEY'\n",
+    'NEXT_PUBLIC_X="${DASHSCOPE_API_KEY}"\n',
+    'NEXT_PUBLIC_X=`$DASHSCOPE_API_KEY`\n',
+    'export NEXT_PUBLIC_X: "${ALIAS}"\r\nALIAS: ${DASHSCOPE_API_KEY}\r\nKEEP=yes\r\n',
+    'NEXT_PUBLIC_X=${INSPIRATION_ENABLED}\n',
+    'NEXT_PUBLIC_X=${DASHSCOPE_OPENAI_BASE_URL}\n',
+    'NEXT_PUBLIC_X=${DASHSCOPE_NATIVE_BASE_URL}\n',
+    'NEXT_PUBLIC_X=${DASHSCOPE_WORKSPACE_ID}\n',
+    'ALIAS=\\$DASHSCOPE_API_KEY\nNEXT_PUBLIC_X=$ALIAS\n',
+    'NEXT_PUBLIC_X=${PREFIX}API_KEY\nPREFIX=$DASHSCOPE_\n',
+  ];
+  it.each(dangerous)("rejects direct, transitive, default or dynamically assembled target expansion %#", (existing) => {
+    expect(() => upsertEnv(existing, parseInspirationConfigCsv(csv))).toThrow();
+  });
+  it.each([
+    'A=$B\nB=$A\n', 'A=${A:-fallback}\n', 'A=${B+fallback}\n',
+    'A=${B:=fallback}\n', 'A=${MISSING:-${B}\n', 'A=${DOTTED.NAME}\n',
+  ])("fails closed on cyclic or unsupported expansion without recursive overflow %#", (existing) => {
+    let error: unknown;
+    try { upsertEnv(existing, parseInspirationConfigCsv(csv)); } catch (caught) { error = caught; }
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(RangeError);
+  });
+  it.each(["\\", "\\\\", "\\\\\\"])("preserves literal dollars with installed Next escape behavior %#", (slashes) => {
+    const existing = `NEXT_PUBLIC_LITERAL=${slashes}$DASHSCOPE_API_KEY\nNEXT_PUBLIC_BRACED=${slashes}\${DASHSCOPE_API_KEY}\n`;
+    const updated = upsertEnv(existing, parseInspirationConfigCsv(csv));
+    expect(updated.startsWith(existing)).toBe(true);
+    const expanded = expandFake(updated);
+    expect(expanded.NEXT_PUBLIC_LITERAL).toBe(`${slashes.slice(1)}$DASHSCOPE_API_KEY`);
+    expect(expanded.NEXT_PUBLIC_BRACED).toBe(`${slashes.slice(1)}\${DASHSCOPE_API_KEY}`);
+    expect(expanded.NEXT_PUBLIC_LITERAL).not.toContain(secret);
+    expect(expanded.NEXT_PUBLIC_BRACED).not.toContain(secret);
+  });
+  it("allows comments, similarly named variables and harmless expansion without adding a secret to unrelated values", () => {
+    const existing = '# $DASHSCOPE_API_KEY ${DASHSCOPE_API_KEY}\nDASHSCOPE_API_KEY_SUFFIX=harmless\nNEXT_PUBLIC_OK=$DASHSCOPE_API_KEY_SUFFIX\nMISSING_DEFAULT=${ABSENT:-safe}\n';
+    const updated = upsertEnv(existing, parseInspirationConfigCsv(csv));
+    expect(updated.startsWith(existing)).toBe(true);
+    const parsed = parseEnv(updated), expanded = expandFake(updated);
+    expect(expanded.NEXT_PUBLIC_OK).toBe("harmless");
+    expect(expanded.MISSING_DEFAULT).toBe("safe");
+    for (const name of ["DASHSCOPE_API_KEY_SUFFIX", "NEXT_PUBLIC_OK", "MISSING_DEFAULT"]) {
+      expect(parsed[name]).not.toContain(secret);
+      expect(expanded[name]).not.toContain(secret);
+    }
+  });
+  it("keeps files byte-identical and cleans temporary files when expansion dependencies are rejected", () => {
+    const existing = 'export NEXT_PUBLIC_BANNER: "${ALIAS}"\r\nALIAS=${DASHSCOPE_API_KEY}\r\nKEEP=yes\r\n';
+    const dir = sandbox(), target = path.join(dir, ".env.local");
+    writeFileSync(target, existing);
+    const result = cli(dir);
+    expect(result.status).toBe(1); expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("Configuration write error\n");
+    expect(readFileSync(target, "utf8")).toBe(existing);
+    expect(readdirSync(dir).sort()).toEqual([".env.local", "input.csv"]);
+  });
+});
