@@ -184,14 +184,19 @@ describe("responsive workspace panels", () => {
   });
 
   it("defines stable compact controls, bounded tracks and truncation using restrained theme tokens", () => {
-    const css = readFileSync("src/app/globals.css", "utf8");
-    expect(css).toContain("--surface-app: #f5f6f8");
-    expect(css).toContain("--surface-app: #111214");
-    expect(css).toContain("--control-radius: 5px");
-    expect(css).toMatch(/\.workspace\s*\{[^}]*grid-template-columns:\s*220px minmax\(0,\s*1fr\);/s);
-    expect(css).toMatch(/\.library-layout\[data-inspector="open"\]\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) 292px/s);
-    expect(css).toMatch(/\.icon-button\s*\{[^}]*width:\s*32px;[^}]*height:\s*32px/s);
-    expect(css).toMatch(/\.pattern-card-copy strong,[^}]*text-overflow:\s*ellipsis/s);
-    expect(css).toMatch(/\.folder-link > span:first-of-type\s*\{[^}]*text-overflow:\s*ellipsis/s);
+    const tokens = readFileSync("src/app/styles/tokens.css", "utf8");
+    const controls = readFileSync("src/app/styles/controls.css", "utf8");
+    const legacy = readFileSync("src/app/globals.css", "utf8");
+
+    expect(tokens).toContain("--surface-app: #f4f4f1");
+    expect(tokens).toContain("--surface-app: #11120f");
+    expect(tokens).toContain("--accent: #d9ef52");
+    expect(tokens).toContain("--topbar-height: 56px");
+    expect(tokens).toContain("--control-radius: 6px");
+    expect(legacy).toMatch(/\.workspace\s*\{[^}]*grid-template-columns:\s*220px minmax\(0,\s*1fr\);/s);
+    expect(legacy).toMatch(/\.library-layout\[data-inspector="open"\]\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) 292px/s);
+    expect(controls).toMatch(/\.icon-button\s*\{[^}]*width:\s*32px;[^}]*height:\s*32px/s);
+    expect(legacy).toMatch(/\.pattern-card-copy strong,[^}]*text-overflow:\s*ellipsis/s);
+    expect(legacy).toMatch(/\.folder-link > span:first-of-type\s*\{[^}]*text-overflow:\s*ellipsis/s);
   });
 });
