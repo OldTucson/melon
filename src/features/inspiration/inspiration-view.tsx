@@ -218,22 +218,41 @@ export function InspirationView() {
   const selectedInHistory = items.some((item) => item.id === selectedId);
   const refetchSelected = detail.refetch;
   useEffect(() => {
-    if (
-      !selectedId ||
-      !history.isSuccess ||
-      history.isFetching ||
-      selectedInHistory
-    )
-      return;
-    // A missing paginated summary is not proof of deletion. Recheck the owned detail.
-    let cancelled = false;
-    void refetchSelected().then(({ error: failure }) => {
+    if (!selectedId) return;
+    // Observe the current owned query so automatic and manual refetches recover alike.
+    const cache = client.getQueryCache();
+    const currentQuery = cache.find({
+      queryKey: inspirationKeys.detail(ownerId, selectedId),
+      exact: true,
+    });
+    const historyQuery = cache.find({
+      queryKey: inspirationKeys.list(ownerId),
+      exact: true,
+    });
+    let recovered = false;
+    return cache.subscribe((event) => {
       if (
-        cancelled ||
-        !(failure instanceof ApiResponseError) ||
-        failure.status !== 404
+        recovered ||
+        event.type !== "updated" ||
+        (event.query !== currentQuery && event.query !== historyQuery) ||
+        currentQuery?.state.fetchStatus !== "idle" ||
+        !(currentQuery.state.error instanceof ApiResponseError) ||
+        currentQuery.state.error.status !== 404
       )
         return;
+      const currentHistory = client.getQueryData<
+        InfiniteData<InspirationListDto, string | undefined>
+      >(inspirationKeys.list(ownerId));
+      // Absence from loaded pages alone is never deletion; require the owned 404.
+      if (
+        client.getQueryState(inspirationKeys.list(ownerId))?.status !==
+          "success" ||
+        currentHistory?.pages.some((page) =>
+          page.items.some((item) => item.id === selectedId),
+        )
+      )
+        return;
+      recovered = true;
       const remaining = removeHistoryRecord(client, ownerId, selectedId);
       dialogTrigger.current = null;
       setDialog(null);
@@ -246,10 +265,18 @@ export function InspirationView() {
         queryKey: inspirationKeys.detail(ownerId, selectedId),
         exact: true,
       });
+      promptInput.current?.focus();
     });
-    return () => {
-      cancelled = true;
-    };
+  }, [client, ownerId, selectedId]);
+  useEffect(() => {
+    if (
+      !selectedId ||
+      !history.isSuccess ||
+      history.isFetching ||
+      selectedInHistory
+    )
+      return;
+    void refetchSelected();
   }, [
     client,
     ownerId,
@@ -337,6 +364,7 @@ export function InspirationView() {
             </p>
           )}
           {selectedId && detail.isPending && <p role="status">正在加载研究…</p>}
+          {unavailable && <p role="status">正在同步研究…</p>}
           {detail.isError && !unavailable && (
             <div>
               <p role="alert">研究详情加载失败</p>
@@ -351,7 +379,7 @@ export function InspirationView() {
             </div>
           )}
           {!selectedId && <p className={styles.empty}>暂无研究结果</p>}
-          {selected && (
+          {selected && !unavailable && (
             <>
               <header className={styles.detailHeader}>
                 <h2 className={styles.recordTitle}>{selected.title}</h2>

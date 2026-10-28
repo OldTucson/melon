@@ -1201,6 +1201,191 @@ describe("review regressions: default selection during history polling", () => {
   });
 });
 
+function missingHistoryServer() {
+  const server = pollingHistoryServer();
+  const originalFetch = fetch;
+  let missing = false;
+  let missingResponse = async () =>
+    errorResponse(undefined, "INSPIRATION_BUSY", 503);
+  let confirmations = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (
+        String(input) === endpoint &&
+        (init?.method ?? "GET") === "GET" &&
+        missing
+      ) {
+        expect(init?.body).toBeUndefined();
+        confirmations += 1;
+        return missingResponse();
+      }
+      return originalFetch(input, init);
+    }),
+  );
+  return {
+    ...server,
+    confirmations: () => confirmations,
+    loseCurrent(empty = false) {
+      server.completeAndReorder();
+      server.removeCurrent(empty);
+      missing = true;
+    },
+    respondWith(response: () => Promise<Response>) {
+      missingResponse = response;
+    },
+  };
+}
+
+describe("review regressions: missing detail retry recovery", () => {
+  it("uses an already confirmed current 404 when history subsequently drops the record", async () => {
+    const server = missingHistoryServer();
+    const { client } = renderWorkspace();
+    await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+    server.loseCurrent();
+    server.respondWith(async () =>
+      errorResponse(undefined, "INSPIRATION_NOT_FOUND", 404),
+    );
+    await act(async () => {
+      await client.refetchQueries({
+        queryKey: inspirationKeys.detail(ownerId, completed.id),
+        exact: true,
+      });
+    });
+    await screen.findByRole("alert");
+    // The confirmed 404 remains authoritative even if a later request would fail transiently.
+    server.respondWith(async () =>
+      errorResponse(undefined, "INSPIRATION_BUSY", 503),
+    );
+    await refetchHistory(client, "夏日材质研究");
+    expect(
+      await screen.findByRole("heading", { name: "夏日材质新结果" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("heading", { name: "都市轻通勤的柔和层次" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("recovers an automatic 404, closes the old dialog, and restores stable focus", async () => {
+    const user = userEvent.setup();
+    const server = missingHistoryServer();
+    const { client } = renderWorkspace();
+    await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+    await user.click(screen.getByRole("button", { name: "重命名" }));
+    server.respondWith(async () =>
+      errorResponse(undefined, "INSPIRATION_NOT_FOUND", 404),
+    );
+    server.loseCurrent();
+    await refetchHistory(client, "夏日材质研究");
+    await screen.findByRole("heading", { name: "夏日材质新结果" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByText("研究详情加载失败")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "研究需求" })).toHaveFocus(),
+    );
+  });
+
+  it.each(["next record", "empty history"] as const)(
+    "recovers a manual 404 after an automatic 503 into %s",
+    async (outcome) => {
+      const user = userEvent.setup();
+      const server = missingHistoryServer();
+      const { client } = renderWorkspace();
+      await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+      server.loseCurrent(outcome === "empty history");
+      await refetchHistory(
+        client,
+        outcome === "empty history" ? null : "夏日材质研究",
+      );
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "研究详情加载失败",
+      );
+      expect(
+        screen.getByRole("button", { name: "重新加载详情" }),
+      ).toBeVisible();
+      server.respondWith(async () =>
+        errorResponse(undefined, "INSPIRATION_NOT_FOUND", 404),
+      );
+      await user.click(screen.getByRole("button", { name: "重新加载详情" }));
+      await waitFor(() => {
+        expect(
+          screen.queryByRole("heading", { name: "都市轻通勤的柔和层次" }),
+        ).not.toBeInTheDocument();
+        if (outcome === "empty history")
+          expect(screen.getByText("暂无研究结果")).toBeVisible();
+        else
+          expect(
+            screen.getByRole("heading", { name: "夏日材质新结果" }),
+          ).toBeVisible();
+      });
+      expect(screen.queryByText("研究详情加载失败")).not.toBeInTheDocument();
+      expect(
+        client.getQueryData(inspirationKeys.detail(ownerId, completed.id)),
+      ).toBeUndefined();
+      await waitFor(() =>
+        expect(screen.getByRole("textbox", { name: "研究需求" })).toHaveFocus(),
+      );
+    },
+  );
+
+  it("keeps non-404 detail failures visible and allows another manual retry", async () => {
+    const user = userEvent.setup();
+    const server = missingHistoryServer();
+    const { client } = renderWorkspace();
+    await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+    server.loseCurrent();
+    await refetchHistory(client, "夏日材质研究");
+    await screen.findByRole("alert");
+    await user.click(screen.getByRole("button", { name: "重新加载详情" }));
+    await waitFor(() => expect(server.confirmations()).toBe(2));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "研究详情加载失败",
+    );
+    expect(screen.getByRole("button", { name: "重新加载详情" })).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "都市轻通勤的柔和层次" }),
+    ).toBeVisible();
+  });
+
+  it("ignores A's late manual 404 after the user selects B following a 503", async () => {
+    const user = userEvent.setup();
+    const server = missingHistoryServer();
+    const { client } = renderWorkspace();
+    await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+    server.loseCurrent();
+    await refetchHistory(client, "夏日材质研究");
+    await screen.findByRole("alert");
+    let finish!: (response: Response) => void;
+    server.respondWith(
+      () =>
+        new Promise<Response>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await user.click(screen.getByRole("button", { name: "重新加载详情" }));
+    await waitFor(() => expect(server.confirmations()).toBe(2));
+    await user.click(screen.getByRole("button", { name: /夏日材质研究/ }));
+    await screen.findByRole("heading", { name: "夏日材质新结果" });
+    await act(async () => {
+      finish(errorResponse(undefined, "INSPIRATION_NOT_FOUND", 404));
+    });
+    // Wait for the detached request to settle at the real query boundary.
+    await waitFor(() =>
+      expect(
+        client.getQueryState(inspirationKeys.detail(ownerId, completed.id))
+          ?.fetchStatus,
+      ).toBe("idle"),
+    );
+    expect(
+      screen.getByRole("heading", { name: "夏日材质新结果" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: /夏日材质研究/ }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByText("研究详情加载失败")).not.toBeInTheDocument();
+  });
+});
+
 describe("protected inspiration page", () => {
   it("hydrates the first twenty history items for the authenticated owner without an internal HTTP roundtrip", async () => {
     pageMocks.requireUser.mockResolvedValue({ id: ownerId });
