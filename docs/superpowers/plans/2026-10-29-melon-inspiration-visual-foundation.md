@@ -174,7 +174,7 @@ export const inspirationVisualJobDtoSchema = z.object({
 
 Also define strict `webEvidenceAssetDtoSchema` and `generatedConceptAssetDtoSchema` now so phases two and three extend behavior without changing the board envelope. Their `imageUrl` remains a local resource path; no provider URL, object key, owner ID, provider task ID, request ID, or search distance is permitted.
 
-Define `inspirationVisualBoardDtoSchema` as `{ activeJob, refreshJob, webEvidence, libraryMatches, concepts }`. `activeJob` is the latest completed research job, while `refreshJob` is the latest pending/failed refresh. Define a separate `publicInspirationVisualBoardDtoSchema` containing only `webEvidence` and `concepts`; it must omit `libraryMatches` entirely rather than returning an empty private field.
+Define `inspirationVisualBoardDtoSchema` as `{ activeJob, refreshJob, webEvidence, libraryMatches, conceptJobs, concepts }`. `activeJob` is the latest completed research job, `refreshJob` is the latest pending/failed refresh, and `conceptJobs` contains at most one newest pending/failed job per direction so refresh can restore local states. Define a separate `publicInspirationVisualBoardDtoSchema` containing only `webEvidence` and `concepts`; it must omit `libraryMatches` and `conceptJobs` entirely rather than returning empty private fields.
 
 - [ ] **Step 4: Add cross-field tests**
 
