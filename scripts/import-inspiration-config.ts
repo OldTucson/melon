@@ -169,12 +169,21 @@ function nextExpansionReferences(value: string): Set<string> {
   return references;
 }
 
-function assertNoTargetExpansion(parsed: Record<string, string>) {
+function assertBoundedEnvValue(value: string) {
+  if (Buffer.byteLength(value, "utf8") > 1024 * 1024) throw invalid();
+}
+
+function assertNoUnsafeExpansion(parsed: Record<string, string>) {
   const targets = new Set<string>(ENV_NAMES);
   const reverse = new Map<string, Set<string>>();
   const degree = new Map<string, number>();
   for (const [name, value] of Object.entries(parsed)) {
+    assertBoundedEnvValue(value);
     const dependencies = nextExpansionReferences(value);
+    // A future build's ambient env may override even a harmless/missing alias.
+    // Reject all active non-target interpolation, independently of this file's
+    // dependency values. Escaped literals cannot be reactivated by accepted refs.
+    if (!targets.has(name) && dependencies.size > 0) throw invalid();
     let count = 0;
     for (const dependency of dependencies) {
       const dependents = reverse.get(dependency) ?? new Set<string>();
@@ -213,10 +222,11 @@ function assertNoTargetExpansion(parsed: Record<string, string>) {
   for (const [name, original] of symbolic) {
     let value = original;
     while (true) {
+      assertBoundedEnvValue(value);
       let dollar = value.length - 1;
       while (dollar >= 0 && (value[dollar] !== "$" || value[dollar - 1] === "\\")) dollar--;
       if (dollar < 0) break;
-      if (--remaining < 0 || value.length > 1024 * 1024) throw invalid();
+      if (--remaining < 0) throw invalid();
       // This is the installed Next interpolation token grammar. Unsupported
       // original syntax has already been rejected by the dependency scanner.
       const token = value.slice(dollar).match(/^\$\{?(\w+)(?::-([^}\\]*))?}?/);
@@ -225,8 +235,11 @@ function assertNoTargetExpansion(parsed: Record<string, string>) {
       if (!targets.has(name) && targets.has(dependency)) throw invalid();
       const replacement = token[2] || symbolic.get(dependency) || "";
       value = value.replace(token[0], replacement);
+      assertBoundedEnvValue(value);
     }
-    symbolic.set(name, value.replace(/\\\$/g, "$"));
+    const finalValue = value.replace(/\\\$/g, "$");
+    assertBoundedEnvValue(finalValue);
+    symbolic.set(name, finalValue);
   }
 }
 
@@ -234,7 +247,7 @@ export function upsertEnv(existing: string, values: InspirationConfig): string {
   const newline = existing.includes("\r\n") ? "\r\n" : "\n";
   const pending = new Set<string>(ENV_NAMES);
   const blocks = envBlocks(existing);
-  assertNoTargetExpansion(parseDotEnv(existing));
+  assertNoUnsafeExpansion(parseDotEnv(existing));
   let result = "";
   for (const { text, name } of blocks) {
     if (name && ENV_NAMES.includes(name as (typeof ENV_NAMES)[number])) {
@@ -246,7 +259,7 @@ export function upsertEnv(existing: string, values: InspirationConfig): string {
 
   const before = parseDotEnv(existing), after = parseDotEnv(result);
   const updatedBlocks = envBlocks(result);
-  assertNoTargetExpansion(after);
+  assertNoUnsafeExpansion(after);
   for (const name of ENV_NAMES) {
     if (after[name] !== values[name] || updatedBlocks.filter((block) => block.name === name).length !== 1) throw invalid();
     delete before[name];

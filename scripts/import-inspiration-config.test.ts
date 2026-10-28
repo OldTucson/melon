@@ -204,18 +204,19 @@ describe("dotenv lexical safety regressions", () => {
   });
 });
 
-describe("Next env expansion safety regressions", () => {
-  function expandFake(contents: string): Record<string, string> {
+function expandFake(contents: string, ambient: Record<string, string> = {}): Record<string, string> {
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", `
       import nextEnv from '@next/env';
       let input = ''; for await (const chunk of process.stdin) input += chunk;
       const [, expanded] = nextEnv.processEnv([{path:'.env.local',contents:JSON.parse(input),env:{}}],process.cwd(),{info(){},error(){}},true);
       process.stdout.write(JSON.stringify(expanded));
-    `], { cwd: process.cwd(), env: { NODE_ENV: "test" }, input: JSON.stringify(contents), encoding: "utf8", timeout: 5000 });
+    `], { cwd: process.cwd(), env: { NODE_ENV: "test", ...ambient }, input: JSON.stringify(contents), encoding: "utf8", timeout: 5000 });
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     return JSON.parse(result.stdout) as Record<string, string>;
   }
+
+describe("Next env expansion safety regressions", () => {
   it("characterizes installed Next expansion of a fake key into public values", () => {
     const expanded = expandFake('DASHSCOPE_API_KEY=sk-test-secret\nNEXT_PUBLIC_BANNER=${DASHSCOPE_API_KEY}\n');
     expect(expanded.NEXT_PUBLIC_BANNER).toBe(secret);
@@ -261,8 +262,8 @@ describe("Next env expansion safety regressions", () => {
     expect(expanded.NEXT_PUBLIC_LITERAL).not.toContain(secret);
     expect(expanded.NEXT_PUBLIC_BRACED).not.toContain(secret);
   });
-  it("allows comments, similarly named variables and harmless expansion without adding a secret to unrelated values", () => {
-    const existing = '# $DASHSCOPE_API_KEY ${DASHSCOPE_API_KEY}\nDASHSCOPE_API_KEY_SUFFIX=harmless\nNEXT_PUBLIC_OK=$DASHSCOPE_API_KEY_SUFFIX\nMISSING_DEFAULT=${ABSENT:-safe}\n';
+  it("allows comments and similarly named literal values without adding a secret to unrelated values", () => {
+    const existing = '# $DASHSCOPE_API_KEY ${DASHSCOPE_API_KEY}\nDASHSCOPE_API_KEY_SUFFIX=harmless\nNEXT_PUBLIC_OK=harmless\nMISSING_DEFAULT=safe\n';
     const updated = upsertEnv(existing, parseInspirationConfigCsv(csv));
     expect(updated.startsWith(existing)).toBe(true);
     const parsed = parseEnv(updated), expanded = expandFake(updated);
@@ -282,5 +283,65 @@ describe("Next env expansion safety regressions", () => {
     expect(result.stderr).toBe("Configuration write error\n");
     expect(readFileSync(target, "utf8")).toBe(existing);
     expect(readdirSync(dir).sort()).toEqual([".env.local", "input.csv"]);
+  });
+});
+
+describe("ambient expansion rejection and value budget", () => {
+  const ambientCases: { existing: string; ambient: Record<string, string> }[] = [
+    { existing: 'ALIAS=harmless\nNEXT_PUBLIC_X=$ALIAS\n', ambient: { ALIAS: '$DASHSCOPE_API_KEY' } },
+    { existing: 'NEXT_PUBLIC_X=$ALIAS\n', ambient: { ALIAS: '$DASHSCOPE_API_KEY' } },
+    { existing: 'NEXT_PUBLIC_X=${PREFIX}API_KEY\n', ambient: { PREFIX: '$DASHSCOPE_' } },
+    { existing: 'PREFIX=harmless\nNEXT_PUBLIC_X=${PREFIX}API_KEY\n', ambient: { PREFIX: '$DASHSCOPE_' } },
+  ];
+  it.each(ambientCases)("rejects CLI imports despite ambient alias/PREFIX overrides %#", ({ existing, ambient }) => {
+    // Characterize the installed Next precedence bug using only fake data.
+    const expanded = expandFake(existing + 'DASHSCOPE_API_KEY=sk-test-secret\n', ambient);
+    expect(expanded.NEXT_PUBLIC_X).toBe(secret);
+    const dir = sandbox(), target = path.join(dir, ".env.local");
+    writeFileSync(target, existing);
+    const result = spawnSync(process.execPath, ["--import", tsx, script, "input.csv"], { cwd: dir, env: { NODE_ENV: "test", ...ambient }, encoding: "utf8" });
+    expect(result.status).toBe(1); expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("Configuration write error\n");
+    expect(readFileSync(target, "utf8")).toBe(existing);
+    expect(readdirSync(dir).sort()).toEqual([".env.local", "input.csv"]);
+    expect(Object.values(parseEnv(readFileSync(target))).every((value) => !value.includes(secret))).toBe(true);
+  });
+  it.each([
+    'PRIVATE=$UNKNOWN\n', 'NEXT_PUBLIC_X=${MISSING}\n', 'OTHER=harmless\nPRIVATE=$OTHER\n',
+    'NEXT_PUBLIC_X=$ALIAS\nALIAS=$OTHER\nOTHER=harmless\n',
+    'PRIVATE=${MISSING:-safe}\n', 'PRIVATE=${MISSING:-${OTHER:-safe}}\n',
+    "PRIVATE='$OTHER'\n", 'PRIVATE="$OTHER"\n', 'PRIVATE=`$OTHER`\n',
+    'PREFIX=harmless\nNEXT_PUBLIC_X=${PREFIX}suffix\n',
+    'export PRIVATE: "$OTHER"\r\nOTHER=harmless\r\n',
+    'NEXT_PUBLIC_X=$DASHSCOPE_API_KEY_SUFFIX\nDASHSCOPE_API_KEY_SUFFIX=harmless\n',
+  ])("rejects every non-target active expansion independent of current aliases %#", (existing) => {
+    expect(() => upsertEnv(existing, parseInspirationConfigCsv(csv))).toThrow();
+  });
+  it("allows plain text and comment tokens with no active value interpolation", () => {
+    const existing = '# $UNKNOWN ${ALIAS}\nNEXT_PUBLIC_TEXT=plain text\nKEEP=literal-DASHSCOPE_API_KEY\n';
+    const updated = upsertEnv(existing, parseInspirationConfigCsv(csv));
+    expect(updated.startsWith(existing)).toBe(true);
+    const parsed = parseEnv(updated), expanded = expandFake(updated, { ALIAS: '$DASHSCOPE_API_KEY' });
+    for (const name of ["NEXT_PUBLIC_TEXT", "KEEP"]) {
+      expect(parsed[name]).not.toContain(secret);
+      expect(expanded[name]).toBe(parsed[name]);
+    }
+  });
+  it("rejects a doubled terminal expansion even when its final replacement has no dollar", () => {
+    const existing = `A=${"x".repeat(600_000)}\nB=$A$A\n`;
+    expect(() => upsertEnv(existing, parseInspirationConfigCsv(csv))).toThrow();
+  });
+  it.each([1024 * 1024 - 1, 1024 * 1024])("preserves a no-dollar terminal value of %i bytes", (length) => {
+    const existing = `A=${"x".repeat(length)}\n`;
+    const updated = upsertEnv(existing, parseInspirationConfigCsv(csv));
+    expect(updated.startsWith(existing)).toBe(true);
+    expect(Buffer.byteLength(parseEnv(updated).A!, "utf8")).toBe(length);
+  });
+  it.each([1024 * 1024 + 1, 1024 * 1024 + 2])("rejects a no-dollar terminal value of %i bytes", (length) => {
+    expect(() => upsertEnv(`A=${"x".repeat(length)}\n`, parseInspirationConfigCsv(csv))).toThrow();
+  });
+  it("enforces the value budget in UTF-8 bytes", () => {
+    expect(() => upsertEnv(`A=${"é".repeat(524_288)}\n`, parseInspirationConfigCsv(csv))).not.toThrow();
+    expect(() => upsertEnv(`A=${"é".repeat(524_289)}\n`, parseInspirationConfigCsv(csv))).toThrow();
   });
 });
