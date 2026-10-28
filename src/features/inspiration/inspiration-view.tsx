@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import {
@@ -8,6 +8,7 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type InfiniteData,
 } from "@tanstack/react-query";
 import { Pencil, RefreshCw, Share2, Trash2 } from "lucide-react";
 import { z } from "zod";
@@ -16,6 +17,7 @@ import { useQueryOwnerId } from "@/lib/query/provider";
 import {
   inspirationPatchMutationSchema,
   type InspirationDetailDto,
+  type InspirationListDto,
 } from "./contracts";
 import { inspirationApi } from "./inspiration-api";
 import { InspirationHistory } from "./inspiration-history";
@@ -33,7 +35,7 @@ function IconButton({
 }: {
   label: string;
   children: React.ReactNode;
-  onClick: () => void;
+  onClick: React.MouseEventHandler<HTMLButtonElement>;
   disabled?: boolean;
 }) {
   return (
@@ -79,6 +81,8 @@ function errorMessage(error: unknown) {
 export function InspirationView() {
   const ownerId = useQueryOwnerId();
   const client = useQueryClient();
+  const dialogTrigger = useRef<HTMLButtonElement | null>(null);
+  const promptInput = useRef<HTMLTextAreaElement | null>(null);
   const [selection, setSelection] = useState<string | null>(null);
   const [dialog, setDialog] = useState<"rename" | "delete" | "share" | null>(
     null,
@@ -111,6 +115,8 @@ export function InspirationView() {
   const invalidate = () =>
     client.invalidateQueries({ queryKey: inspirationKeys.all(ownerId) });
   const saveDetail = async (data: InspirationDetailDto) => {
+    if (data.id !== selectedId) dialogTrigger.current = null;
+    setDialog(null);
     client.setQueryData(inspirationKeys.detail(ownerId, data.id), data);
     setSelection(data.id);
     setNotice("已自动保存");
@@ -119,7 +125,11 @@ export function InspirationView() {
   const onFailure = async (failure: unknown) => {
     setError(errorMessage(failure));
     const id = savedFailureId(failure);
-    if (id) setSelection(id);
+    if (id) {
+      if (id !== selectedId) dialogTrigger.current = null;
+      setDialog(null);
+      setSelection(id);
+    }
     await invalidate();
   };
   const create = useMutation({
@@ -151,7 +161,23 @@ export function InspirationView() {
   const remove = useMutation({
     mutationFn: inspirationApi.delete,
     onSuccess: async ({ id }) => {
-      setSelection(null);
+      const remaining = client.setQueryData<
+        InfiniteData<InspirationListDto, string | undefined>
+      >(inspirationKeys.list(ownerId), (current) =>
+        current
+          ? {
+              ...current,
+              pages: current.pages.map((page) => ({
+                ...page,
+                items: page.items.filter((item) => item.id !== id),
+              })),
+            }
+          : current,
+      );
+      setSelection(
+        remaining?.pages.flatMap((page) => page.items)[0]?.id ?? null,
+      );
+      dialogTrigger.current = null;
       setDialog(null);
       setNotice(null);
       client.removeQueries({
@@ -169,7 +195,14 @@ export function InspirationView() {
     analysis?.status === "pending";
   const selected =
     analysis && selectedId === analysis.id ? analysis : undefined;
-  function openDialog(next: typeof dialog) {
+  function restoreDialogFocus(event: Event) {
+    event.preventDefault();
+    const trigger = dialogTrigger.current;
+    if (trigger?.isConnected && !trigger.disabled) trigger.focus();
+    else promptInput.current?.focus();
+  }
+  function openDialog(next: typeof dialog, trigger: HTMLButtonElement) {
+    dialogTrigger.current = trigger;
     setError(null);
     setNotice(null);
     setTitle(selected?.title ?? "");
@@ -182,6 +215,7 @@ export function InspirationView() {
         <h1>灵感研究</h1>
       </header>
       <InspirationPromptForm
+        inputRef={promptInput}
         pending={pending}
         blocked={blocked}
         onSubmit={(input) => {
@@ -247,7 +281,9 @@ export function InspirationView() {
                     <IconButton
                       label="重命名"
                       disabled={editing}
-                      onClick={() => openDialog("rename")}
+                      onClick={(event) =>
+                        openDialog("rename", event.currentTarget)
+                      }
                     >
                       <Pencil aria-hidden="true" />
                     </IconButton>
@@ -255,7 +291,9 @@ export function InspirationView() {
                       <IconButton
                         label="分享研究"
                         disabled={editing}
-                        onClick={() => openDialog("share")}
+                        onClick={(event) =>
+                          openDialog("share", event.currentTarget)
+                        }
                       >
                         <Share2 aria-hidden="true" />
                       </IconButton>
@@ -263,7 +301,9 @@ export function InspirationView() {
                     <IconButton
                       label="删除研究"
                       disabled={editing || pending}
-                      onClick={() => openDialog("delete")}
+                      onClick={(event) =>
+                        openDialog("delete", event.currentTarget)
+                      }
                     >
                       <Trash2 aria-hidden="true" />
                     </IconButton>
@@ -302,6 +342,7 @@ export function InspirationView() {
                   key={selected.id}
                   analysis={selected}
                   onClose={() => setDialog(null)}
+                  onCloseAutoFocus={restoreDialogFocus}
                 />
               )}
               {(dialog === "rename" || dialog === "delete") && (
@@ -315,6 +356,7 @@ export function InspirationView() {
                     <Dialog.Overlay className={styles.overlay} />
                     <Dialog.Content
                       className={styles.dialog}
+                      onCloseAutoFocus={restoreDialogFocus}
                       onEscapeKeyDown={(event) => {
                         if (editing) event.preventDefault();
                       }}

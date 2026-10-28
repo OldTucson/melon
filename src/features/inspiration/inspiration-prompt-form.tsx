@@ -12,7 +12,9 @@ export function InspirationPromptForm({
   pending,
   blocked,
   onSubmit,
+  inputRef,
 }: {
+  inputRef?: React.Ref<HTMLTextAreaElement>;
   pending: boolean;
   blocked: boolean;
   onSubmit: (input: InspirationCreateMutation) => void;
@@ -37,6 +39,7 @@ export function InspirationPromptForm({
     >
       <label htmlFor={id}>研究需求</label>
       <textarea
+        ref={inputRef}
         id={id}
         value={prompt}
         maxLength={1000}

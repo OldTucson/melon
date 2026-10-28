@@ -1,6 +1,13 @@
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { QueryClientProvider, type InfiniteData } from "@tanstack/react-query";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   afterEach,
@@ -20,6 +27,7 @@ import {
   inspirationPatchMutationSchema,
   inspirationSummaryDtoSchema,
   type InspirationDetailDto,
+  type InspirationListDto,
 } from "./contracts";
 import { InspirationView } from "./inspiration-view";
 import {
@@ -74,11 +82,16 @@ function errorResponse(
     status,
   );
 }
-function renderWorkspace(ui = <InspirationView />) {
+function renderWorkspace(
+  ui = <InspirationView />,
+  initialHistory?: InfiniteData<InspirationListDto, string | undefined>,
+) {
   const client = createQueryClient();
   client.setDefaultOptions({ queries: { retry: false, staleTime: 30_000 } });
   clients.push(client);
   client.setQueryData(["owner", ownerId, "folders"], ["unrelated"]);
+  if (initialHistory)
+    client.setQueryData(inspirationKeys.list(ownerId), initialHistory);
   const rendered = render(
     <QueryClientProvider client={client}>
       <QueryOwnerProvider ownerId={ownerId}>
@@ -108,6 +121,15 @@ beforeEach(() => {
   requests = [];
   clients = [];
   consoleError = vi.spyOn(console, "error");
+  // jsdom omits the layout observer used by Radix when focus opens a tooltip.
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   createResponse = async () => {
     record = completed;
     return detailResponse();
@@ -464,6 +486,350 @@ describe("inspiration workspace", () => {
     expect(
       screen.queryByRole("heading", { name: "都市轻通勤的柔和层次" }),
     ).not.toBeInTheDocument();
+  });
+});
+
+// These deferred HTTP boundaries hold the UI in the race windows from review.
+function delayedSecondAnalysis() {
+  const next: InspirationDetailDto = {
+    ...completed,
+    id: "00000000-0000-4000-8000-000000000002",
+    title: "夏日材质研究",
+    result: { ...completed.result!, headline: "夏日材质新结果" },
+  };
+  const baseFetch = fetch;
+  let finish!: (response: Response) => void;
+  let created = false;
+  const writes: { url: string; method: string; body: unknown }[] = [];
+  createResponse = () =>
+    new Promise((resolve) => {
+      finish = resolve;
+    });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === `${root}?limit=20` && method === "GET" && created) {
+        expect(init?.body).toBeUndefined();
+        return json(
+          inspirationListDtoSchema.parse({
+            items: [inspirationSummaryDtoSchema.strip().parse(next), summary],
+            nextCursor: null,
+          }),
+        );
+      }
+      if (url === `${root}/${next.id}` && method === "GET") {
+        expect(init?.body).toBeUndefined();
+        return json(inspirationDetailDtoSchema.parse(next));
+      }
+      if (
+        method === "PATCH" &&
+        [endpoint, `${root}/${next.id}`].includes(url)
+      ) {
+        const body = inspirationPatchMutationSchema.parse(
+          JSON.parse(String(init?.body)),
+        );
+        expect(body).toEqual({ title: "新版研究", version: 1 });
+        writes.push({ url, method, body });
+        return json(
+          inspirationDetailDtoSchema.parse({
+            ...(url === endpoint ? completed : next),
+            title: body.title,
+            version: 2,
+          }),
+        );
+      }
+      return baseFetch(input, init);
+    }),
+  );
+  return {
+    next,
+    writes,
+    finish: () => {
+      created = true;
+      finish(json(inspirationDetailDtoSchema.parse(next), 201));
+    },
+  };
+}
+
+describe("review regressions: concurrent completion, deletion, and dialog focus", () => {
+  it("never sends a historical rename draft to a newly completed analysis", async () => {
+    const user = userEvent.setup();
+    record = completed;
+    const server = delayedSecondAnalysis();
+    renderWorkspace();
+    await openRecord(user);
+    await submit(user);
+    await user.click(screen.getByRole("button", { name: "重命名" }));
+    await user.clear(screen.getByRole("textbox", { name: "研究标题" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "研究标题" }),
+      "新版研究",
+    );
+    await act(async () => server.finish());
+    await screen.findByRole("heading", {
+      name: "夏日材质新结果",
+      hidden: true,
+    });
+    const editor = screen.queryByRole("dialog", { name: "重命名研究" });
+    if (editor)
+      await user.click(
+        within(editor).getByRole("button", { name: "保存标题" }),
+      );
+    expect(
+      server.writes.filter(
+        (write) => write.url === `${root}/${server.next.id}`,
+      ),
+    ).toEqual([]);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "夏日材质新结果" }),
+    ).toBeVisible();
+  });
+
+  it("closes the historical share dialog before selecting a newly completed analysis", async () => {
+    const user = userEvent.setup();
+    record = completed;
+    const server = delayedSecondAnalysis();
+    renderWorkspace();
+    await openRecord(user);
+    await submit(user);
+    await user.click(screen.getByRole("button", { name: "分享研究" }));
+    expect(screen.getByRole("dialog", { name: "分享研究" })).toHaveTextContent(
+      "都市轻通勤女装研究",
+    );
+    await act(async () => server.finish());
+    await screen.findByRole("heading", {
+      name: "夏日材质新结果",
+      hidden: true,
+    });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "夏日材质新结果" }),
+    ).toBeVisible();
+  });
+
+  it.each(["success", "failure"] as const)(
+    "does not resurrect a deleted first record while list revalidation is delayed (%s)",
+    async (outcome) => {
+      const user = userEvent.setup();
+      record = completed;
+      const baseFetch = fetch;
+      let deleted = false;
+      let refetchStarted = false;
+      let finishList!: (response: Response) => void;
+      const postDeleteDetailReads: string[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+          const url = String(input);
+          const method = init?.method ?? "GET";
+          if (url === endpoint && method === "DELETE") {
+            expect(init?.body).toBeUndefined();
+            const response = await baseFetch(input, init);
+            deleted = true;
+            return response;
+          }
+          if (deleted && url === `${root}?limit=20` && method === "GET") {
+            expect(init?.body).toBeUndefined();
+            refetchStarted = true;
+            return new Promise<Response>((resolve) => {
+              finishList = resolve;
+            });
+          }
+          if (deleted && url === endpoint && method === "GET") {
+            expect(init?.body).toBeUndefined();
+            postDeleteDetailReads.push(url);
+            return errorResponse(undefined, "INSPIRATION_NOT_FOUND", 404);
+          }
+          return baseFetch(input, init);
+        }),
+      );
+      renderWorkspace();
+      await openRecord(user);
+      await user.click(screen.getByRole("button", { name: "删除研究" }));
+      await user.click(screen.getByRole("button", { name: "确认删除" }));
+      await waitFor(() => expect(refetchStarted).toBe(true));
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+      );
+      expect(postDeleteDetailReads).toEqual([]);
+      expect(screen.queryByText("研究详情加载失败")).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("heading", { name: "都市轻通勤的柔和层次" }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByText("暂无研究结果")).toBeVisible();
+      await act(async () =>
+        finishList(
+          outcome === "success"
+            ? json(
+                inspirationListDtoSchema.parse({ items: [], nextCursor: null }),
+              )
+            : errorResponse(undefined, "REQUEST_FAILED", 503),
+        ),
+      );
+      if (outcome === "failure") await screen.findByText("研究记录加载失败");
+      else await screen.findByText("暂无研究记录");
+      expect(postDeleteDetailReads).toEqual([]);
+      expect(screen.queryByText("研究详情加载失败")).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(["first", "second"] as const)(
+    "removes a deleted record from the %s infinite page and keeps its remaining selection and cursors",
+    async (position) => {
+      const user = userEvent.setup();
+      const other = {
+        ...completed,
+        id: "00000000-0000-4000-8000-000000000002",
+        title: "夏日材质研究",
+        result: { ...completed.result!, headline: "夏日材质新结果" },
+      };
+      const otherSummary = inspirationSummaryDtoSchema.strip().parse(other);
+      const baseFetch = fetch;
+      let deleted = false;
+      let finishList!: (response: Response) => void;
+      const readsAfterDelete: string[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+          const url = String(input);
+          const method = init?.method ?? "GET";
+          if (url === endpoint && method === "DELETE") {
+            const response = await baseFetch(input, init);
+            deleted = true;
+            return response;
+          }
+          if (deleted && url === `${root}?limit=20` && method === "GET") {
+            expect(init?.body).toBeUndefined();
+            return new Promise<Response>((resolve) => {
+              finishList = resolve;
+            });
+          }
+          if (url === `${root}/${other.id}` && method === "GET") {
+            expect(init?.body).toBeUndefined();
+            return json(inspirationDetailDtoSchema.parse(other));
+          }
+          if (deleted && url === endpoint && method === "GET")
+            readsAfterDelete.push(url);
+          return baseFetch(input, init);
+        }),
+      );
+      record = completed;
+      const { client } = renderWorkspace(<InspirationView />, {
+        pages: [
+          {
+            items: [position === "first" ? summary : otherSummary],
+            nextCursor: "b3BhcXVl",
+          },
+          {
+            items: [position === "first" ? otherSummary : summary],
+            nextCursor: null,
+          },
+        ],
+        pageParams: [undefined, "b3BhcXVl"],
+      });
+      await openRecord(user);
+      await user.click(screen.getByRole("button", { name: "删除研究" }));
+      await user.click(screen.getByRole("button", { name: "确认删除" }));
+      expect(
+        await screen.findByRole("heading", { name: "夏日材质新结果" }),
+      ).toBeVisible();
+      expect(
+        screen.getByRole("button", { name: /夏日材质研究/ }),
+      ).toHaveAttribute("aria-pressed", "true");
+      expect(readsAfterDelete).toEqual([]);
+      expect(client.getQueryData(inspirationKeys.list(ownerId))).toEqual({
+        pages: [
+          {
+            items: position === "first" ? [] : [otherSummary],
+            nextCursor: "b3BhcXVl",
+          },
+          {
+            items: position === "first" ? [otherSummary] : [],
+            nextCursor: null,
+          },
+        ],
+        pageParams: [undefined, "b3BhcXVl"],
+      });
+      await act(async () =>
+        finishList(errorResponse(undefined, "REQUEST_FAILED", 503)),
+      );
+      await screen.findByText("研究记录加载失败");
+      expect(
+        screen.getByRole("heading", { name: "夏日材质新结果" }),
+      ).toBeVisible();
+      expect(readsAfterDelete).toEqual([]);
+    },
+  );
+
+  it.each(["cancel", "escape", "save"] as const)(
+    "restores rename trigger focus after %s",
+    async (action) => {
+      const user = userEvent.setup();
+      record = completed;
+      patchResponse = async () => {
+        record = { ...completed, title: "新版研究", version: 2 };
+        return detailResponse();
+      };
+      renderWorkspace();
+      await openRecord(user);
+      const trigger = screen.getByRole("button", { name: "重命名" });
+      await user.click(trigger);
+      if (action === "save") {
+        await user.clear(screen.getByRole("textbox", { name: "研究标题" }));
+        await user.type(
+          screen.getByRole("textbox", { name: "研究标题" }),
+          "新版研究",
+        );
+        await user.click(screen.getByRole("button", { name: "保存标题" }));
+      } else if (action === "escape") await user.keyboard("{Escape}");
+      else await user.click(screen.getByRole("button", { name: "取消" }));
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+      );
+      await waitFor(() => expect(trigger).toHaveFocus());
+    },
+  );
+
+  it.each(["close", "escape", "revoke then close"] as const)(
+    "restores share trigger focus after %s",
+    async (action) => {
+      const user = userEvent.setup();
+      record = {
+        ...completed,
+        shareUrl:
+          "https://app.example.test/share/inspiration/00000000-0000-4000-8000-000000000099",
+      };
+      renderWorkspace();
+      await openRecord(user);
+      const trigger = screen.getByRole("button", { name: "分享研究" });
+      await user.click(trigger);
+      if (action === "revoke then close") {
+        await user.click(screen.getByRole("button", { name: "撤销分享" }));
+        await screen.findByRole("button", { name: "开启分享" });
+      }
+      if (action === "escape") await user.keyboard("{Escape}");
+      else await user.click(screen.getByRole("button", { name: "关闭" }));
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+      );
+      await waitFor(() => expect(trigger).toHaveFocus());
+    },
+  );
+
+  it("focuses the research input when deletion removes the command trigger", async () => {
+    const user = userEvent.setup();
+    record = completed;
+    renderWorkspace();
+    await openRecord(user);
+    await user.click(screen.getByRole("button", { name: "删除研究" }));
+    await user.click(screen.getByRole("button", { name: "确认删除" }));
+    await screen.findByText("暂无研究记录");
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "研究需求" })).toHaveFocus(),
+    );
   });
 });
 

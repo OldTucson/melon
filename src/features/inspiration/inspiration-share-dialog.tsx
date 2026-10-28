@@ -13,9 +13,11 @@ import styles from "./inspiration.module.css";
 export function InspirationShareDialog({
   analysis,
   onClose,
+  onCloseAutoFocus,
 }: {
   analysis: InspirationDetailDto;
   onClose: () => void;
+  onCloseAutoFocus: (event: Event) => void;
 }) {
   const ownerId = useQueryOwnerId();
   const client = useQueryClient();
@@ -46,6 +48,7 @@ export function InspirationShareDialog({
         <Dialog.Overlay className={styles.overlay} />
         <Dialog.Content
           className={styles.dialog}
+          onCloseAutoFocus={onCloseAutoFocus}
           onEscapeKeyDown={(event) => {
             if (share.isPending) event.preventDefault();
           }}
