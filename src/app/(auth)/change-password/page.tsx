@@ -6,10 +6,15 @@ export default async function ChangePasswordPage() {
   await requireUser();
 
   return (
-    <main className="auth-shell">
+    <main
+      aria-labelledby="password-title"
+      className="auth-shell"
+    >
       <section className="auth-panel" aria-labelledby="password-title">
-        <p className="wordmark">melon</p>
-        <h1 id="password-title">更新密码</h1>
+        <header className="auth-panel-header">
+          <p className="wordmark">melon</p>
+          <h1 id="password-title">更新密码</h1>
+        </header>
         <ChangePasswordForm />
       </section>
     </main>

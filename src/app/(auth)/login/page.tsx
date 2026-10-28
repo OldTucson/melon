@@ -24,10 +24,15 @@ export default async function LoginPage() {
   const legalConfig = toPublicLegalConfig(getServerEnv());
 
   return (
-    <main className="auth-shell">
+    <main
+      aria-labelledby="login-title"
+      className="auth-shell"
+    >
       <section className="auth-panel" aria-labelledby="login-title">
-        <p className="wordmark">melon</p>
-        <h1 id="login-title">登录</h1>
+        <header className="auth-panel-header">
+          <p className="wordmark">melon</p>
+          <h1 id="login-title">登录</h1>
+        </header>
         <LoginForm />
       </section>
       <LegalLinks className="auth-legal" config={legalConfig} />

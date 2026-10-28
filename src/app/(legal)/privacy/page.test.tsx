@@ -23,6 +23,10 @@ describe("privacy policy page", () => {
     expect(
       screen.getByRole("heading", { name: "隐私政策", level: 1 }),
     ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "返回登录" })).toHaveAttribute(
+      "href",
+      "/login",
+    );
     for (const heading of [
       "信息处理者",
       "处理的信息",

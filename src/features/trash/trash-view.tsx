@@ -18,6 +18,7 @@ import { queryKeys } from "@/lib/query/keys";
 import { useQueryOwnerId } from "@/lib/query/provider";
 import { ApiResponseError } from "@/lib/query/client";
 import { formatFenForDisplay } from "@/features/authorizations/api";
+import { PageHeader } from "@/components/ui/page-header";
 
 type CommercialImpact = Pick<
   TrashFolderBatch,
@@ -190,22 +191,25 @@ export function TrashView({
       ? mutation.variables.trashBatchId === batchId
       : mutation.variables?.patternIds.some((id) => patternIds?.includes(id)));
   return (
-    <main className="trash-workspace">
-      <header className="library-heading">
-        <div>
-          <h1>回收站</h1>
-          <p>恢复图案和文件夹，或永久删除不再需要的内容。</p>
-        </div>
-        <button
-          className="bulk-action-button"
-          title="刷新回收站"
-          disabled={pending || query.isFetching}
-          onClick={() => void query.refetch()}
-        >
-          <RotateCcw aria-hidden="true" />
-          刷新
-        </button>
-      </header>
+    <main aria-labelledby="trash-page-title" className="trash-workspace">
+      <PageHeader
+        actions={
+          <button
+            className="secondary-button"
+            title="刷新回收站"
+            disabled={pending || query.isFetching}
+            onClick={() => void query.refetch()}
+          >
+            <RotateCcw aria-hidden="true" />
+            刷新
+          </button>
+        }
+        className="trash-header"
+        description="恢复图案和文件夹，或永久删除不再需要的内容。"
+        eyebrow="资料管理"
+        id="trash-page-title"
+        title="回收站"
+      />
       {query.isPending ? (
         <p role="status">正在载入回收站...</p>
       ) : !query.data ? (
@@ -272,7 +276,7 @@ export function TrashView({
                     恢复
                   </button>
                   <button
-                    className="bulk-action-button"
+                    className="danger-button"
                     disabled={pending || deleting}
                     onClick={() => openFolderPurge(batch)}
                   >
@@ -281,7 +285,7 @@ export function TrashView({
                   </button>
                   {deleting && batch.purgeOperationId ? (
                     <button
-                      className="bulk-action-button"
+                      className="danger-button"
                       disabled={pending}
                       onClick={() => openFolderPurge(batch)}
                     >
@@ -330,7 +334,7 @@ export function TrashView({
                       恢复所选
                     </button>
                     <button
-                      className="bulk-action-button"
+                      className="danger-button"
                       disabled={disabled}
                       onClick={() => openPatternPurge(batch)}
                     >
@@ -339,7 +343,7 @@ export function TrashView({
                     </button>
                     {deleting && batch.purgeOperationId ? (
                       <button
-                        className="bulk-action-button"
+                        className="danger-button"
                         disabled={pending}
                         onClick={() => openPatternPurge(batch, true)}
                       >

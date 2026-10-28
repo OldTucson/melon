@@ -1,6 +1,6 @@
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { useTheme } from "next-themes";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -85,11 +85,38 @@ describe("settings page", () => {
     );
 
     expect(mocks.requireUser).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("heading", { name: "设置" })).toBeInTheDocument();
+    const main = screen.getByRole("main", { name: "设置" });
+    const title = within(main).getByRole("heading", {
+      level: 1,
+      name: "设置",
+    });
+    expect(title.closest("header")).toHaveClass("page-header");
+    expect(
+      Array.from(main.querySelectorAll(":scope > .settings-section")).map(
+        (section) => section.getAttribute("aria-labelledby"),
+      ),
+    ).toEqual([
+      "appearance-title",
+      "authorization-fields-title",
+      "image-search-index-title",
+      "legal-settings-title",
+    ]);
     expect(
       await screen.findByRole("heading", { name: "图像搜索索引" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "夜间" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "跟随系统" })).toHaveAttribute(
+      "value",
+      "system",
+    );
+    expect(screen.getByRole("radio", { name: "浅色" })).toHaveAttribute(
+      "value",
+      "light",
+    );
+    expect(screen.getByRole("radio", { name: "夜间" })).toHaveAttribute(
+      "value",
+      "dark",
+    );
     expect(setTheme).toHaveBeenCalledWith("dark");
     expect(fetch).toHaveBeenCalledWith(
       "/api/authorization-fields?includeArchived=true",

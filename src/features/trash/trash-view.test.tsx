@@ -131,6 +131,12 @@ afterEach(() => {
 it("renders folder groups as one row and ordinary patterns as selectable rows", () => {
   const { wrapper } = setup(data());
   render(<TrashView />, { wrapper });
+  const main = screen.getByRole("main", { name: "回收站" });
+  expect(
+    within(main)
+      .getByRole("heading", { level: 1, name: "回收站" })
+      .closest("header"),
+  ).toHaveClass("page-header");
   const group = screen.getByRole("region", { name: "夏日果园" });
   expect(within(group).getByText("2 个文件夹 · 3 个图案")).toBeInTheDocument();
   expect(within(group).queryByRole("checkbox")).not.toBeInTheDocument();
@@ -138,6 +144,9 @@ it("renders folder groups as one row and ordinary patterns as selectable rows", 
   expect(within(group).getByText(/有效授权/)).toHaveTextContent(
     "有效授权 2 笔 · ¥1,000.00",
   );
+  expect(
+    within(group).getByRole("button", { name: "永久删除" }),
+  ).toHaveClass("danger-button");
   expect(screen.getAllByRole("checkbox")).toHaveLength(2);
 });
 it("selects and focuses an ordinary pattern from a dashboard deep link", async () => {

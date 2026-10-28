@@ -1,3 +1,4 @@
+import { PageHeader } from "@/components/ui/page-header";
 import { requireUser } from "@/features/auth/session";
 import { AuthorizationFieldSettings } from "@/features/authorizations/field-settings";
 import { ImageSearchIndexSettings } from "@/features/image-search/index-settings";
@@ -11,12 +12,17 @@ export default async function SettingsPage() {
   const legalConfig = toPublicLegalConfig(getServerEnv());
 
   return (
-    <main className="settings-page">
-      <header className="settings-header">
-        <h1>设置</h1>
-      </header>
+    <main aria-labelledby="settings-page-title" className="settings-page">
+      <PageHeader
+        className="settings-header"
+        eyebrow="工作区"
+        id="settings-page-title"
+        title="设置"
+      />
       <section className="settings-section" aria-labelledby="appearance-title">
-        <h2 id="appearance-title">外观</h2>
+        <div className="settings-section-label">
+          <h2 id="appearance-title">外观</h2>
+        </div>
         <ThemeControl />
       </section>
       <section

@@ -21,6 +21,10 @@ describe("private service terms page", () => {
     expect(
       screen.getByRole("heading", { name: "服务协议", level: 1 }),
     ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "返回登录" })).toHaveAttribute(
+      "href",
+      "/login",
+    );
     for (const heading of [
       "私有邀请",
       "账户保护",

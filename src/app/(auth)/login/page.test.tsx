@@ -35,6 +35,10 @@ describe("login page", () => {
     const { default: LoginPage } = await import("./page");
     const { container } = render(await LoginPage());
 
+    expect(screen.getByRole("main", { name: "登录" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 1, name: "登录" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("form", { name: "登录" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "隐私政策" })).toHaveAttribute(
       "href",
