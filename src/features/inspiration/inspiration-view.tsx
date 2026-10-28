@@ -1,0 +1,403 @@
+"use client";
+
+import { useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
+import * as Tooltip from "@radix-ui/react-tooltip";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { Pencil, RefreshCw, Share2, Trash2 } from "lucide-react";
+import { z } from "zod";
+import { ApiResponseError } from "@/lib/query/client";
+import { useQueryOwnerId } from "@/lib/query/provider";
+import {
+  inspirationPatchMutationSchema,
+  type InspirationDetailDto,
+} from "./contracts";
+import { inspirationApi } from "./inspiration-api";
+import { InspirationHistory } from "./inspiration-history";
+import { InspirationPromptForm } from "./inspiration-prompt-form";
+import { InspirationResult } from "./inspiration-result";
+import { InspirationShareDialog } from "./inspiration-share-dialog";
+import { inspirationKeys } from "./query-keys";
+import styles from "./inspiration.module.css";
+
+function IconButton({
+  label,
+  children,
+  onClick,
+  disabled,
+}: {
+  label: string;
+  children: React.ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <Tooltip.Root>
+      <Tooltip.Trigger asChild>
+        <button
+          className={styles.iconButton}
+          aria-label={label}
+          disabled={disabled}
+          onClick={onClick}
+        >
+          {children}
+        </button>
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content className="tooltip-content" sideOffset={6}>
+          {label}
+          <Tooltip.Arrow className="tooltip-arrow" />
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  );
+}
+
+// Only this validated identifier may leave an error's untrusted details object.
+function savedFailureId(error: unknown) {
+  if (
+    !(error instanceof ApiResponseError) ||
+    typeof error.details !== "object" ||
+    error.details === null ||
+    !("analysisId" in error.details)
+  )
+    return null;
+  const id = z.string().uuid().safeParse(error.details.analysisId);
+  return id.success ? id.data : null;
+}
+function errorMessage(error: unknown) {
+  return error instanceof ApiResponseError && error.status === 409
+    ? "记录已更新，请重试"
+    : "分析暂时失败，请稍后重试";
+}
+
+export function InspirationView() {
+  const ownerId = useQueryOwnerId();
+  const client = useQueryClient();
+  const [selection, setSelection] = useState<string | null>(null);
+  const [dialog, setDialog] = useState<"rename" | "delete" | "share" | null>(
+    null,
+  );
+  const [title, setTitle] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const history = useInfiniteQuery({
+    queryKey: inspirationKeys.list(ownerId),
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam, signal }) => inspirationApi.list(pageParam, signal),
+    getNextPageParam: (page) => page.nextCursor ?? undefined,
+    refetchInterval: (query) =>
+      query.state.data?.pages.some((page) =>
+        page.items.some((item) => item.status === "pending"),
+      )
+        ? 5000
+        : false,
+  });
+  const items = history.data?.pages.flatMap((page) => page.items) ?? [];
+  const selectedId = selection ?? items[0]?.id ?? null;
+  const detail = useQuery({
+    queryKey: inspirationKeys.detail(ownerId, selectedId ?? ""),
+    queryFn: ({ signal }) => inspirationApi.detail(selectedId!, signal),
+    enabled: selectedId !== null,
+    refetchInterval: (query) =>
+      query.state.data?.status === "pending" ? 5000 : false,
+  });
+  const analysis = detail.data;
+  const invalidate = () =>
+    client.invalidateQueries({ queryKey: inspirationKeys.all(ownerId) });
+  const saveDetail = async (data: InspirationDetailDto) => {
+    client.setQueryData(inspirationKeys.detail(ownerId, data.id), data);
+    setSelection(data.id);
+    setNotice("已自动保存");
+    await invalidate();
+  };
+  const onFailure = async (failure: unknown) => {
+    setError(errorMessage(failure));
+    const id = savedFailureId(failure);
+    if (id) setSelection(id);
+    await invalidate();
+  };
+  const create = useMutation({
+    mutationFn: inspirationApi.create,
+    onSuccess: saveDetail,
+    onError: onFailure,
+  });
+  const retry = useMutation({
+    mutationFn: inspirationApi.retry,
+    onSuccess: saveDetail,
+    onError: onFailure,
+  });
+  const rename = useMutation({
+    mutationFn: ({
+      id,
+      title,
+      version,
+    }: {
+      id: string;
+      title: string;
+      version: number;
+    }) => inspirationApi.rename(id, { title, version }),
+    onSuccess: async (data) => {
+      setDialog(null);
+      await saveDetail(data);
+    },
+    onError: onFailure,
+  });
+  const remove = useMutation({
+    mutationFn: inspirationApi.delete,
+    onSuccess: async ({ id }) => {
+      setSelection(null);
+      setDialog(null);
+      setNotice(null);
+      client.removeQueries({
+        queryKey: inspirationKeys.detail(ownerId, id),
+        exact: true,
+      });
+      await invalidate();
+    },
+    onError: onFailure,
+  });
+  const pending = create.isPending || retry.isPending;
+  const editing = rename.isPending || remove.isPending;
+  const blocked =
+    items.some((item) => item.status === "pending") ||
+    analysis?.status === "pending";
+  const selected =
+    analysis && selectedId === analysis.id ? analysis : undefined;
+  function openDialog(next: typeof dialog) {
+    setError(null);
+    setNotice(null);
+    setTitle(selected?.title ?? "");
+    setDialog(next);
+  }
+
+  return (
+    <div className={styles.workspace}>
+      <header className={styles.pageHeader}>
+        <h1>灵感研究</h1>
+      </header>
+      <InspirationPromptForm
+        pending={pending}
+        blocked={blocked}
+        onSubmit={(input) => {
+          setError(null);
+          setNotice(null);
+          create.mutate(input);
+        }}
+      />
+      {pending && (
+        <p className={styles.muted} role="status">
+          正在分析…
+        </p>
+      )}
+      <div className={styles.columns}>
+        <InspirationHistory
+          items={items}
+          selectedId={selectedId}
+          loading={history.isPending}
+          error={history.isError}
+          hasMore={history.hasNextPage}
+          fetchingMore={history.isFetchingNextPage}
+          onSelect={(id) => {
+            setSelection(id);
+            setDialog(null);
+            setError(null);
+            setNotice(null);
+          }}
+          onMore={() => {
+            void history.fetchNextPage();
+          }}
+          onRefresh={() => {
+            void history.refetch();
+          }}
+        />
+        <div className={styles.detail} aria-label="研究详情">
+          {error && <p role="alert">{error}</p>}
+          {notice && (
+            <p className={styles.muted} role="status">
+              {notice}
+            </p>
+          )}
+          {selectedId && detail.isPending && <p role="status">正在加载研究…</p>}
+          {detail.isError && (
+            <div>
+              <p role="alert">研究详情加载失败</p>
+              <button
+                className={styles.button}
+                onClick={() => {
+                  void detail.refetch();
+                }}
+              >
+                重新加载详情
+              </button>
+            </div>
+          )}
+          {!selectedId && <p className={styles.empty}>暂无研究结果</p>}
+          {selected && (
+            <>
+              <header className={styles.detailHeader}>
+                <h2 className={styles.recordTitle}>{selected.title}</h2>
+                {selected.status !== "pending" && (
+                  <div className={styles.actions}>
+                    <IconButton
+                      label="重命名"
+                      disabled={editing}
+                      onClick={() => openDialog("rename")}
+                    >
+                      <Pencil aria-hidden="true" />
+                    </IconButton>
+                    {selected.status === "completed" && (
+                      <IconButton
+                        label="分享研究"
+                        disabled={editing}
+                        onClick={() => openDialog("share")}
+                      >
+                        <Share2 aria-hidden="true" />
+                      </IconButton>
+                    )}
+                    <IconButton
+                      label="删除研究"
+                      disabled={editing || pending}
+                      onClick={() => openDialog("delete")}
+                    >
+                      <Trash2 aria-hidden="true" />
+                    </IconButton>
+                  </div>
+                )}
+              </header>
+              <p className={styles.originalPrompt}>{selected.prompt}</p>
+              {selected.status === "pending" && (
+                <p role="status">正在分析这份研究…</p>
+              )}
+              {selected.status === "failed" && (
+                <div className={styles.failed}>
+                  <p>这份研究分析失败，已保存研究需求。</p>
+                  <button
+                    className={styles.button}
+                    disabled={pending || blocked}
+                    onClick={() => {
+                      setError(null);
+                      setNotice(null);
+                      retry.mutate(selected.id);
+                    }}
+                  >
+                    <RefreshCw aria-hidden="true" />
+                    {retry.isPending ? "重试中…" : "重试分析"}
+                  </button>
+                </div>
+              )}
+              {selected.status === "completed" && selected.result && (
+                <InspirationResult
+                  result={selected.result}
+                  sources={selected.sources ?? []}
+                />
+              )}
+              {dialog === "share" && (
+                <InspirationShareDialog
+                  key={selected.id}
+                  analysis={selected}
+                  onClose={() => setDialog(null)}
+                />
+              )}
+              {(dialog === "rename" || dialog === "delete") && (
+                <Dialog.Root
+                  open
+                  onOpenChange={(open) => {
+                    if (!open && !editing) setDialog(null);
+                  }}
+                >
+                  <Dialog.Portal>
+                    <Dialog.Overlay className={styles.overlay} />
+                    <Dialog.Content
+                      className={styles.dialog}
+                      onEscapeKeyDown={(event) => {
+                        if (editing) event.preventDefault();
+                      }}
+                      onInteractOutside={(event) => {
+                        if (editing) event.preventDefault();
+                      }}
+                    >
+                      <Dialog.Title>
+                        {dialog === "rename" ? "重命名研究" : "删除研究？"}
+                      </Dialog.Title>
+                      <Dialog.Description>
+                        {dialog === "delete"
+                          ? `“${selected.title}”将被永久删除，分享链接也会失效。`
+                          : selected.title}
+                      </Dialog.Description>
+                      <form
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          if (editing) return;
+                          if (dialog === "delete") remove.mutate(selected.id);
+                          else {
+                            const input =
+                              inspirationPatchMutationSchema.safeParse({
+                                title,
+                                version: selected.version,
+                              });
+                            if (input.success)
+                              rename.mutate({ id: selected.id, ...input.data });
+                          }
+                        }}
+                      >
+                        {dialog === "rename" && (
+                          <label className={styles.titleField}>
+                            研究标题
+                            <input
+                              value={title}
+                              maxLength={120}
+                              onChange={(event) => setTitle(event.target.value)}
+                            />
+                          </label>
+                        )}
+                        {error && <p role="alert">{error}</p>}
+                        <footer className={styles.actions}>
+                          <button
+                            className={styles.button}
+                            type="button"
+                            disabled={editing}
+                            onClick={() => setDialog(null)}
+                          >
+                            取消
+                          </button>
+                          <button
+                            className={
+                              dialog === "delete"
+                                ? styles.dangerButton
+                                : styles.primaryButton
+                            }
+                            disabled={
+                              editing ||
+                              (dialog === "rename" &&
+                                !inspirationPatchMutationSchema.safeParse({
+                                  title,
+                                  version: selected.version,
+                                }).success)
+                            }
+                            type="submit"
+                          >
+                            {editing
+                              ? "正在保存…"
+                              : dialog === "delete"
+                                ? "确认删除"
+                                : "保存标题"}
+                          </button>
+                        </footer>
+                      </form>
+                    </Dialog.Content>
+                  </Dialog.Portal>
+                </Dialog.Root>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
