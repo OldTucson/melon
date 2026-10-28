@@ -196,6 +196,12 @@ describe("Mac-first workspace", () => {
     const inspector = screen.getByRole("complementary", {
       name: "图案检查器",
     });
+    expect(
+      within(inspector).getByRole("heading", { name: "图案信息" }),
+    ).toBeVisible();
+    expect(
+      within(inspector).getByRole("region", { name: "文件位置" }),
+    ).toBeVisible();
     expect(within(inspector).getByText("#285947")).toBeVisible();
     expect(within(inspector).getByText("50%")).toBeVisible();
 

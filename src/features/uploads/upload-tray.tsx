@@ -105,6 +105,9 @@ export function UploadTray({
         <div className="upload-tray-list">
           {tasks.map((task) => {
             const active = ["hashing", "uploading"].includes(task.status);
+            const progress = Math.round(
+              Math.max(0, Math.min(100, task.progress)),
+            );
             const recoveryAvailable = Boolean(
               task.canRecoverCompletion &&
                 task.completionStartedAt !== undefined &&
@@ -122,10 +125,17 @@ export function UploadTray({
                       : (task.error ?? statusLabels[task.status])}
                   </span>
                 </div>
-                <div className="upload-progress" aria-label={`${task.filename} 上传进度`}>
-                  <span style={{ width: `${Math.max(0, Math.min(100, task.progress))}%` }} />
+                <div
+                  aria-label={`${task.filename} 上传进度`}
+                  aria-valuemax={100}
+                  aria-valuemin={0}
+                  aria-valuenow={progress}
+                  className="upload-progress"
+                  role="progressbar"
+                >
+                  <span style={{ width: `${progress}%` }} />
                 </div>
-                <output>{Math.round(task.progress)}%</output>
+                <output>{progress}%</output>
                 <div className="upload-tray-actions">
                   {active ? (
                     <button

@@ -87,6 +87,12 @@ describe("upload UI", () => {
     );
 
     expect(screen.getByText("42%")).toBeVisible();
+    expect(
+      screen.getByRole("progressbar", { name: "leaf.png 上传进度" }),
+    ).toHaveAttribute("aria-valuenow", "42");
+    expect(
+      screen.getByRole("progressbar", { name: "bad.ai 上传进度" }),
+    ).toHaveAttribute("aria-valuenow", "12");
     expect(screen.getByRole("button", { name: "暂停 leaf.png" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "重试 bad.ai" })).toBeEnabled();
     expect(screen.getByText("网络连接中断")).toBeVisible();

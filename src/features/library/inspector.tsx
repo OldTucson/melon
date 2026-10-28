@@ -194,7 +194,16 @@ export function Inspector({
               compact
               statusCheck={statusCheck}
             />
-            <section className="inspector-section">
+            <section
+              aria-labelledby="inspector-pattern-info-title"
+              className="inspector-section inspector-pattern-info"
+            >
+              <h2
+                className="inspector-section-title"
+                id="inspector-pattern-info-title"
+              >
+                图案信息
+              </h2>
               <label className="inspector-field">
                 <span>图案名称</span>
                 <input
@@ -407,7 +416,10 @@ function SelectionActions({
     (folder) => folder.id === patterns[0]?.folderId,
   );
   return (
-    <section className="inspector-section inspector-location">
+    <section
+      aria-label="文件位置"
+      className="inspector-section inspector-location"
+    >
       {compact ? (
         <>
           <p title={currentFolder?.name}>
