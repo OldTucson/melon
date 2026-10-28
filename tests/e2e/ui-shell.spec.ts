@@ -21,6 +21,30 @@ async function expectNoPageOverflow(page: Parameters<typeof loginAs>[0]) {
     .toEqual({ body: true, document: true });
 }
 
+test("centers the desktop wordmark within the expanded sidebar", async ({
+  page,
+}) => {
+  await page.setViewportSize(viewports[0]);
+  await page.goto("/login");
+  await page.evaluate(() => localStorage.removeItem("melon:sidebar-mode"));
+  await loginAs(page, E2E_USERS.designer);
+
+  const centerOffset = await page.evaluate(() => {
+    const sidebar = document.querySelector(".workspace-sidebar");
+    const wordmark = document.querySelector(".workspace-brand-full");
+    if (!sidebar || !wordmark) throw new Error("WORKSPACE_BRAND_MISSING");
+    const sidebarRect = sidebar.getBoundingClientRect();
+    const wordmarkRect = wordmark.getBoundingClientRect();
+    return (
+      wordmarkRect.left +
+      wordmarkRect.width / 2 -
+      (sidebarRect.left + sidebarRect.width / 2)
+    );
+  });
+
+  expect(Math.abs(centerOffset)).toBeLessThanOrEqual(1);
+});
+
 test("workspace adapts without overflow and preserves navigation controls", async ({
   page,
 }) => {
