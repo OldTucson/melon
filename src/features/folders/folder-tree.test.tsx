@@ -160,6 +160,25 @@ describe("folder tree interactions", () => {
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(toggle).toHaveFocus();
   });
+  it("cancels an untouched create draft without sending a request", async () => {
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    const { user } = setup();
+
+    await user.click(screen.getByRole("button", { name: "新建文件夹" }));
+    expect(
+      screen.getByRole("textbox", { name: "文件夹名称" }),
+    ).toHaveFocus();
+
+    await user.click(
+      screen.getByRole("button", { name: "取消新建文件夹" }),
+    );
+
+    expect(
+      screen.queryByRole("textbox", { name: "文件夹名称" }),
+    ).not.toBeInTheDocument();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
   it("expands with keyboard, exposes current link/title/count and preserves navigation filters", async () => {
     const { user } = setup(
       `folderId=${id}&includeDescendants=false&q=花&cursor=old&favorite=true`,

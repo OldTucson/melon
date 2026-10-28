@@ -270,6 +270,21 @@ export function FolderTree() {
         >
           <Check aria-hidden="true" />
         </button>
+        <button
+          className="folder-icon-button"
+          type="button"
+          title={draft.kind === "create" ? "取消新建文件夹" : "取消重命名"}
+          aria-label={
+            draft.kind === "create" ? "取消新建文件夹" : "取消重命名"
+          }
+          disabled={pending}
+          onClick={() => {
+            setDraft(null);
+            setError(null);
+          }}
+        >
+          <X aria-hidden="true" />
+        </button>
       </form>
     );
   const renderNode = (
