@@ -1,6 +1,15 @@
 "use client";
 
-import { Cloud, ScanSearch, Search, Upload, UserRound } from "lucide-react";
+import {
+  Cloud,
+  Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
+  ScanSearch,
+  Search,
+  Upload,
+  UserRound,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
@@ -10,8 +19,16 @@ import { useImageSearchStore } from "@/features/image-search/image-search-store"
 import { IconButton } from "./icon-button";
 
 export function Topbar({
+  mobileNavigation,
+  navigationExpanded,
+  navigationTriggerRef,
+  onToggleNavigation,
   user,
 }: {
+  mobileNavigation: boolean;
+  navigationExpanded: boolean;
+  navigationTriggerRef: React.RefObject<HTMLButtonElement | null>;
+  onToggleNavigation: () => void;
   user: { displayName: string; email: string };
 }) {
   const pathname = usePathname();
@@ -37,8 +54,42 @@ export function Topbar({
 
   return (
     <header className="workspace-topbar">
+      <button
+        aria-expanded={navigationExpanded}
+        aria-label={
+          mobileNavigation
+            ? navigationExpanded
+              ? "关闭主导航"
+              : "打开主导航"
+            : navigationExpanded
+              ? "折叠主导航"
+              : "展开主导航"
+        }
+        className="icon-button workspace-navigation-toggle"
+        onClick={onToggleNavigation}
+        ref={navigationTriggerRef}
+        title={
+          mobileNavigation
+            ? navigationExpanded
+              ? "关闭主导航"
+              : "打开主导航"
+            : navigationExpanded
+              ? "折叠主导航"
+              : "展开主导航"
+        }
+        type="button"
+      >
+        {mobileNavigation ? (
+          <Menu aria-hidden="true" />
+        ) : navigationExpanded ? (
+          <PanelLeftClose aria-hidden="true" />
+        ) : (
+          <PanelLeftOpen aria-hidden="true" />
+        )}
+      </button>
       <Link className="workspace-brand" href="/library" aria-label="melon 图案库">
-        melon
+        <span className="workspace-brand-full">melon</span>
+        <span aria-hidden="true" className="workspace-brand-mark">m</span>
       </Link>
       <form className="global-search" role="search" onSubmit={submitSearch}>
         <Search aria-hidden="true" />
@@ -76,7 +127,12 @@ export function Topbar({
           <Upload aria-hidden="true" />
           <span>上传</span>
         </button>
-        <Link className="account-link" href="/settings" aria-label="打开账户设置" title="打开账户设置">
+        <Link
+          className="account-link"
+          href="/settings"
+          aria-label="打开账户设置"
+          title="打开账户设置"
+        >
           <UserRound aria-hidden="true" />
           <span className="account-copy">
             <strong>{user.displayName}</strong>

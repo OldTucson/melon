@@ -39,9 +39,16 @@ const pattern: PatternItem = {
   deletedAt: null, changeSeq: "1", createdAt: folder.createdAt, updatedAt: folder.updatedAt,
 };
 
-function renderWorkspace(compact = true) {
+function renderWorkspace(compact = true, phone = false) {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    value: phone ? 390 : compact ? 1024 : 1512,
+  });
   vi.stubGlobal("matchMedia", vi.fn((media: string) => ({
-    matches: compact && media === "(max-width: 1100px)", media,
+    matches:
+      (compact && media === "(max-width: 1100px)") ||
+      (phone && media === "(max-width: 720px)"),
+    media,
     addEventListener: vi.fn(), removeEventListener: vi.fn(),
   })));
   navigation.search = new URLSearchParams({ folderId: folder.id });
@@ -90,6 +97,7 @@ function renderDeepLinkedPattern() {
 }
 
 beforeEach(() => {
+  localStorage.clear();
   useSelectionStore.getState().clear();
   vi.stubGlobal("ResizeObserver", class {
     observe() {}
@@ -100,6 +108,54 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("responsive workspace panels", () => {
+  it("persists an explicit desktop sidebar mode", async () => {
+    const user = userEvent.setup();
+    renderWorkspace(false);
+
+    const workspace = screen.getByLabelText("图案工作区");
+    const toggle = screen.getByRole("button", { name: "折叠主导航" });
+    expect(workspace).toHaveAttribute("data-sidebar", "expanded");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+    await user.click(toggle);
+
+    expect(workspace).toHaveAttribute("data-sidebar", "collapsed");
+    expect(localStorage.getItem("melon:sidebar-mode")).toBe("collapsed");
+    expect(
+      screen.getByRole("button", { name: "展开主导航" }),
+    ).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("restores a saved desktop sidebar mode", async () => {
+    localStorage.setItem("melon:sidebar-mode", "collapsed");
+    renderWorkspace(false);
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("图案工作区")).toHaveAttribute(
+        "data-sidebar",
+        "collapsed",
+      ),
+    );
+  });
+
+  it("opens mobile navigation as a dialog and restores trigger focus", async () => {
+    const user = userEvent.setup();
+    renderWorkspace(true, true);
+
+    const trigger = screen.getByRole("button", { name: "打开主导航" });
+    await user.click(trigger);
+
+    expect(
+      screen.getByRole("dialog", { name: "主导航" }),
+    ).toBeInTheDocument();
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("dialog", { name: "主导航" })).toBeNull();
+    expect(trigger).toHaveFocus();
+  });
+
   it("opens a deep-linked pattern even when it is not in the loaded page", async () => {
     renderDeepLinkedPattern();
 

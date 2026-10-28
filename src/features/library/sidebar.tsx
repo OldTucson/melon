@@ -46,7 +46,13 @@ async function loadTags() {
   return readApiResponse<TagItem[]>(await fetch("/api/tags"));
 }
 
-export function Sidebar() {
+export function Sidebar({
+  collapsed = false,
+  onNavigate,
+}: {
+  collapsed?: boolean;
+  onNavigate?: () => void;
+}) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const ownerId = useQueryOwnerId();
@@ -57,7 +63,14 @@ export function Sidebar() {
   const activeView = getActiveView(pathname, searchParams);
 
   return (
-    <nav className="workspace-sidebar" aria-label="主导航">
+    <nav
+      className="workspace-sidebar"
+      aria-label="主导航"
+      data-collapsed={collapsed ? "true" : "false"}
+      onClickCapture={(event) => {
+        if ((event.target as Element).closest("a")) onNavigate?.();
+      }}
+    >
       <div className="sidebar-section">
         {primaryItems.map(({ id, href, icon: Icon, label }) => {
           const active = activeView === id;

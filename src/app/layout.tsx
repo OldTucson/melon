@@ -4,6 +4,7 @@ import "./globals.css";
 import "./styles/tokens.css";
 import "./styles/foundation.css";
 import "./styles/controls.css";
+import "./styles/workspace.css";
 
 export const metadata: Metadata = {
   title: "melon",
