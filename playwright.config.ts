@@ -121,13 +121,13 @@ export default defineConfig({
             APP_ORIGIN: E2E_BASE_URL,
             DATABASE_URL: E2E_DATABASE_URL,
             MELON_E2E_SERVER: "1",
+            IMAGE_SEARCH_ENABLED: E2E_IMAGE_SEARCH ? "true" : "false",
             ...(E2E_METADATA_ONLY ? metadataEnvironment : {}),
             ...(E2E_IMAGE_SEARCH
               ? {
                   E2E_IMAGE_SEARCH: "1",
                   E2E_IMAGE_SEARCH_STUB_PORT,
                   IMAGE_SEARCH_ACTIVE_VERSION: "visual-search-v2",
-                  IMAGE_SEARCH_ENABLED: "true",
                   IMAGE_SEARCH_INTERNAL_TOKEN:
                     "image-search-e2e-internal-token-2026",
                   IMAGE_SEARCH_MODEL_SHA256: "a".repeat(64),
