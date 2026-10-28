@@ -1,4 +1,5 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { InspirationSharedDto } from "./contracts";
@@ -22,7 +23,8 @@ const analysis: InspirationSharedDto = {
 afterEach(cleanup);
 
 describe("public inspiration report", () => {
-  it("renders the approved report fields and a fixed market disclaimer without workspace providers", () => {
+  it("renders the approved report fields and a fixed market disclaimer without workspace providers", async () => {
+    const user = userEvent.setup();
     render(<SharedInspirationPage analysis={analysis} />);
 
     expect(screen.getByRole("main")).toBeVisible();
@@ -37,13 +39,11 @@ describe("public inspiration report", () => {
     expect(
       screen.getByRole("heading", { name: "都市轻通勤的柔和层次" }),
     ).toBeVisible();
+    for (const name of ["款式", "类型", "风格", "品类", "色款", "材质"]) {
+      await user.click(screen.getByRole("tab", { name }));
+      expect(screen.getByRole("region", { name })).toBeVisible();
+    }
     for (const name of [
-      "款式",
-      "类型",
-      "风格",
-      "品类",
-      "色款",
-      "材质",
       "市场信号",
       "参考款",
       "设计灵感",

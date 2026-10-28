@@ -18,7 +18,12 @@ import {
   vi,
   type MockInstance,
 } from "vitest";
-import { createQueryClient } from "@/lib/query/client";
+import {
+  inspirationVisualBoardDtoSchema,
+  type InspirationVisualBoardDto,
+} from "@/features/inspiration-visuals/contracts";
+import { visualBoardFixture } from "@/features/inspiration-visuals/test-fixtures";
+import { ApiResponseError, createQueryClient } from "@/lib/query/client";
 import { QueryOwnerProvider } from "@/lib/query/provider";
 import {
   inspirationCreateMutationSchema,
@@ -41,11 +46,18 @@ const pageMocks = vi.hoisted(() => ({
   requireUser: vi.fn(),
   listInspirationAnalyses: vi.fn(),
 }));
+const visualMocks = vi.hoisted(() => ({
+  get: vi.fn(),
+  create: vi.fn(),
+}));
 vi.mock("@/features/auth/session", () => ({
   requireUser: pageMocks.requireUser,
 }));
 vi.mock("@/features/inspiration/analysis-service", () => ({
   listInspirationAnalyses: pageMocks.listInspirationAnalyses,
+}));
+vi.mock("@/features/inspiration-visuals/inspiration-visual-api", () => ({
+  inspirationVisualApi: visualMocks,
 }));
 
 const ownerId = "10000000-0000-4000-8000-000000000001";
@@ -59,6 +71,15 @@ const failed: InspirationDetailDto = {
   errorCode: "INSPIRATION_SEARCH_TIMEOUT",
   completedAt: null,
 };
+const emptyVisualBoard: InspirationVisualBoardDto =
+  inspirationVisualBoardDtoSchema.parse({
+    activeJob: null,
+    refreshJob: null,
+    webEvidence: [],
+    libraryMatches: [],
+    conceptJobs: [],
+    concepts: [],
+  });
 let record: InspirationDetailDto | null;
 let listOverride: unknown;
 let createResponse: () => Promise<Response>;
@@ -102,6 +123,12 @@ function renderWorkspace(
   return { client, ...rendered };
 }
 async function submit(user: ReturnType<typeof userEvent.setup>) {
+  if (record && !screen.queryByRole("dialog", { name: "新建灵感调研" })) {
+    await screen.findByRole("heading", { name: record.title });
+    await user.click(screen.getByRole("button", { name: "新建调研" }));
+  } else if (!screen.queryByRole("textbox", { name: "研究需求" })) {
+    await user.click(screen.getByRole("button", { name: "新建调研" }));
+  }
   await user.type(
     screen.getByRole("textbox", { name: "研究需求" }),
     "分析近 30 天都市轻通勤女装",
@@ -109,10 +136,26 @@ async function submit(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "开始分析" }));
 }
 async function openRecord(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(
-    await screen.findByRole("button", { name: /都市轻通勤女装研究/ }),
-  );
+  await selectHistoryRecord(user, /都市轻通勤女装研究/);
   await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+}
+async function showHistory(user: ReturnType<typeof userEvent.setup>) {
+  const current = screen.queryByRole("dialog", { name: "研究历史" });
+  if (current) return current;
+  await user.click(screen.getByRole("button", { name: "历史" }));
+  return screen.findByRole("dialog", { name: "研究历史" });
+}
+async function historyRecord(
+  user: ReturnType<typeof userEvent.setup>,
+  name: string | RegExp,
+) {
+  return within(await showHistory(user)).findByRole("button", { name });
+}
+async function selectHistoryRecord(
+  user: ReturnType<typeof userEvent.setup>,
+  name: string | RegExp,
+) {
+  await user.click(await historyRecord(user, name));
 }
 
 beforeEach(() => {
@@ -121,6 +164,8 @@ beforeEach(() => {
   requests = [];
   clients = [];
   consoleError = vi.spyOn(console, "error");
+  visualMocks.get.mockReset().mockResolvedValue(emptyVisualBoard);
+  visualMocks.create.mockReset().mockResolvedValue(visualBoardFixture);
   // jsdom omits the layout observer used by Radix when focus opens a tooltip.
   vi.stubGlobal(
     "ResizeObserver",
@@ -236,6 +281,137 @@ describe("inspiration workspace", () => {
     ).toBeInTheDocument();
   });
 
+  it("moves history into a named dialog and restores the trigger after Escape", async () => {
+    const user = userEvent.setup();
+    record = completed;
+    renderWorkspace();
+    await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+    const trigger = screen.getByRole("button", { name: "历史" });
+
+    await user.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: "研究历史" });
+    expect(
+      within(dialog).getByRole("button", { name: /都市轻通勤女装研究/ }),
+    ).toBeVisible();
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("hides the permanent form for a report and restores the new-research trigger", async () => {
+    const user = userEvent.setup();
+    record = completed;
+    renderWorkspace();
+    await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+    expect(
+      screen.queryByRole("textbox", { name: "研究需求" }),
+    ).not.toBeInTheDocument();
+    const trigger = screen.getByRole("button", { name: "新建调研" });
+
+    await user.click(trigger);
+    expect(
+      screen.getByRole("dialog", { name: "新建灵感调研" }),
+    ).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "研究需求" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "新建灵感调研" }),
+      ).not.toBeInTheDocument(),
+    );
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("does not auto-backfill history, but auto-starts visuals for a newly completed analysis", async () => {
+    const user = userEvent.setup();
+    record = completed;
+    renderWorkspace();
+    await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+    await waitFor(() =>
+      expect(visualMocks.get).toHaveBeenCalledExactlyOnceWith(
+        completed.id,
+        expect.any(AbortSignal),
+      ),
+    );
+    expect(visualMocks.create).not.toHaveBeenCalled();
+
+    cleanup();
+    for (const client of clients) client.clear();
+    clients = [];
+    record = null;
+    renderWorkspace();
+    await screen.findByText("暂无研究记录");
+    await submit(user);
+
+    await waitFor(() => expect(visualMocks.create).toHaveBeenCalledTimes(1));
+    expect(visualMocks.create).toHaveBeenCalledWith(completed.id, {
+      operationId: expect.stringMatching(/^[\da-f-]{36}$/),
+    });
+  });
+
+  it("creates one stable visual operation per manual click and a new one on retry", async () => {
+    const user = userEvent.setup();
+    record = completed;
+    visualMocks.create.mockResolvedValue(emptyVisualBoard);
+    renderWorkspace();
+    const refresh = await screen.findByRole("button", {
+      name: "补充视觉素材",
+    });
+
+    await user.click(refresh);
+    await waitFor(() => expect(visualMocks.create).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(refresh).toBeEnabled());
+    await user.click(refresh);
+    await waitFor(() => expect(visualMocks.create).toHaveBeenCalledTimes(2));
+
+    const firstOperation = visualMocks.create.mock.calls[0]![1].operationId;
+    const secondOperation = visualMocks.create.mock.calls[1]![1].operationId;
+    expect(firstOperation).toMatch(/^[\da-f-]{36}$/);
+    expect(secondOperation).toMatch(/^[\da-f-]{36}$/);
+    expect(secondOperation).not.toBe(firstOperation);
+  });
+
+  it("keeps the active library mosaic while a visual refresh is pending", async () => {
+    record = completed;
+    visualMocks.get.mockResolvedValue({
+      ...visualBoardFixture,
+      refreshJob: {
+        ...visualBoardFixture.activeJob,
+        id: "00000000-0000-4000-8000-000000000199",
+        status: "pending",
+        completedAt: null,
+      },
+    });
+    renderWorkspace();
+
+    expect(
+      await screen.findByRole("img", { name: "绿色植物图案" }),
+    ).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("正在补充视觉素材");
+    expect(screen.getByRole("link", { name: /雨后花园/ })).toHaveAttribute(
+      "href",
+      visualBoardFixture.libraryMatches[0]!.libraryHref,
+    );
+  });
+
+  it("keeps the full text report visible when visual loading fails", async () => {
+    record = completed;
+    visualMocks.get.mockRejectedValue(
+      new ApiResponseError(503, "INSPIRATION_VISUALS_UNAVAILABLE"),
+    );
+    renderWorkspace();
+
+    expect(
+      await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" }),
+    ).toBeVisible();
+    expect(screen.getByRole("heading", { name: "市场信号" })).toBeVisible();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "视觉素材加载失败",
+    );
+  });
+
   it("shows empty history with a native labelled textarea and validates before submission", async () => {
     const user = userEvent.setup();
     renderWorkspace();
@@ -257,7 +433,7 @@ describe("inspiration workspace", () => {
     ).toBeVisible();
     expect(await screen.findByText("已自动保存")).toBeVisible();
     expect(
-      screen.getByRole("button", { name: /都市轻通勤女装研究/ }),
+      await historyRecord(user, /都市轻通勤女装研究/),
     ).toHaveAttribute("aria-pressed", "true");
     expect(
       client.getQueryState(["owner", ownerId, "folders"])?.isInvalidated,
@@ -276,7 +452,7 @@ describe("inspiration workspace", () => {
       });
     renderWorkspace();
     await submit(user);
-    expect(screen.getByRole("button", { name: "分析中…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "新建调研" })).toBeDisabled();
     await openRecord(user);
     await act(async () => resolve(json(completed)));
     expect(await screen.findByText("已自动保存")).toBeVisible();
@@ -346,7 +522,7 @@ describe("inspiration workspace", () => {
     );
     await user.click(screen.getByRole("button", { name: "取消" }));
     expect(
-      await screen.findByRole("button", { name: /其他窗口的新标题/ }),
+      await historyRecord(user, /其他窗口的新标题/),
     ).toBeVisible();
     expect(screen.queryByText("DO NOT SHOW DETAILS")).not.toBeInTheDocument();
   });
@@ -398,9 +574,7 @@ describe("inspiration workspace", () => {
     const user = userEvent.setup();
     record = { ...failed, status: "pending", errorCode: null };
     renderWorkspace();
-    await user.click(
-      await screen.findByRole("button", { name: /都市轻通勤女装研究/ }),
-    );
+    await selectHistoryRecord(user, /都市轻通勤女装研究/);
     expect(await screen.findByText("正在分析这份研究…")).toBeVisible();
     expect(
       screen.queryByRole("button", { name: "删除研究" }),
@@ -408,7 +582,7 @@ describe("inspiration workspace", () => {
     expect(
       screen.queryByRole("button", { name: "重试分析" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "开始分析" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "新建调研" })).toBeDisabled();
   });
   it("fails closed when the list response violates the DTO contract", async () => {
     listOverride = {
@@ -417,11 +591,14 @@ describe("inspiration workspace", () => {
       privatePayload: "DO NOT SHOW DETAILS",
     };
     renderWorkspace();
+    const historyDialog = await showHistory(userEvent.setup());
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "研究记录加载失败",
     );
     expect(
-      screen.queryByRole("button", { name: /都市轻通勤女装研究/ }),
+      within(historyDialog).queryByRole("button", {
+        name: /都市轻通勤女装研究/,
+      }),
     ).not.toBeInTheDocument();
   });
   it("appends another history page using its opaque cursor", async () => {
@@ -429,17 +606,25 @@ describe("inspiration workspace", () => {
     record = completed;
     listOverride = { items: [summary], nextCursor: "b3BhcXVl" };
     renderWorkspace();
-    await user.click(await screen.findByRole("button", { name: "加载更多" }));
+    const historyDialog = await showHistory(user);
+    await user.click(
+      await within(historyDialog).findByRole("button", { name: "加载更多" }),
+    );
     expect(
-      await screen.findByRole("button", { name: /夏日材质研究/ }),
+      await within(historyDialog).findByRole("button", {
+        name: /夏日材质研究/,
+      }),
     ).toBeVisible();
     expect(
-      screen.getByRole("button", { name: /都市轻通勤女装研究/ }),
+      within(historyDialog).getByRole("button", {
+        name: /都市轻通勤女装研究/,
+      }),
     ).toBeVisible();
     expect(
-      screen.queryByRole("button", { name: "加载更多" }),
+      within(historyDialog).queryByRole("button", { name: "加载更多" }),
     ).not.toBeInTheDocument();
     expect(requests).toContain(`GET ${root}?limit=20&cursor=b3BhcXVl`);
+    await user.keyboard("{Escape}");
     await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
   });
   it.each([
@@ -670,7 +855,9 @@ describe("review regressions: concurrent completion, deletion, and dialog focus"
       expect(
         screen.queryByRole("heading", { name: "都市轻通勤的柔和层次" }),
       ).not.toBeInTheDocument();
-      expect(screen.getByText("暂无研究结果")).toBeVisible();
+      expect(
+        screen.getByRole("heading", { name: "开始一份灵感调研" }),
+      ).toBeVisible();
       await act(async () =>
         finishList(
           outcome === "success"
@@ -680,8 +867,10 @@ describe("review regressions: concurrent completion, deletion, and dialog focus"
             : errorResponse(undefined, "REQUEST_FAILED", 503),
         ),
       );
-      if (outcome === "failure") await screen.findByText("研究记录加载失败");
-      else await screen.findByText("暂无研究记录");
+      if (outcome === "failure") {
+        await showHistory(user);
+        await screen.findByText("研究记录加载失败");
+      } else await screen.findByText("暂无研究记录");
       expect(postDeleteDetailReads).toEqual([]);
       expect(screen.queryByText("研究详情加载失败")).not.toBeInTheDocument();
     },
@@ -748,7 +937,7 @@ describe("review regressions: concurrent completion, deletion, and dialog focus"
         await screen.findByRole("heading", { name: "夏日材质新结果" }),
       ).toBeVisible();
       expect(
-        screen.getByRole("button", { name: /夏日材质研究/ }),
+        await historyRecord(user, /夏日材质研究/),
       ).toHaveAttribute("aria-pressed", "true");
       expect(readsAfterDelete).toEqual([]);
       expect(client.getQueryData(inspirationKeys.list(ownerId))).toEqual({
@@ -768,9 +957,6 @@ describe("review regressions: concurrent completion, deletion, and dialog focus"
         finishList(errorResponse(undefined, "REQUEST_FAILED", 503)),
       );
       await screen.findByText("研究记录加载失败");
-      expect(
-        screen.getByRole("heading", { name: "夏日材质新结果" }),
-      ).toBeVisible();
       expect(readsAfterDelete).toEqual([]);
     },
   );
@@ -976,14 +1162,11 @@ function pollingHistoryServer() {
 }
 async function waitForHistoryFirst(title: string | null) {
   await waitFor(() => {
-    if (title === null)
-      expect(screen.getByText("暂无研究记录")).toBeInTheDocument();
-    else
-      expect(
-        within(
-          screen.getByRole("complementary", { name: "研究历史", hidden: true }),
-        ).getAllByRole("button", { hidden: true })[0],
-      ).toHaveTextContent(title);
+    const current = clients.at(-1)?.getQueryData<
+      InfiniteData<InspirationListDto, string | undefined>
+    >(inspirationKeys.list(ownerId));
+    const first = current?.pages.flatMap((page) => page.items)[0]?.title ?? null;
+    expect(first).toBe(title);
   });
 }
 async function refetchHistory(
@@ -1020,6 +1203,7 @@ describe("review regressions: default selection during history polling", () => {
   it.each(["hydrated", "fetched"] as const)(
     "pins the default first record after %s history arrives, even when a pending item finishes and sorts first",
     async (arrival) => {
+      const user = userEvent.setup();
       const server = pollingHistoryServer();
       const { client } = renderWorkspace(
         <InspirationView />,
@@ -1030,13 +1214,16 @@ describe("review regressions: default selection during history polling", () => {
       server.completeAndReorder();
       await refetchHistory(client, "夏日材质研究");
       expect(
-        screen.getByRole("button", { name: /都市轻通勤女装研究/ }),
-      ).toHaveAttribute("aria-pressed", "true");
-      expect(
         screen.getByRole("heading", { name: "都市轻通勤的柔和层次" }),
       ).toBeVisible();
+      const historyDialog = await showHistory(user);
       expect(
-        screen.getByRole("button", { name: /夏日材质研究/ }),
+        within(historyDialog).getByRole("button", {
+          name: /都市轻通勤女装研究/,
+        }),
+      ).toHaveAttribute("aria-pressed", "true");
+      expect(
+        within(historyDialog).getByRole("button", { name: /夏日材质研究/ }),
       ).toHaveAttribute("aria-pressed", "false");
     },
   );
@@ -1154,9 +1341,7 @@ describe("review regressions: default selection during history polling", () => {
       const server = pollingHistoryServer();
       const { client } = renderWorkspace();
       await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
-      await user.click(
-        screen.getByRole("button", { name: /都市轻通勤女装研究/ }),
-      );
+      await selectHistoryRecord(user, /都市轻通勤女装研究/);
       server.completeAndReorder();
       server.removeCurrent(outcome === "empty history");
       await refetchHistory(
@@ -1164,7 +1349,7 @@ describe("review regressions: default selection during history polling", () => {
         outcome === "empty history" ? null : "夏日材质研究",
       );
       if (outcome === "empty history")
-        expect(await screen.findByText("暂无研究结果")).toBeVisible();
+        expect(await screen.findByText("暂无研究记录")).toBeVisible();
       else
         expect(
           await screen.findByRole("heading", { name: "夏日材质新结果" }),
@@ -1177,18 +1362,21 @@ describe("review regressions: default selection during history polling", () => {
   );
 
   it("initializes selection when an initially empty history receives its first records and then keeps it pinned", async () => {
+    const user = userEvent.setup();
     const server = pollingHistoryServer();
     server.empty();
     const { client } = renderWorkspace();
     await screen.findByText("暂无研究记录");
-    expect(screen.getByText("暂无研究结果")).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "开始一份灵感调研" }),
+    ).toBeVisible();
     server.restore();
     await refetchHistory(client, "都市轻通勤女装研究");
     await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
     server.completeAndReorder();
     await refetchHistory(client, "夏日材质研究");
     expect(
-      screen.getByRole("button", { name: /都市轻通勤女装研究/ }),
+      await historyRecord(user, /都市轻通勤女装研究/),
     ).toHaveAttribute("aria-pressed", "true");
   });
 
@@ -1199,16 +1387,16 @@ describe("review regressions: default selection during history polling", () => {
     await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
     server.completeAndReorder();
     await refetchHistory(client, "夏日材质研究");
-    await user.click(screen.getByRole("button", { name: /夏日材质研究/ }));
+    await selectHistoryRecord(user, /夏日材质研究/);
     await screen.findByRole("heading", { name: "夏日材质新结果" });
     server.currentFirst();
     await refetchHistory(client, "都市轻通勤女装研究");
     expect(
-      screen.getByRole("button", { name: /夏日材质研究/ }),
-    ).toHaveAttribute("aria-pressed", "true");
-    expect(
       screen.getByRole("heading", { name: "夏日材质新结果" }),
     ).toBeVisible();
+    expect(
+      await historyRecord(user, /夏日材质研究/),
+    ).toHaveAttribute("aria-pressed", "true");
   });
 });
 
@@ -1292,7 +1480,7 @@ describe("review regressions: missing detail retry recovery", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.queryByText("研究详情加载失败")).not.toBeInTheDocument();
     await waitFor(() =>
-      expect(screen.getByRole("textbox", { name: "研究需求" })).toHaveFocus(),
+      expect(screen.getByRole("button", { name: "新建调研" })).toHaveFocus(),
     );
   });
 
@@ -1323,7 +1511,7 @@ describe("review regressions: missing detail retry recovery", () => {
           screen.queryByRole("heading", { name: "都市轻通勤的柔和层次" }),
         ).not.toBeInTheDocument();
         if (outcome === "empty history")
-          expect(screen.getByText("暂无研究结果")).toBeVisible();
+          expect(screen.getByText("暂无研究记录")).toBeVisible();
         else
           expect(
             screen.getByRole("heading", { name: "夏日材质新结果" }),
@@ -1333,9 +1521,16 @@ describe("review regressions: missing detail retry recovery", () => {
       expect(
         client.getQueryData(inspirationKeys.detail(ownerId, completed.id)),
       ).toBeUndefined();
-      await waitFor(() =>
-        expect(screen.getByRole("textbox", { name: "研究需求" })).toHaveFocus(),
-      );
+      await waitFor(() => {
+        if (outcome === "empty history")
+          expect(
+            screen.getByRole("textbox", { name: "研究需求" }),
+          ).toHaveFocus();
+        else
+          expect(
+            screen.getByRole("button", { name: "新建调研" }),
+          ).toHaveFocus();
+      });
     },
   );
 
@@ -1375,7 +1570,7 @@ describe("review regressions: missing detail retry recovery", () => {
     );
     await user.click(screen.getByRole("button", { name: "重新加载详情" }));
     await waitFor(() => expect(server.confirmations()).toBe(2));
-    await user.click(screen.getByRole("button", { name: /夏日材质研究/ }));
+    await selectHistoryRecord(user, /夏日材质研究/);
     await screen.findByRole("heading", { name: "夏日材质新结果" });
     await act(async () => {
       finish(errorResponse(undefined, "INSPIRATION_NOT_FOUND", 404));
@@ -1391,7 +1586,7 @@ describe("review regressions: missing detail retry recovery", () => {
       screen.getByRole("heading", { name: "夏日材质新结果" }),
     ).toBeVisible();
     expect(
-      screen.getByRole("button", { name: /夏日材质研究/ }),
+      await historyRecord(user, /夏日材质研究/),
     ).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByText("研究详情加载失败")).not.toBeInTheDocument();
   });
@@ -1399,6 +1594,7 @@ describe("review regressions: missing detail retry recovery", () => {
 
 describe("protected inspiration page", () => {
   it("hydrates the first twenty history items for the authenticated owner without an internal HTTP roundtrip", async () => {
+    const user = userEvent.setup();
     pageMocks.requireUser.mockResolvedValue({ id: ownerId });
     pageMocks.listInspirationAnalyses.mockResolvedValue({
       items: [summary],
@@ -1408,15 +1604,15 @@ describe("protected inspiration page", () => {
     const { default: InspirationPage } =
       await import("@/app/(workspace)/inspiration/page");
     renderWorkspace(await InspirationPage());
+    await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
     expect(
-      await screen.findByRole("button", { name: /都市轻通勤女装研究/ }),
+      await historyRecord(user, /都市轻通勤女装研究/),
     ).toBeVisible();
     expect(pageMocks.listInspirationAnalyses).toHaveBeenCalledExactlyOnceWith({
       ownerId,
       limit: 20,
     });
     expect(requests).not.toContain(`GET ${root}?limit=20`);
-    await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
   });
   it("requires a session before reading history", async () => {
     pageMocks.requireUser.mockRejectedValue(new Error("redirect to login"));

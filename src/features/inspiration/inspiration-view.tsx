@@ -13,6 +13,8 @@ import {
 } from "@tanstack/react-query";
 import { Pencil, RefreshCw, Share2, Trash2 } from "lucide-react";
 import { z } from "zod";
+import { inspirationVisualApi } from "@/features/inspiration-visuals/inspiration-visual-api";
+import { inspirationVisualKeys } from "@/features/inspiration-visuals/query-keys";
 import { ApiResponseError } from "@/lib/query/client";
 import { useQueryOwnerId } from "@/lib/query/provider";
 import {
@@ -21,10 +23,13 @@ import {
   type InspirationListDto,
 } from "./contracts";
 import { inspirationApi } from "./inspiration-api";
-import { InspirationHistory } from "./inspiration-history";
+import { InspirationHistoryDialog } from "./inspiration-history-dialog";
+import { InspirationNewDialog } from "./inspiration-new-dialog";
 import { InspirationPromptForm } from "./inspiration-prompt-form";
 import { InspirationResult } from "./inspiration-result";
 import { InspirationShareDialog } from "./inspiration-share-dialog";
+import { InspirationVisualBoard } from "./inspiration-visual-board";
+import { InspirationWorkspaceHeader } from "./inspiration-workspace-header";
 import { inspirationKeys } from "./query-keys";
 import styles from "./inspiration.module.css";
 
@@ -105,7 +110,9 @@ export function InspirationView() {
   const ownerId = useQueryOwnerId();
   const client = useQueryClient();
   const dialogTrigger = useRef<HTMLButtonElement | null>(null);
+  const newResearchTrigger = useRef<HTMLButtonElement | null>(null);
   const promptInput = useRef<HTMLTextAreaElement | null>(null);
+  const focusAfterRecovery = useRef(false);
   const [selection, setSelection] = useState<string | null>(
     () =>
       client
@@ -115,6 +122,7 @@ export function InspirationView() {
         ?.pages.flatMap((page) => page.items)[0]?.id ?? null,
   );
   const [dialog, setDialog] = useState<InspirationDialog | null>(null);
+  const [newDialogOpen, setNewDialogOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -144,6 +152,16 @@ export function InspirationView() {
       query.state.data?.status === "pending" ? 5000 : false,
   });
   const analysis = detail.data;
+  const selected =
+    analysis && selectedId === analysis.id ? analysis : undefined;
+  const visualKey = inspirationVisualKeys.detail(ownerId, selectedId ?? "");
+  const visuals = useQuery({
+    queryKey: visualKey,
+    queryFn: ({ signal }) => inspirationVisualApi.get(selectedId!, signal),
+    enabled: selected?.status === "completed",
+    refetchInterval: (query) =>
+      query.state.data?.refreshJob?.status === "pending" ? 5000 : false,
+  });
   const invalidate = () =>
     client.invalidateQueries({ queryKey: inspirationKeys.all(ownerId) });
   const saveDetail = async (data: InspirationDetailDto) => {
@@ -164,9 +182,38 @@ export function InspirationView() {
     }
     await invalidate();
   };
+  const refreshVisuals = useMutation({
+    mutationFn: ({
+      analysisId,
+      operationId,
+    }: {
+      analysisId: string;
+      operationId: string;
+    }) => inspirationVisualApi.create(analysisId, { operationId }),
+    onSuccess: (board, variables) => {
+      client.setQueryData(
+        inspirationVisualKeys.detail(ownerId, variables.analysisId),
+        board,
+      );
+    },
+    onError: (_failure, variables) => {
+      void client.invalidateQueries({
+        queryKey: inspirationVisualKeys.detail(ownerId, variables.analysisId),
+      });
+    },
+  });
   const create = useMutation({
     mutationFn: inspirationApi.create,
-    onSuccess: saveDetail,
+    onSuccess: async (data) => {
+      setNewDialogOpen(false);
+      await saveDetail(data);
+      if (data.status === "completed") {
+        refreshVisuals.mutate({
+          analysisId: data.id,
+          operationId: crypto.randomUUID(),
+        });
+      }
+    },
     onError: onFailure,
   });
   const retry = useMutation({
@@ -197,12 +244,12 @@ export function InspirationView() {
       setSelection(
         remaining?.pages.flatMap((page) => page.items)[0]?.id ?? null,
       );
+      focusAfterRecovery.current = true;
       dialogTrigger.current = null;
       setDialog(null);
       setNotice(null);
       client.removeQueries({
         queryKey: inspirationKeys.detail(ownerId, id),
-        exact: true,
       });
       await invalidate();
     },
@@ -213,8 +260,6 @@ export function InspirationView() {
   const blocked =
     items.some((item) => item.status === "pending") ||
     analysis?.status === "pending";
-  const selected =
-    analysis && selectedId === analysis.id ? analysis : undefined;
   const selectedInHistory = items.some((item) => item.id === selectedId);
   const refetchSelected = detail.refetch;
   useEffect(() => {
@@ -261,13 +306,22 @@ export function InspirationView() {
       setSelection(
         remaining?.pages.flatMap((page) => page.items)[0]?.id ?? null,
       );
+      focusAfterRecovery.current = true;
       client.removeQueries({
         queryKey: inspirationKeys.detail(ownerId, selectedId),
-        exact: true,
       });
-      promptInput.current?.focus();
     });
   }, [client, ownerId, selectedId]);
+  useEffect(() => {
+    if (!history.isSuccess) return;
+    if (focusAfterRecovery.current) {
+      focusAfterRecovery.current = false;
+      if (selectedId) newResearchTrigger.current?.focus();
+      else promptInput.current?.focus();
+      return;
+    }
+    if (!selectedId) promptInput.current?.focus();
+  }, [history.isSuccess, selectedId]);
   useEffect(() => {
     if (
       !selectedId ||
@@ -297,7 +351,8 @@ export function InspirationView() {
     event.preventDefault();
     const trigger = dialogTrigger.current;
     if (trigger?.isConnected && !trigger.disabled) trigger.focus();
-    else promptInput.current?.focus();
+    else if (promptInput.current) promptInput.current.focus();
+    else newResearchTrigger.current?.focus();
   }
   function openDialog(kind: DialogKind, trigger: HTMLButtonElement) {
     if (!selected) return;
@@ -314,44 +369,42 @@ export function InspirationView() {
       },
     });
   }
+  function submitAnalysis(input: Parameters<typeof inspirationApi.create>[0]) {
+    setError(null);
+    setNotice(null);
+    setNewDialogOpen(false);
+    create.mutate(input);
+  }
+  function selectAnalysis(id: string) {
+    setSelection(id);
+    setDialog(null);
+    setError(null);
+    setNotice(null);
+  }
+  function refreshSelectedVisuals() {
+    if (!selected || selected.status !== "completed") return;
+    refreshVisuals.mutate({
+      analysisId: selected.id,
+      operationId: crypto.randomUUID(),
+    });
+  }
+  const selectedVisualMutation =
+    refreshVisuals.variables?.analysisId === selected?.id;
 
   return (
     <main
       aria-labelledby="inspiration-title"
       className={styles.workspace}
     >
-      <header className={styles.pageHeader}>
-        <h1 id="inspiration-title">灵感调研</h1>
-      </header>
-      <InspirationPromptForm
-        inputRef={promptInput}
-        pending={pending}
-        blocked={blocked}
-        onSubmit={(input) => {
-          setError(null);
-          setNotice(null);
-          create.mutate(input);
-        }}
-      />
-      {pending && (
-        <p className={styles.muted} role="status">
-          正在分析…
-        </p>
-      )}
-      <div className={styles.columns}>
-        <InspirationHistory
+      <InspirationWorkspaceHeader>
+        <InspirationHistoryDialog
           items={items}
           selectedId={selectedId}
           loading={history.isPending}
           error={history.isError}
           hasMore={history.hasNextPage}
           fetchingMore={history.isFetchingNextPage}
-          onSelect={(id) => {
-            setSelection(id);
-            setDialog(null);
-            setError(null);
-            setNotice(null);
-          }}
+          onSelect={selectAnalysis}
           onMore={() => {
             void history.fetchNextPage();
           }}
@@ -359,7 +412,21 @@ export function InspirationView() {
             void history.refetch();
           }}
         />
-        <div className={styles.detail} aria-label="研究详情">
+        <InspirationNewDialog
+          triggerRef={newResearchTrigger}
+          open={newDialogOpen}
+          pending={create.isPending}
+          blocked={blocked}
+          onOpenChange={setNewDialogOpen}
+          onSubmit={submitAnalysis}
+        />
+      </InspirationWorkspaceHeader>
+      {pending && (
+        <p className={`${styles.muted} ${styles.workspaceStatus}`} role="status">
+          正在分析…
+        </p>
+      )}
+      <div className={styles.report} aria-label="研究详情">
           {error && <p role="alert">{error}</p>}
           {notice && (
             <p className={styles.muted} role="status">
@@ -381,11 +448,28 @@ export function InspirationView() {
               </button>
             </div>
           )}
-          {!selectedId && <p className={styles.empty}>暂无研究结果</p>}
+          {!selectedId && (
+            <section className={styles.emptyResearch}>
+              <div>
+                <p className={styles.sectionKicker}>NEW RESEARCH</p>
+                <h2>开始一份灵感调研</h2>
+                <p className={styles.empty}>暂无研究记录</p>
+              </div>
+              <InspirationPromptForm
+                inputRef={promptInput}
+                pending={pending}
+                blocked={blocked}
+                onSubmit={submitAnalysis}
+              />
+            </section>
+          )}
           {selected && !unavailable && (
             <>
               <header className={styles.detailHeader}>
-                <h2 className={styles.recordTitle}>{selected.title}</h2>
+                <div>
+                  <p className={styles.sectionKicker}>RESEARCH REPORT</p>
+                  <h2 className={styles.recordTitle}>{selected.title}</h2>
+                </div>
                 {selected.status !== "pending" && (
                   <div className={styles.actions}>
                     <IconButton
@@ -445,6 +529,27 @@ export function InspirationView() {
                 <InspirationResult
                   result={selected.result}
                   sources={selected.sources ?? []}
+                  visualSummary={
+                    <InspirationVisualBoard
+                      placement="summary"
+                      board={visuals.data}
+                      loading={visuals.isPending}
+                      error={
+                        visuals.isError ||
+                        (selectedVisualMutation && refreshVisuals.isError)
+                      }
+                      refreshing={
+                        selectedVisualMutation && refreshVisuals.isPending
+                      }
+                      onRefresh={refreshSelectedVisuals}
+                    />
+                  }
+                  libraryMatches={
+                    <InspirationVisualBoard
+                      placement="library"
+                      board={visuals.data}
+                    />
+                  }
                 />
               )}
               {activeDialog?.kind === "share" && (
@@ -560,7 +665,6 @@ export function InspirationView() {
               )}
             </>
           )}
-        </div>
       </div>
     </main>
   );

@@ -1,4 +1,5 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import { InspirationResult } from "./inspiration-result";
 import {
@@ -9,7 +10,8 @@ import {
 afterEach(cleanup);
 
 describe("inspiration results", () => {
-  it("resolves references by source index and labels color swatches and design inference", () => {
+  it("resolves references by source index and labels color swatches and design inference", async () => {
+    const user = userEvent.setup();
     render(
       <InspirationResult
         result={inspirationResultFixture}
@@ -30,6 +32,7 @@ describe("inspiration results", () => {
       expect(link).toHaveAttribute("target", "_blank");
       expect(link).toHaveAttribute("rel", "noopener noreferrer");
     }
+    await user.click(screen.getByRole("tab", { name: "色款" }));
     expect(screen.getByRole("img", { name: "柔和米白 #EEE8DA" })).toHaveStyle({
       backgroundColor: "#EEE8DA",
     });
@@ -108,7 +111,8 @@ describe("inspiration results", () => {
     expect(screen.queryByText(/computer_initialize_state/)).not.toBeInTheDocument();
   });
 
-  it("shows honest empty dimensions and never invents a missing source URL", () => {
+  it("shows honest empty dimensions and never invents a missing source URL", async () => {
+    const user = userEvent.setup();
     render(
       <InspirationResult
         sources={[]}
@@ -128,6 +132,7 @@ describe("inspiration results", () => {
       />,
     );
     for (const label of ["款式", "类型", "风格", "品类", "色款", "材质"]) {
+      await user.click(screen.getByRole("tab", { name: label }));
       expect(
         within(screen.getByRole("region", { name: label })).getByText(
           "暂无有来源支持的趋势",
