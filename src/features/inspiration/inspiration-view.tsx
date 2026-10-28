@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import {
@@ -9,6 +9,7 @@ import {
   useQuery,
   useQueryClient,
   type InfiniteData,
+  type QueryClient,
 } from "@tanstack/react-query";
 import { Pencil, RefreshCw, Share2, Trash2 } from "lucide-react";
 import { z } from "zod";
@@ -78,22 +79,53 @@ function errorMessage(error: unknown) {
     : "分析暂时失败，请稍后重试";
 }
 
+function removeHistoryRecord(client: QueryClient, ownerId: string, id: string) {
+  return client.setQueryData<
+    InfiniteData<InspirationListDto, string | undefined>
+  >(inspirationKeys.list(ownerId), (current) =>
+    current
+      ? {
+          ...current,
+          pages: current.pages.map((page) => ({
+            ...page,
+            items: page.items.filter((item) => item.id !== id),
+          })),
+        }
+      : current,
+  );
+}
+
+type DialogKind = "rename" | "delete" | "share";
+type InspirationDialog = {
+  kind: DialogKind;
+  target: Pick<InspirationDetailDto, "id" | "title" | "version">;
+};
+
 export function InspirationView() {
   const ownerId = useQueryOwnerId();
   const client = useQueryClient();
   const dialogTrigger = useRef<HTMLButtonElement | null>(null);
   const promptInput = useRef<HTMLTextAreaElement | null>(null);
-  const [selection, setSelection] = useState<string | null>(null);
-  const [dialog, setDialog] = useState<"rename" | "delete" | "share" | null>(
-    null,
+  const [selection, setSelection] = useState<string | null>(
+    () =>
+      client
+        .getQueryData<InfiniteData<InspirationListDto, string | undefined>>(
+          inspirationKeys.list(ownerId),
+        )
+        ?.pages.flatMap((page) => page.items)[0]?.id ?? null,
   );
+  const [dialog, setDialog] = useState<InspirationDialog | null>(null);
   const [title, setTitle] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const history = useInfiniteQuery({
     queryKey: inspirationKeys.list(ownerId),
     initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam, signal }) => inspirationApi.list(pageParam, signal),
+    queryFn: async ({ pageParam, signal }) => {
+      const page = await inspirationApi.list(pageParam, signal);
+      setSelection((current) => current ?? page.items[0]?.id ?? null);
+      return page;
+    },
     getNextPageParam: (page) => page.nextCursor ?? undefined,
     refetchInterval: (query) =>
       query.state.data?.pages.some((page) =>
@@ -103,7 +135,7 @@ export function InspirationView() {
         : false,
   });
   const items = history.data?.pages.flatMap((page) => page.items) ?? [];
-  const selectedId = selection ?? items[0]?.id ?? null;
+  const selectedId = selection;
   const detail = useQuery({
     queryKey: inspirationKeys.detail(ownerId, selectedId ?? ""),
     queryFn: ({ signal }) => inspirationApi.detail(selectedId!, signal),
@@ -161,19 +193,7 @@ export function InspirationView() {
   const remove = useMutation({
     mutationFn: inspirationApi.delete,
     onSuccess: async ({ id }) => {
-      const remaining = client.setQueryData<
-        InfiniteData<InspirationListDto, string | undefined>
-      >(inspirationKeys.list(ownerId), (current) =>
-        current
-          ? {
-              ...current,
-              pages: current.pages.map((page) => ({
-                ...page,
-                items: page.items.filter((item) => item.id !== id),
-              })),
-            }
-          : current,
-      );
+      const remaining = removeHistoryRecord(client, ownerId, id);
       setSelection(
         remaining?.pages.flatMap((page) => page.items)[0]?.id ?? null,
       );
@@ -195,18 +215,77 @@ export function InspirationView() {
     analysis?.status === "pending";
   const selected =
     analysis && selectedId === analysis.id ? analysis : undefined;
+  const selectedInHistory = items.some((item) => item.id === selectedId);
+  const refetchSelected = detail.refetch;
+  useEffect(() => {
+    if (
+      !selectedId ||
+      !history.isSuccess ||
+      history.isFetching ||
+      selectedInHistory
+    )
+      return;
+    // A missing paginated summary is not proof of deletion. Recheck the owned detail.
+    let cancelled = false;
+    void refetchSelected().then(({ error: failure }) => {
+      if (
+        cancelled ||
+        !(failure instanceof ApiResponseError) ||
+        failure.status !== 404
+      )
+        return;
+      const remaining = removeHistoryRecord(client, ownerId, selectedId);
+      dialogTrigger.current = null;
+      setDialog(null);
+      setError(null);
+      setNotice(null);
+      setSelection(
+        remaining?.pages.flatMap((page) => page.items)[0]?.id ?? null,
+      );
+      client.removeQueries({
+        queryKey: inspirationKeys.detail(ownerId, selectedId),
+        exact: true,
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    client,
+    ownerId,
+    selectedId,
+    selectedInHistory,
+    history.isSuccess,
+    history.isFetching,
+    history.dataUpdatedAt,
+    refetchSelected,
+  ]);
+  const unavailable =
+    !selectedInHistory &&
+    history.isSuccess &&
+    detail.error instanceof ApiResponseError &&
+    detail.error.status === 404;
+  const activeDialog = dialog?.target.id === selectedId ? dialog : null;
   function restoreDialogFocus(event: Event) {
     event.preventDefault();
     const trigger = dialogTrigger.current;
     if (trigger?.isConnected && !trigger.disabled) trigger.focus();
     else promptInput.current?.focus();
   }
-  function openDialog(next: typeof dialog, trigger: HTMLButtonElement) {
+  function openDialog(kind: DialogKind, trigger: HTMLButtonElement) {
+    if (!selected) return;
     dialogTrigger.current = trigger;
     setError(null);
     setNotice(null);
-    setTitle(selected?.title ?? "");
-    setDialog(next);
+    setTitle(selected.title);
+    setDialog({
+      kind,
+      target: {
+        id: selected.id,
+        title: selected.title,
+        version: selected.version,
+      },
+    });
   }
 
   return (
@@ -258,7 +337,7 @@ export function InspirationView() {
             </p>
           )}
           {selectedId && detail.isPending && <p role="status">正在加载研究…</p>}
-          {detail.isError && (
+          {detail.isError && !unavailable && (
             <div>
               <p role="alert">研究详情加载失败</p>
               <button
@@ -337,15 +416,16 @@ export function InspirationView() {
                   sources={selected.sources ?? []}
                 />
               )}
-              {dialog === "share" && (
+              {activeDialog?.kind === "share" && (
                 <InspirationShareDialog
-                  key={selected.id}
+                  key={activeDialog.target.id}
                   analysis={selected}
                   onClose={() => setDialog(null)}
                   onCloseAutoFocus={restoreDialogFocus}
                 />
               )}
-              {(dialog === "rename" || dialog === "delete") && (
+              {(activeDialog?.kind === "rename" ||
+                activeDialog?.kind === "delete") && (
                 <Dialog.Root
                   open
                   onOpenChange={(open) => {
@@ -365,30 +445,41 @@ export function InspirationView() {
                       }}
                     >
                       <Dialog.Title>
-                        {dialog === "rename" ? "重命名研究" : "删除研究？"}
+                        {activeDialog?.kind === "rename"
+                          ? "重命名研究"
+                          : "删除研究？"}
                       </Dialog.Title>
                       <Dialog.Description>
-                        {dialog === "delete"
-                          ? `“${selected.title}”将被永久删除，分享链接也会失效。`
-                          : selected.title}
+                        {activeDialog?.kind === "delete"
+                          ? `“${activeDialog.target.title}”将被永久删除，分享链接也会失效。`
+                          : activeDialog.target.title}
                       </Dialog.Description>
                       <form
                         onSubmit={(event) => {
                           event.preventDefault();
-                          if (editing) return;
-                          if (dialog === "delete") remove.mutate(selected.id);
+                          if (
+                            editing ||
+                            !activeDialog ||
+                            activeDialog.target.id !== selectedId
+                          )
+                            return;
+                          if (activeDialog.kind === "delete")
+                            remove.mutate(activeDialog.target.id);
                           else {
                             const input =
                               inspirationPatchMutationSchema.safeParse({
                                 title,
-                                version: selected.version,
+                                version: activeDialog.target.version,
                               });
                             if (input.success)
-                              rename.mutate({ id: selected.id, ...input.data });
+                              rename.mutate({
+                                id: activeDialog.target.id,
+                                ...input.data,
+                              });
                           }
                         }}
                       >
-                        {dialog === "rename" && (
+                        {activeDialog?.kind === "rename" && (
                           <label className={styles.titleField}>
                             研究标题
                             <input
@@ -410,23 +501,23 @@ export function InspirationView() {
                           </button>
                           <button
                             className={
-                              dialog === "delete"
+                              activeDialog?.kind === "delete"
                                 ? styles.dangerButton
                                 : styles.primaryButton
                             }
                             disabled={
                               editing ||
-                              (dialog === "rename" &&
+                              (activeDialog?.kind === "rename" &&
                                 !inspirationPatchMutationSchema.safeParse({
                                   title,
-                                  version: selected.version,
+                                  version: activeDialog.target.version,
                                 }).success)
                             }
                             type="submit"
                           >
                             {editing
                               ? "正在保存…"
-                              : dialog === "delete"
+                              : activeDialog?.kind === "delete"
                                 ? "确认删除"
                                 : "保存标题"}
                           </button>

@@ -833,6 +833,374 @@ describe("review regressions: concurrent completion, deletion, and dialog focus"
   });
 });
 
+function pollingHistoryServer() {
+  const nextId = "00000000-0000-4000-8000-000000000002";
+  let current = { ...completed };
+  let next: InspirationDetailDto = {
+    ...completed,
+    id: nextId,
+    title: "夏日材质研究",
+    status: "pending",
+    completedAt: null,
+    result: null,
+    sources: null,
+  };
+  let records = [current, next];
+  const writes: { id: string; method: string; body: unknown }[] = [];
+  const initialHistory = {
+    pages: [
+      {
+        items: records.map((item) =>
+          inspirationSummaryDtoSchema.strip().parse(item),
+        ),
+        nextCursor: null,
+      },
+    ],
+    pageParams: [undefined],
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === `${root}?limit=20` && method === "GET") {
+        expect(init?.body).toBeUndefined();
+        return json(
+          inspirationListDtoSchema.parse({
+            items: records.map((item) =>
+              inspirationSummaryDtoSchema.strip().parse(item),
+            ),
+            nextCursor: null,
+          }),
+        );
+      }
+      const id =
+        url === endpoint || url === `${endpoint}/share`
+          ? completed.id
+          : url === `${root}/${nextId}` || url === `${root}/${nextId}/share`
+            ? nextId
+            : null;
+      if (!id) throw new Error(`Unexpected polling request: ${method} ${url}`);
+      const target = records.find((item) => item.id === id);
+      if (method === "GET" && url === `${root}/${id}`) {
+        expect(init?.body).toBeUndefined();
+        return target
+          ? json(inspirationDetailDtoSchema.parse(target))
+          : errorResponse(undefined, "INSPIRATION_NOT_FOUND", 404);
+      }
+      if (method === "PATCH" && url === `${root}/${id}`) {
+        expect(init?.headers).toMatchObject({
+          "Content-Type": "application/json",
+        });
+        const body = inspirationPatchMutationSchema.parse(
+          JSON.parse(String(init?.body)),
+        );
+        writes.push({ id, method, body });
+        if (!target)
+          return errorResponse(undefined, "INSPIRATION_NOT_FOUND", 404);
+        if (body.version !== target.version)
+          return errorResponse(undefined, "INSPIRATION_BUSY", 409);
+        const updated = {
+          ...target,
+          title: body.title,
+          version: target.version + 1,
+        };
+        records = records.map((item) => (item.id === id ? updated : item));
+        return json(inspirationDetailDtoSchema.parse(updated));
+      }
+      if (method === "POST" && url === `${root}/${id}/share`) {
+        expect(init?.body).toBeUndefined();
+        writes.push({ id, method, body: undefined });
+        if (!target)
+          return errorResponse(undefined, "INSPIRATION_NOT_FOUND", 404);
+        const updated = {
+          ...target,
+          shareUrl: `https://app.example.test/share/inspiration/${id}`,
+          version: target.version + 1,
+        };
+        records = records.map((item) => (item.id === id ? updated : item));
+        return json(inspirationDetailDtoSchema.parse(updated));
+      }
+      if (method === "DELETE" && url === `${root}/${id}`) {
+        expect(init?.body).toBeUndefined();
+        writes.push({ id, method, body: undefined });
+        records = records.filter((item) => item.id !== id);
+        return json({ id, deleted: true });
+      }
+      throw new Error(`Unexpected polling request: ${method} ${url}`);
+    }),
+  );
+  return {
+    initialHistory,
+    nextId,
+    writes,
+    completeAndReorder() {
+      next = {
+        ...completed,
+        id: nextId,
+        title: "夏日材质研究",
+        result: { ...completed.result!, headline: "夏日材质新结果" },
+      };
+      records = [next, current];
+    },
+    bumpCurrentVersion() {
+      current = { ...current, version: 2 };
+      records = records.map((item) =>
+        item.id === current.id ? current : item,
+      );
+    },
+    removeCurrent(empty: boolean) {
+      records = empty ? [] : [next];
+    },
+    empty() {
+      records = [];
+    },
+    restore() {
+      records = [current, next];
+    },
+    currentFirst() {
+      records = [current, next];
+    },
+  };
+}
+async function waitForHistoryFirst(title: string | null) {
+  await waitFor(() => {
+    if (title === null)
+      expect(screen.getByText("暂无研究记录")).toBeInTheDocument();
+    else
+      expect(
+        within(
+          screen.getByRole("complementary", { name: "研究历史", hidden: true }),
+        ).getAllByRole("button", { hidden: true })[0],
+      ).toHaveTextContent(title);
+  });
+}
+async function refetchHistory(
+  client: ReturnType<typeof createQueryClient>,
+  firstTitle: string | null,
+) {
+  await act(async () => {
+    await client.refetchQueries({
+      queryKey: inspirationKeys.list(ownerId),
+      exact: true,
+    });
+  });
+  await waitForHistoryFirst(firstTitle);
+}
+async function refetchWithCompletedNext(
+  client: ReturnType<typeof createQueryClient>,
+  nextId: string,
+) {
+  // Read B through the real client before the list update, avoiding an unrelated loading gap.
+  await act(async () => {
+    await client.fetchQuery({
+      queryKey: inspirationKeys.detail(ownerId, nextId),
+      queryFn: () => inspirationApi.detail(nextId),
+    });
+    await client.refetchQueries({
+      queryKey: inspirationKeys.list(ownerId),
+      exact: true,
+    });
+  });
+  await waitForHistoryFirst("夏日材质研究");
+}
+
+describe("review regressions: default selection during history polling", () => {
+  it.each(["hydrated", "fetched"] as const)(
+    "pins the default first record after %s history arrives, even when a pending item finishes and sorts first",
+    async (arrival) => {
+      const server = pollingHistoryServer();
+      const { client } = renderWorkspace(
+        <InspirationView />,
+        arrival === "hydrated" ? server.initialHistory : undefined,
+      );
+      // Do not click any history item: this must exercise the implicit initial selection path.
+      await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+      server.completeAndReorder();
+      await refetchHistory(client, "夏日材质研究");
+      expect(
+        screen.getByRole("button", { name: /都市轻通勤女装研究/ }),
+      ).toHaveAttribute("aria-pressed", "true");
+      expect(
+        screen.getByRole("heading", { name: "都市轻通勤的柔和层次" }),
+      ).toBeVisible();
+      expect(
+        screen.getByRole("button", { name: /夏日材质研究/ }),
+      ).toHaveAttribute("aria-pressed", "false");
+    },
+  );
+
+  it("never PATCHes the default record's draft to the new first record after a real history refetch", async () => {
+    const user = userEvent.setup();
+    const server = pollingHistoryServer();
+    const { client } = renderWorkspace();
+    await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+    const trigger = screen.getByRole("button", { name: "重命名" });
+    await user.click(trigger);
+    await user.clear(screen.getByRole("textbox", { name: "研究标题" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "研究标题" }),
+      "新版研究",
+    );
+    server.completeAndReorder();
+    await refetchWithCompletedNext(client, server.nextId);
+    await user.click(screen.getByRole("button", { name: "保存标题" }));
+    expect(server.writes).toEqual([
+      {
+        id: completed.id,
+        method: "PATCH",
+        body: { title: "新版研究", version: 1 },
+      },
+    ]);
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("keeps the default record's share dialog and POST target bound when polling reorders history", async () => {
+    const user = userEvent.setup();
+    const server = pollingHistoryServer();
+    const { client } = renderWorkspace(
+      <InspirationView />,
+      server.initialHistory,
+    );
+    await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+    const trigger = screen.getByRole("button", { name: "分享研究" });
+    await user.click(trigger);
+    server.completeAndReorder();
+    await refetchWithCompletedNext(client, server.nextId);
+    expect(screen.getByRole("dialog", { name: "分享研究" })).toHaveTextContent(
+      "都市轻通勤女装研究",
+    );
+    expect(
+      screen.getByRole("dialog", { name: "分享研究" }),
+    ).not.toHaveTextContent("夏日材质研究");
+    await user.click(screen.getByRole("button", { name: "开启分享" }));
+    await screen.findByRole("link", { name: "打开分享链接" });
+    expect(server.writes).toEqual([
+      { id: completed.id, method: "POST", body: undefined },
+    ]);
+    await user.click(screen.getByRole("button", { name: "关闭" }));
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("keeps delete confirmation bound to the default record when polling reorders history", async () => {
+    const user = userEvent.setup();
+    const server = pollingHistoryServer();
+    const { client } = renderWorkspace();
+    await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+    await user.click(screen.getByRole("button", { name: "删除研究" }));
+    server.completeAndReorder();
+    await refetchWithCompletedNext(client, server.nextId);
+    await user.click(screen.getByRole("button", { name: "确认删除" }));
+    expect(server.writes).toEqual([
+      { id: completed.id, method: "DELETE", body: undefined },
+    ]);
+    expect(
+      await screen.findByRole("heading", { name: "夏日材质新结果" }),
+    ).toBeVisible();
+  });
+
+  it("retains the rename version captured when the dialog opened despite a detail refresh", async () => {
+    const user = userEvent.setup();
+    const server = pollingHistoryServer();
+    const { client } = renderWorkspace();
+    await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+    const trigger = screen.getByRole("button", { name: "重命名" });
+    await user.click(trigger);
+    await user.clear(screen.getByRole("textbox", { name: "研究标题" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "研究标题" }),
+      "新版研究",
+    );
+    server.bumpCurrentVersion();
+    await act(async () => {
+      await client.refetchQueries({
+        queryKey: inspirationKeys.detail(ownerId, completed.id),
+        exact: true,
+      });
+    });
+    await user.click(screen.getByRole("button", { name: "保存标题" }));
+    expect(server.writes).toEqual([
+      {
+        id: completed.id,
+        method: "PATCH",
+        body: { title: "新版研究", version: 1 },
+      },
+    ]);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "记录已更新，请重试",
+    );
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it.each(["next record", "empty history"] as const)(
+    "recovers an explicitly selected record that disappears from history into %s",
+    async (outcome) => {
+      const user = userEvent.setup();
+      const server = pollingHistoryServer();
+      const { client } = renderWorkspace();
+      await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+      await user.click(
+        screen.getByRole("button", { name: /都市轻通勤女装研究/ }),
+      );
+      server.completeAndReorder();
+      server.removeCurrent(outcome === "empty history");
+      await refetchHistory(
+        client,
+        outcome === "empty history" ? null : "夏日材质研究",
+      );
+      if (outcome === "empty history")
+        expect(await screen.findByText("暂无研究结果")).toBeVisible();
+      else
+        expect(
+          await screen.findByRole("heading", { name: "夏日材质新结果" }),
+        ).toBeVisible();
+      expect(screen.queryByText("研究详情加载失败")).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("heading", { name: "都市轻通勤的柔和层次" }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it("initializes selection when an initially empty history receives its first records and then keeps it pinned", async () => {
+    const server = pollingHistoryServer();
+    server.empty();
+    const { client } = renderWorkspace();
+    await screen.findByText("暂无研究记录");
+    expect(screen.getByText("暂无研究结果")).toBeVisible();
+    server.restore();
+    await refetchHistory(client, "都市轻通勤女装研究");
+    await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+    server.completeAndReorder();
+    await refetchHistory(client, "夏日材质研究");
+    expect(
+      screen.getByRole("button", { name: /都市轻通勤女装研究/ }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("respects a user's explicit next-record choice across later reordering", async () => {
+    const user = userEvent.setup();
+    const server = pollingHistoryServer();
+    const { client } = renderWorkspace();
+    await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+    server.completeAndReorder();
+    await refetchHistory(client, "夏日材质研究");
+    await user.click(screen.getByRole("button", { name: /夏日材质研究/ }));
+    await screen.findByRole("heading", { name: "夏日材质新结果" });
+    server.currentFirst();
+    await refetchHistory(client, "都市轻通勤女装研究");
+    expect(
+      screen.getByRole("button", { name: /夏日材质研究/ }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByRole("heading", { name: "夏日材质新结果" }),
+    ).toBeVisible();
+  });
+});
+
 describe("protected inspiration page", () => {
   it("hydrates the first twenty history items for the authenticated owner without an internal HTTP roundtrip", async () => {
     pageMocks.requireUser.mockResolvedValue({ id: ownerId });
