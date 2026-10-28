@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import type { AppErrorCode } from "@/lib/http/app-error";
 import { publicOperationIdSchema } from "@/lib/validation/operation-id";
 import { hasNoNullByte } from "@/lib/validation/text";
 
@@ -109,7 +110,7 @@ export const inspirationErrorCodes = [
   "INSPIRATION_STRUCTURE_UNAVAILABLE",
   "INSPIRATION_INTERRUPTED",
   "INSPIRATION_NOT_FOUND",
-] as const;
+] as const satisfies readonly AppErrorCode[];
 export const inspirationErrorCodeSchema = z.enum(inspirationErrorCodes);
 export const inspirationStatusSchema = z.enum(["pending", "completed", "failed"]);
 
