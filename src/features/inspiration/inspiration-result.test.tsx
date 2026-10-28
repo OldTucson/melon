@@ -75,6 +75,39 @@ describe("inspiration results", () => {
     expect(screen.queryByText(/\[99\]/)).not.toBeInTheDocument();
   });
 
+  it("replaces structured provider titles with a readable source label", () => {
+    render(
+      <InspirationResult
+        sources={[
+          {
+            index: 7,
+            title: '{"code":0,"strategy_result":{"pages":[]}}',
+            url: "https://mp.weixin.qq.com/s/example",
+            siteName: "腾讯网",
+          },
+          {
+            index: 8,
+            title: '[{"type":"computer_initialize_state"}]',
+            url: "https://fashion.example.test/trend",
+            siteName: null,
+          },
+        ]}
+        result={inspirationResultFixture}
+      />,
+    );
+
+    const sources = within(screen.getByRole("region", { name: "研究来源" }));
+    expect(sources.getByRole("link", { name: /\[7\] 腾讯网/ })).toHaveAttribute(
+      "href",
+      "https://mp.weixin.qq.com/s/example",
+    );
+    expect(
+      sources.getByRole("link", { name: /\[8\] fashion\.example\.test/ }),
+    ).toHaveAttribute("href", "https://fashion.example.test/trend");
+    expect(screen.queryByText(/strategy_result/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/computer_initialize_state/)).not.toBeInTheDocument();
+  });
+
   it("shows honest empty dimensions and never invents a missing source URL", () => {
     render(
       <InspirationResult

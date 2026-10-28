@@ -17,6 +17,16 @@ const dimensions = [
   ["materials", "材质"],
 ] as const;
 
+function sourceLabel(source: InspirationSource) {
+  const title = source.title.trim();
+  const looksStructured = /^[{[]/.test(title) && /[":{},\]]/.test(title);
+  if (!looksStructured) return title;
+  return (
+    source.siteName?.trim() ||
+    new URL(source.url).hostname.replace(/^www\./, "")
+  );
+}
+
 export function InspirationResult({
   result,
   sources,
@@ -37,7 +47,7 @@ export function InspirationResult({
               target="_blank"
               rel="noopener noreferrer"
             >
-              {label ?? `[${index}] ${source.title}`}
+              {label ?? `[${index}] ${sourceLabel(source)}`}
               <ExternalLink aria-hidden="true" />
             </a>
           ) : null;
@@ -154,14 +164,17 @@ export function InspirationResult({
         <h3>研究来源</h3>
         {sources.length ? (
           <ol className={styles.sources}>
-            {sources.map((source) => (
-              <li key={source.index}>
-                {sourceLinks([source.index])}
-                {source.siteName && (
-                  <span className={styles.muted}>{source.siteName}</span>
-                )}
-              </li>
-            ))}
+            {sources.map((source) => {
+              const label = sourceLabel(source);
+              return (
+                <li key={source.index}>
+                  {sourceLinks([source.index])}
+                  {source.siteName && source.siteName !== label && (
+                    <span className={styles.muted}>{source.siteName}</span>
+                  )}
+                </li>
+              );
+            })}
           </ol>
         ) : (
           <p className={styles.empty}>暂无公开来源</p>
