@@ -3,7 +3,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { UploadCloud, X } from "lucide-react";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useRef, useState, useSyncExternalStore } from "react";
 
 import {
   UploadManagerProvider,
@@ -29,6 +29,48 @@ const subscribeToMobileNavigation = (onChange: () => void) => {
 const getMobileNavigationSnapshot = () =>
   window.matchMedia?.(mobileNavigationQuery).matches ?? false;
 const getMobileNavigationServerSnapshot = () => false;
+
+const compactSidebarQuery = "(max-width: 1279px)";
+const sidebarPreferenceEvent = "melon:sidebar-preference-change";
+let volatileSidebarMode: SidebarMode | null = null;
+
+const subscribeToSidebarPreference = (onChange: () => void) => {
+  const media = window.matchMedia?.(compactSidebarQuery);
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key === SIDEBAR_STORAGE_KEY || event.key === null) onChange();
+  };
+  window.addEventListener("storage", handleStorage);
+  window.addEventListener(sidebarPreferenceEvent, onChange);
+  media?.addEventListener("change", onChange);
+  return () => {
+    window.removeEventListener("storage", handleStorage);
+    window.removeEventListener(sidebarPreferenceEvent, onChange);
+    media?.removeEventListener("change", onChange);
+  };
+};
+
+const getSidebarPreferenceSnapshot = (): SidebarMode => {
+  try {
+    return (
+      parseSidebarMode(window.localStorage.getItem(SIDEBAR_STORAGE_KEY)) ??
+      defaultSidebarMode(window.innerWidth)
+    );
+  } catch {
+    return volatileSidebarMode ?? defaultSidebarMode(window.innerWidth);
+  }
+};
+
+const getSidebarPreferenceServerSnapshot = (): SidebarMode => "expanded";
+
+const setSidebarPreference = (mode: SidebarMode) => {
+  volatileSidebarMode = mode;
+  try {
+    window.localStorage.setItem(SIDEBAR_STORAGE_KEY, mode);
+  } catch {
+    // Keep the in-memory preference when storage is unavailable.
+  }
+  window.dispatchEvent(new Event(sidebarPreferenceEvent));
+};
 
 export function WorkspaceShell({
   children,
@@ -58,8 +100,11 @@ function WorkspaceContent({
   const dragDepth = useRef(0);
   const navigationTriggerRef = useRef<HTMLButtonElement>(null);
   const [dragging, setDragging] = useState(false);
-  const [sidebarMode, setSidebarMode] =
-    useState<SidebarMode>("expanded");
+  const sidebarMode = useSyncExternalStore(
+    subscribeToSidebarPreference,
+    getSidebarPreferenceSnapshot,
+    getSidebarPreferenceServerSnapshot,
+  );
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const mobileNavigation = useSyncExternalStore(
     subscribeToMobileNavigation,
@@ -67,32 +112,15 @@ function WorkspaceContent({
     getMobileNavigationServerSnapshot,
   );
 
-  useEffect(() => {
-    try {
-      const stored = parseSidebarMode(
-        window.localStorage.getItem(SIDEBAR_STORAGE_KEY),
-      );
-      setSidebarMode(stored ?? defaultSidebarMode(window.innerWidth));
-    } catch {
-      setSidebarMode(defaultSidebarMode(window.innerWidth));
-    }
-  }, []);
-
   const toggleNavigation = () => {
     if (mobileNavigation) {
       setMobileNavigationOpen((open) => !open);
       return;
     }
 
-    setSidebarMode((current) => {
-      const next = current === "expanded" ? "collapsed" : "expanded";
-      try {
-        window.localStorage.setItem(SIDEBAR_STORAGE_KEY, next);
-      } catch {
-        // A blocked storage API must not prevent navigation.
-      }
-      return next;
-    });
+    setSidebarPreference(
+      sidebarMode === "expanded" ? "collapsed" : "expanded",
+    );
   };
 
   const navigationExpanded = mobileNavigation

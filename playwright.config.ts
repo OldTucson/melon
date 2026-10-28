@@ -39,6 +39,7 @@ export default defineConfig({
           testMatch: [
             "commercial-authorizations.spec.ts",
             "dashboard.spec.ts",
+            "ui-shell.spec.ts",
           ],
         }
       : {

@@ -61,25 +61,29 @@ describe("database infrastructure configuration", () => {
   });
 
   it("defines readable semantic text for primary controls in both themes", async () => {
-    const css = await readFile(
-      path.resolve(process.cwd(), "src/app/globals.css"),
-      "utf8",
+    const [tokens, controls, pages] = await Promise.all(
+      ["tokens.css", "controls.css", "pages.css"].map((file) =>
+        readFile(
+          path.resolve(process.cwd(), "src/app/styles", file),
+          "utf8",
+        ),
+      ),
     );
 
-    expect(css).toMatch(
-      /:root\s*{[^}]*--accent: #4f5bd5;[^}]*--primary: var\(--accent\);[^}]*--on-primary: #fff;/s,
+    expect(tokens).toMatch(
+      /:root\s*{[^}]*--accent: #d9ef52;[^}]*--on-accent: #171815;[^}]*--primary: var\(--accent\);[^}]*--on-primary: var\(--on-accent\);/s,
     );
-    expect(css).toMatch(
-      /\[data-theme="dark"\]\s*{[^}]*--on-primary: #fff;/s,
+    expect(tokens).toMatch(
+      /\[data-theme="dark"\]\s*{[^}]*--accent: #d9ef52;[^}]*--on-accent: #151611;/s,
     );
-    expect(css).toMatch(
-      /\.primary-button\s*{[^}]*color: var\(--on-primary\);[^}]*background: var\(--primary\);/s,
+    expect(controls).toMatch(
+      /\.primary-button,\s*\.topbar-upload-button\s*{[^}]*color: var\(--on-accent\);[^}]*background: var\(--accent\);/s,
     );
-    expect(css).toMatch(
-      /\.topbar-upload-button\s*{[^}]*color: var\(--on-primary\);[^}]*background: var\(--primary\);/s,
+    expect(pages).toMatch(
+      /\.theme-options label:has\(input:checked\)\s*{[^}]*color: var\(--text-primary\);[^}]*background: var\(--surface-panel\);/s,
     );
-    expect(css).toMatch(
-      /\.theme-options label:has\(input:checked\)\s*{[^}]*color: var\(--on-primary\);[^}]*background: var\(--primary\);/s,
+    expect(pages).toMatch(
+      /\.theme-options label:has\(input:checked\) svg\s*{[^}]*color: var\(--accent-strong\);/s,
     );
   });
 });

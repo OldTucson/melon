@@ -110,6 +110,9 @@ test("trash preserves read-only history, restores and explains permanent-delete 
   const saved = await history(page, pattern.id);
   await page.getByRole("tab", { name: "基本信息" }).click();
   await page.getByRole("button", { name: "收起检查器", exact: true }).click();
+  await page
+    .getByRole("checkbox", { name: `选择 ${pattern.name}`, exact: true })
+    .click();
   await page.getByRole("button", { name: "移入回收站", exact: true }).click();
   const trashDialog = page.getByRole("dialog", { name: "移入回收站" });
   await expect(trashDialog).toContainText("有效授权 1 笔");
@@ -133,6 +136,9 @@ test("trash preserves read-only history, restores and explains permanent-delete 
 
   await page.getByRole("tab", { name: "基本信息" }).click();
   await page.getByRole("button", { name: "收起检查器", exact: true }).click();
+  await page
+    .getByRole("checkbox", { name: `选择 ${pattern.name}`, exact: true })
+    .click();
   await page.getByRole("button", { name: "移入回收站", exact: true }).click();
   await page.getByRole("button", { name: "确认移入回收站" }).click();
   await expect(trashDialog).toBeHidden();
