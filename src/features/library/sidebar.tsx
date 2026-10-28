@@ -7,6 +7,7 @@ import {
   Heart,
   ImageIcon,
   Settings,
+  Sparkles,
   Tag,
   Trash2,
 } from "lucide-react";
@@ -39,6 +40,12 @@ const primaryItems = [
     href: "/library?favorite=true",
     icon: Heart,
     label: "收藏",
+  },
+  {
+    id: "inspiration",
+    href: "/inspiration",
+    icon: Sparkles,
+    label: "灵感调研",
   },
 ] as const;
 
@@ -162,6 +169,7 @@ export function Sidebar({
 }
 
 function getActiveView(pathname: string, searchParams: URLSearchParams) {
+  if (pathname === "/inspiration") return "inspiration";
   if (pathname === "/dashboard") return "dashboard";
   if (pathname === "/trash") return "trash";
   if (pathname === "/settings") return "settings";

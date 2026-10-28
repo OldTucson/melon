@@ -14,9 +14,12 @@ import { parseLibrarySearchParams, toPatternQuery } from "./query-state";
 import { useSelectionStore } from "./selection-store";
 import { WorkspaceShell } from "./workspace-shell";
 
-const navigation = vi.hoisted(() => ({ search: new URLSearchParams() }));
+const navigation = vi.hoisted(() => ({
+  pathname: "/library",
+  search: new URLSearchParams(),
+}));
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/library",
+  usePathname: () => navigation.pathname,
   useSearchParams: () => navigation.search,
   useRouter: () => ({ replace: vi.fn() }),
 }));
@@ -98,6 +101,7 @@ function renderDeepLinkedPattern() {
 
 beforeEach(() => {
   localStorage.clear();
+  navigation.pathname = "/library";
   useSelectionStore.getState().clear();
   vi.stubGlobal("ResizeObserver", class {
     observe() {}
@@ -108,6 +112,15 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("responsive workspace panels", () => {
+  it("exposes the inspiration workspace as the active primary destination", () => {
+    navigation.pathname = "/inspiration";
+    renderWorkspace(false);
+
+    const link = screen.getByRole("link", { name: "灵感调研" });
+    expect(link).toHaveAttribute("href", "/inspiration");
+    expect(link).toHaveAttribute("aria-current", "page");
+  });
+
   it("persists an explicit desktop sidebar mode", async () => {
     const user = userEvent.setup();
     renderWorkspace(false);

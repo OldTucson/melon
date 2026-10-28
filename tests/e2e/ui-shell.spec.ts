@@ -70,6 +70,41 @@ test("vertically centers the collapsed brand mark within the topbar", async ({
   expect(Math.abs(centerOffset)).toBeLessThanOrEqual(1);
 });
 
+test("keeps the inspiration workspace at a readable desktop measure", async ({
+  page,
+}) => {
+  await page.setViewportSize(viewports[0]);
+  await page.goto("/login");
+  await page.evaluate(() => localStorage.removeItem("melon:sidebar-mode"));
+  await loginAs(page, E2E_USERS.designer);
+  await page.getByRole("button", { name: "折叠主导航" }).click();
+  await page.getByRole("link", { name: "灵感调研" }).click();
+
+  const workspaceMain = page.locator(".workspace-main");
+  const inspiration = page.getByRole("main", { name: "灵感调研" });
+  await expect(inspiration).toBeVisible();
+  const geometry = await page.evaluate(() => {
+    const container = document.querySelector(".workspace-main");
+    const content = document.querySelector(
+      'main[aria-labelledby="inspiration-title"]',
+    );
+    if (!container || !content) throw new Error("INSPIRATION_LAYOUT_MISSING");
+    const containerRect = container.getBoundingClientRect();
+    const contentRect = content.getBoundingClientRect();
+    return {
+      contentWidth: contentRect.width,
+      leftInset: contentRect.left - containerRect.left,
+      rightInset: containerRect.right - contentRect.right,
+    };
+  });
+
+  expect(geometry.contentWidth).toBeLessThanOrEqual(1320);
+  expect(Math.abs(geometry.leftInset - geometry.rightInset)).toBeLessThanOrEqual(
+    1,
+  );
+  await expect(workspaceMain).toBeVisible();
+});
+
 test("workspace adapts without overflow and preserves navigation controls", async ({
   page,
 }) => {

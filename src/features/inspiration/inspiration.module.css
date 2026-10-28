@@ -1,7 +1,8 @@
 .workspace {
-  width: 100%;
+  width: min(100%, 1320px);
   min-width: 0;
-  padding: 24px clamp(16px, 3vw, 40px) 40px;
+  margin-inline: auto;
+  padding: 24px clamp(20px, 3vw, 40px) 48px;
   color: var(--text-primary);
   overflow-wrap: anywhere;
 }
@@ -15,31 +16,38 @@
   box-sizing: border-box;
 }
 .pageHeader {
-  margin-bottom: 20px;
+  margin-bottom: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border-subtle);
 }
 .pageHeader h1 {
   margin: 0;
-  font-size: 24px;
-  font-weight: 650;
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 500;
+  line-height: 1.12;
 }
 .promptForm {
   display: grid;
-  gap: 10px;
-  max-width: 960px;
+  gap: 9px;
   margin-bottom: 24px;
+  padding: 16px;
+  background: var(--surface-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--panel-radius);
 }
 .promptForm label,
 .titleField {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 700;
 }
 .promptForm textarea,
 .titleField input {
   width: 100%;
   min-width: 0;
   border: 1px solid var(--border-subtle);
-  border-radius: 5px;
-  background: var(--surface-panel);
+  border-radius: var(--control-radius);
+  background: var(--surface-app);
   color: var(--text-primary);
   padding: 12px;
   font: inherit;
@@ -47,7 +55,7 @@
 }
 .promptForm textarea {
   resize: vertical;
-  min-height: 96px;
+  min-height: 92px;
 }
 .formActions,
 .actions {
@@ -70,7 +78,7 @@
   max-width: 100%;
   min-height: 36px;
   border: 1px solid var(--border-subtle);
-  border-radius: 5px;
+  border-radius: var(--control-radius);
   padding: 7px 12px;
   background: var(--surface-panel);
   color: var(--text-primary);
@@ -123,7 +131,7 @@
 }
 .columns {
   display: grid;
-  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  grid-template-columns: minmax(200px, 232px) minmax(0, 1fr);
   gap: 28px;
   align-items: start;
 }
@@ -133,7 +141,9 @@
   border-right: 1px solid var(--border-subtle);
 }
 .history h2 {
-  font-size: 14px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
   margin: 0 0 14px;
   display: flex;
   justify-content: space-between;
@@ -150,9 +160,9 @@
   width: 100%;
   text-align: left;
   background: transparent;
-  border: 0;
-  border-radius: 5px;
-  padding: 12px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--control-radius);
+  padding: 11px 10px;
   color: var(--text-primary);
   cursor: pointer;
   overflow-wrap: anywhere;
@@ -162,6 +172,7 @@
 }
 .historyItem[aria-pressed="true"] {
   background: var(--surface-selected);
+  border-color: color-mix(in srgb, var(--accent-strong) 54%, transparent);
 }
 .historyItem strong {
   display: block;
@@ -179,6 +190,7 @@
 }
 .detail {
   min-width: 0;
+  padding-bottom: 24px;
 }
 .detailHeader {
   display: flex;
@@ -187,9 +199,11 @@
   gap: 16px;
 }
 .recordTitle {
-  font-size: 15px;
-  margin: 8px 0;
-  font-weight: 600;
+  margin: 4px 0 8px;
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 1.3;
 }
 .originalPrompt {
   color: var(--text-secondary);
@@ -211,8 +225,10 @@
 }
 .result h2 {
   margin: 0 0 10px;
-  font-size: 22px;
-  line-height: 1.4;
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 500;
+  line-height: 1.3;
 }
 .result p {
   margin: 6px 0 10px;
@@ -270,7 +286,10 @@
 }
 .sourceLinks a,
 .shareLink {
-  color: var(--accent);
+  color: var(--text-primary);
+  text-decoration-color: var(--accent-strong);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
   overflow-wrap: anywhere;
 }
 .sourceLinks svg,
@@ -288,7 +307,7 @@
 .look {
   border: 1px solid var(--border-subtle);
   background: var(--surface-panel);
-  border-radius: 8px;
+  border-radius: var(--control-radius);
   padding: 16px;
 }
 .look > span {
@@ -341,8 +360,9 @@
   background: var(--surface-panel);
   color: var(--text-primary);
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  border-radius: var(--panel-radius);
   padding: 24px;
+  box-shadow: var(--shadow-overlay);
   overflow-wrap: anywhere;
 }
 .dialog > h2 {
@@ -368,6 +388,9 @@
   font-size: 13px;
 }
 @media (max-width: 899px) {
+  .workspace {
+    padding-inline: 24px;
+  }
   .columns {
     grid-template-columns: minmax(0, 1fr);
     gap: 24px;
@@ -384,7 +407,13 @@
 }
 @media (max-width: 540px) {
   .workspace {
-    padding: 20px 16px 32px;
+    padding: 20px 14px 32px;
+  }
+  .pageHeader h1 {
+    font-size: 25px;
+  }
+  .promptForm {
+    padding: 12px;
   }
   .dimensions {
     grid-template-columns: minmax(0, 1fr);

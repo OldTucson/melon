@@ -225,6 +225,17 @@ afterEach(() => {
 });
 
 describe("inspiration workspace", () => {
+  it("labels the inspiration workspace as the page main content", () => {
+    renderWorkspace();
+
+    expect(
+      screen.getByRole("main", { name: "灵感调研" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 1, name: "灵感调研" }),
+    ).toBeInTheDocument();
+  });
+
   it("shows empty history with a native labelled textarea and validates before submission", async () => {
     const user = userEvent.setup();
     renderWorkspace();

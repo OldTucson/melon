@@ -316,9 +316,12 @@ export function InspirationView() {
   }
 
   return (
-    <div className={styles.workspace}>
+    <main
+      aria-labelledby="inspiration-title"
+      className={styles.workspace}
+    >
       <header className={styles.pageHeader}>
-        <h1>灵感研究</h1>
+        <h1 id="inspiration-title">灵感调研</h1>
       </header>
       <InspirationPromptForm
         inputRef={promptInput}
@@ -559,6 +562,6 @@ export function InspirationView() {
           )}
         </div>
       </div>
-    </div>
+    </main>
   );
 }
