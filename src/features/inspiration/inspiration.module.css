@@ -5,6 +5,11 @@
   color: var(--text-primary);
   overflow-wrap: anywhere;
 }
+.sharedReport {
+  max-width: 1040px;
+  min-height: 100dvh;
+  margin-inline: auto;
+}
 .workspace *,
 .dialog * {
   box-sizing: border-box;
