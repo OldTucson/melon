@@ -45,6 +45,31 @@ test("centers the desktop wordmark within the expanded sidebar", async ({
   expect(Math.abs(centerOffset)).toBeLessThanOrEqual(1);
 });
 
+test("vertically centers the collapsed brand mark within the topbar", async ({
+  page,
+}) => {
+  await page.setViewportSize(viewports[0]);
+  await page.goto("/login");
+  await page.evaluate(() => localStorage.removeItem("melon:sidebar-mode"));
+  await loginAs(page, E2E_USERS.designer);
+  await page.getByRole("button", { name: "折叠主导航" }).click();
+
+  const centerOffset = await page.evaluate(() => {
+    const topbar = document.querySelector(".workspace-topbar");
+    const brandMark = document.querySelector(".workspace-brand-mark");
+    if (!topbar || !brandMark) throw new Error("WORKSPACE_BRAND_MISSING");
+    const topbarRect = topbar.getBoundingClientRect();
+    const markRect = brandMark.getBoundingClientRect();
+    return (
+      markRect.top +
+      markRect.height / 2 -
+      (topbarRect.top + topbarRect.height / 2)
+    );
+  });
+
+  expect(Math.abs(centerOffset)).toBeLessThanOrEqual(1);
+});
+
 test("workspace adapts without overflow and preserves navigation controls", async ({
   page,
 }) => {
