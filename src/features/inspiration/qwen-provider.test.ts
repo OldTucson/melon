@@ -107,6 +107,22 @@ describe("Qwen two-stage HTTP provider", () => {
     });
   });
 
+  it("excludes source URLs embedded in linked search text from structuring", async () => {
+    const fixture = structuredClone(searchFixture);
+    fixture.output.choices[0]!.message.content = "轻通勤上升：[示例时尚站](https://example.test/fashion/commuting)[ref_1]；来源 https://example.test/fashion/commuting 。";
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(fixture))
+      .mockResolvedValueOnce(Response.json(structureFixture));
+    const output = await createQwenInspirationProvider(testConfig, fetchImpl).analyze(input());
+    const structureRequest = JSON.parse(String(fetchImpl.mock.calls[1]?.[1]?.body));
+    const structureInput = JSON.parse(structureRequest.messages[1].content);
+    expect(JSON.stringify(structureRequest)).not.toContain("https://example.test/fashion/commuting");
+    expect(structureInput.searchText).toContain("轻通勤上升");
+    expect(structureInput.searchText).toContain("示例时尚站");
+    expect(structureInput.searchText).toContain("[ref_1]");
+    expect(output.sources).toEqual([inspirationSourceFixture]);
+  });
+
   it.each(["search", "structure"] as const)("accepts exactly two MiB in the %s stage", async (stage) => {
     const json = JSON.stringify(stage === "search" ? searchFixture : structureFixture);
     const padding = 2 * 1024 * 1024 - new TextEncoder().encode(json).byteLength;
@@ -217,17 +233,19 @@ describe("Qwen two-stage HTTP provider", () => {
   });
 });
 
-const baseEnv = () => parseServerEnv({
+const baseEnvInput = {
   NODE_ENV: "test", DATABASE_URL: "postgres://localhost/melon", AUTH_SECRET: "a".repeat(32),
   APP_ORIGIN: "http://localhost:3000", ALIYUN_OSS_REGION: "oss-cn-hangzhou", ALIYUN_OSS_BUCKET: "melon-test-assets",
   ALIYUN_OSS_ENDPOINT: "https://assets.example.test", ALIYUN_OSS_CNAME: "true",
   ALIYUN_STS_ROLE_ARN: "acs:ram::123456789012:role/melon-browser-upload",
-});
-const enabledEnv = () => ({
-  ...baseEnv(), INSPIRATION_ENABLED: true, DASHSCOPE_API_KEY: testConfig.apiKey,
+};
+const baseEnv = () => parseServerEnv(baseEnvInput);
+const enabledEnvInput = () => ({
+  ...baseEnvInput, INSPIRATION_ENABLED: "true", DASHSCOPE_API_KEY: testConfig.apiKey,
   DASHSCOPE_WORKSPACE_ID: "workspace", DASHSCOPE_NATIVE_BASE_URL: testConfig.nativeBaseUrl,
   DASHSCOPE_OPENAI_BASE_URL: testConfig.openaiBaseUrl,
 });
+const enabledEnv = () => parseServerEnv(enabledEnvInput());
 
 describe("configured Qwen provider", () => {
   it("is unavailable when disabled", () => {
@@ -236,8 +254,23 @@ describe("configured Qwen provider", () => {
   });
 
   it.each(["DASHSCOPE_API_KEY", "DASHSCOPE_WORKSPACE_ID", "DASHSCOPE_NATIVE_BASE_URL", "DASHSCOPE_OPENAI_BASE_URL"] as const)("is unavailable when %s is missing", (key) => {
-    vi.mocked(getServerEnv).mockReturnValue({ ...enabledEnv(), [key]: undefined });
+    vi.mocked(getServerEnv).mockImplementation(() => parseServerEnv({ ...enabledEnvInput(), [key]: undefined }));
     expect(getQwenInspirationProvider).toThrowError(expect.objectContaining({ code: "INSPIRATION_DISABLED", status: 503 }));
+  });
+
+  it.each([false, true])("preserves unrelated environment failures with missing inspiration key %s", (missingKey) => {
+    const envInput = { ...enabledEnvInput(), AUTH_SECRET: "short", ...(missingKey ? { DASHSCOPE_API_KEY: undefined } : {}) };
+    let parserError: unknown;
+    try { parseServerEnv(envInput); } catch (error) { parserError = error; }
+    expect(parserError).toBeInstanceOf(Error);
+    vi.mocked(getServerEnv).mockImplementation(() => { throw parserError; });
+    expect(getQwenInspirationProvider).toThrow(parserError as Error);
+  });
+
+  it("preserves non-validation environment failures", () => {
+    const error = new Error("environment loader failed");
+    vi.mocked(getServerEnv).mockImplementation(() => { throw error; });
+    expect(getQwenInspirationProvider).toThrow(error);
   });
 
   it("uses server credentials and models with the default fetch", async () => {

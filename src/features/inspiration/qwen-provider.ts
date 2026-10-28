@@ -1,5 +1,7 @@
 import "server-only";
 
+import { ZodError } from "zod";
+
 import { getServerEnv, type ServerEnv } from "@/lib/env/server";
 import { AppError } from "@/lib/http/app-error";
 import { readBoundedJson } from "@/lib/http/bounded-json";
@@ -112,9 +114,13 @@ export function createQwenInspirationProvider(
         buildQwenSearchRequest({ prompt: input.prompt, model: config.searchModel }),
         input.signal, parseQwenSearchResponse,
       );
+      // Search prose may repeat source links; keep only source indexes for structuring.
+      const searchText = [...search.sources]
+        .sort((left, right) => right.url.length - left.url.length)
+        .reduce((text, source) => text.replaceAll(source.url, `[ref_${source.index}]`), search.searchText);
       const structure = await runStage(
         "structure", structureEndpoint,
-        buildQwenStructureRequest({ prompt: input.prompt, searchText: search.searchText, sources: search.sources, model: config.structureModel }),
+        buildQwenStructureRequest({ prompt: input.prompt, searchText, sources: search.sources, model: config.structureModel }),
         input.signal, (value) => parseQwenStructureResponse(value, search.sources),
       );
       return {
@@ -127,14 +133,34 @@ export function createQwenInspirationProvider(
   };
 }
 
+function disabledError() {
+  return new AppError("INSPIRATION_DISABLED", 503, "Inspiration analysis is disabled");
+}
+
 export function getQwenInspirationProvider(): InspirationProvider {
-  const env = getServerEnv();
+  let env: ServerEnv;
+  try {
+    env = getServerEnv();
+  } catch (error) {
+    const providerFields = new Set([
+      "DASHSCOPE_API_KEY", "DASHSCOPE_WORKSPACE_ID",
+      "DASHSCOPE_NATIVE_BASE_URL", "DASHSCOPE_OPENAI_BASE_URL",
+    ]);
+    if (
+      error instanceof ZodError && error.issues.length > 0 &&
+      error.issues.every(({ path }) => path.length === 1 &&
+        typeof path[0] === "string" && providerFields.has(path[0]))
+    ) {
+      throw disabledError();
+    }
+    throw error;
+  }
   if (
     !env.INSPIRATION_ENABLED || !env.DASHSCOPE_API_KEY ||
     !env.DASHSCOPE_WORKSPACE_ID || !env.DASHSCOPE_NATIVE_BASE_URL ||
     !env.DASHSCOPE_OPENAI_BASE_URL
   ) {
-    throw new AppError("INSPIRATION_DISABLED", 503, "Inspiration analysis is disabled");
+    throw disabledError();
   }
   return createQwenInspirationProvider({
     apiKey: env.DASHSCOPE_API_KEY,
