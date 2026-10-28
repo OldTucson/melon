@@ -4,6 +4,7 @@ export * from "./authorizations";
 export * from "./change-log";
 export * from "./folders";
 export * from "./inspiration-analyses";
+export * from "./inspiration-visuals";
 export * from "./operations";
 export * from "./patterns";
 export * from "./tags";
