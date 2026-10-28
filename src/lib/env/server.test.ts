@@ -23,7 +23,153 @@ const enabledImageSearchEnv = {
   IMAGE_SEARCH_MODEL_SHA256: "a".repeat(64),
 };
 
+const enabledInspirationEnv = {
+  INSPIRATION_ENABLED: "true",
+  DASHSCOPE_API_KEY: `sk-${"x".repeat(40)}`,
+  DASHSCOPE_WORKSPACE_ID: "ws-demo-123",
+  DASHSCOPE_OPENAI_BASE_URL:
+    "https://ws-demo-123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+  DASHSCOPE_NATIVE_BASE_URL:
+    "https://ws-demo-123.cn-beijing.maas.aliyuncs.com/api/v1",
+};
+
 describe("parseServerEnv", () => {
+  it("requires complete Qwen configuration only when inspiration is enabled", () => {
+    expect(parseServerEnv(validEnv).INSPIRATION_ENABLED).toBe(false);
+    expect(() =>
+      parseServerEnv({ ...validEnv, INSPIRATION_ENABLED: "true" }),
+    ).toThrow(/DASHSCOPE_API_KEY/);
+    expect(parseServerEnv({ ...validEnv, ...enabledInspirationEnv })).toMatchObject({
+      INSPIRATION_ENABLED: true,
+      INSPIRATION_SEARCH_MODEL: "qwen-plus",
+      INSPIRATION_STRUCTURE_MODEL: "qwen3.8-flash",
+    });
+  });
+
+  it("accepts blank provider defaults with inspiration disabled", () => {
+    expect(parseServerEnv({
+      ...validEnv,
+      INSPIRATION_ENABLED: "false",
+      DASHSCOPE_API_KEY: "",
+      DASHSCOPE_WORKSPACE_ID: "",
+      DASHSCOPE_OPENAI_BASE_URL: "",
+      DASHSCOPE_NATIVE_BASE_URL: "",
+    })).toMatchObject({
+      INSPIRATION_ENABLED: false,
+      DASHSCOPE_API_KEY: undefined,
+      DASHSCOPE_WORKSPACE_ID: undefined,
+      DASHSCOPE_OPENAI_BASE_URL: undefined,
+      DASHSCOPE_NATIVE_BASE_URL: undefined,
+    });
+  });
+
+  it("preserves a nonblank Qwen API key exactly", () => {
+    expect(parseServerEnv({
+      ...validEnv,
+      ...enabledInspirationEnv,
+      DASHSCOPE_API_KEY: "  synthetic-key  ",
+    }).DASHSCOPE_API_KEY).toBe("  synthetic-key  ");
+  });
+
+  it("requires a literal boolean inspiration flag", () => {
+    expect(() => parseServerEnv({
+      ...validEnv,
+      INSPIRATION_ENABLED: "1",
+    })).toThrow(/INSPIRATION_ENABLED/);
+  });
+
+  it.each([
+    "DASHSCOPE_API_KEY",
+    "DASHSCOPE_WORKSPACE_ID",
+    "DASHSCOPE_OPENAI_BASE_URL",
+    "DASHSCOPE_NATIVE_BASE_URL",
+  ] as const)("requires nonblank %s when inspiration is enabled", (field) => {
+    for (const missing of [undefined, "", "   "]) {
+      expect(() => parseServerEnv({
+        ...validEnv,
+        ...enabledInspirationEnv,
+        [field]: missing,
+      })).toThrow(new RegExp(field));
+    }
+  });
+
+  it.each([
+    "DASHSCOPE_OPENAI_BASE_URL",
+    "DASHSCOPE_NATIVE_BASE_URL",
+  ] as const)("rejects unsafe or incorrect %s", (field) => {
+    const path = field === "DASHSCOPE_OPENAI_BASE_URL"
+      ? "/compatible-mode/v1" : "/api/v1";
+    const host = "ws-demo-123.cn-beijing.maas.aliyuncs.com";
+    const invalidUrls = [
+      "not-a-url",
+      `http://${host}${path}`,
+      `https://user:secret@${host}${path}`,
+      `https://@${host}${path}`,
+      `https://:@${host}${path}`,
+      `https://${host}${path}?mode=unsafe`,
+      `https://${host}${path}?`,
+      `https://${host}${path}#fragment`,
+      `https://${host}${path}#`,
+      `https://${host}.evil.test${path}`,
+      `https://ws-demo-123.evilmaas.aliyuncs.com${path}`,
+      `https://${host}/wrong/v1`,
+      `https://${host}${path}//`,
+    ];
+    for (const url of invalidUrls) {
+      expect(() => parseServerEnv({
+        ...validEnv,
+        ...enabledInspirationEnv,
+        [field]: url,
+      }), url).toThrow(new RegExp(field));
+    }
+  });
+
+  it("rejects provider URLs with different hosts", () => {
+    expect(() => parseServerEnv({
+      ...validEnv,
+      ...enabledInspirationEnv,
+      DASHSCOPE_NATIVE_BASE_URL:
+        "https://ws-demo-123.cn-shanghai.maas.aliyuncs.com/api/v1",
+    })).toThrow(/DASHSCOPE_NATIVE_BASE_URL/);
+  });
+
+  it("rejects a provider hostname belonging to another workspace", () => {
+    expect(() => parseServerEnv({
+      ...validEnv,
+      ...enabledInspirationEnv,
+      DASHSCOPE_WORKSPACE_ID: "another-workspace",
+    })).toThrow(/DASHSCOPE_WORKSPACE_ID/);
+  });
+
+  it.each([
+    ["INSPIRATION_SEARCH_MODEL", "qwen-turbo"],
+    ["INSPIRATION_STRUCTURE_MODEL", "qwen-plus"],
+  ])("rejects unsupported %s overrides", (field, model) => {
+    expect(() => parseServerEnv({
+      ...validEnv,
+      ...enabledInspirationEnv,
+      [field]: model,
+    })).toThrow(new RegExp(field));
+  });
+
+  it.each([
+    ["ws-demo-123.cn-beijing.maas.aliyuncs.com", "ws-demo-123"],
+    ["maas.aliyuncs.com", "maas"],
+  ])("preserves provider API paths on allowed host %s", (host, workspace) => {
+    expect(parseServerEnv({
+      ...validEnv,
+      ...enabledInspirationEnv,
+      DASHSCOPE_WORKSPACE_ID: workspace,
+      DASHSCOPE_OPENAI_BASE_URL: `https://${host}/prefix/compatible-mode/v1/`,
+      DASHSCOPE_NATIVE_BASE_URL: `https://${host}/prefix/api/v1/`,
+      INSPIRATION_SEARCH_MODEL: "qwen-plus",
+      INSPIRATION_STRUCTURE_MODEL: "qwen3.8-flash",
+    })).toMatchObject({
+      DASHSCOPE_OPENAI_BASE_URL: `https://${host}/prefix/compatible-mode/v1/`,
+      DASHSCOPE_NATIVE_BASE_URL: `https://${host}/prefix/api/v1/`,
+    });
+  });
+
   it("parses a valid server environment", () => {
     expect(parseServerEnv(validEnv).ALIYUN_OSS_CNAME).toBe(true);
   });

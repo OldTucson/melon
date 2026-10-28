@@ -66,6 +66,27 @@ const parseHttpOrigin = (value: string) => {
   }
 };
 
+const parseProviderHttpsUrl = (value: string, pathSuffix: string) => {
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== "https:" ||
+      url.username !== "" ||
+      url.password !== "" ||
+      /[?#]/.test(value) ||
+      /^https:\/\/[^/]*@/i.test(value) ||
+      !(url.hostname === "maas.aliyuncs.com" ||
+        url.hostname.endsWith(".maas.aliyuncs.com")) ||
+      !url.pathname.replace(/\/$/, "").endsWith(pathSuffix)
+    ) {
+      return undefined;
+    }
+    return url;
+  } catch {
+    return undefined;
+  }
+};
+
 const serverEnvSchema = z
   .object({
     NODE_ENV: z
@@ -93,6 +114,15 @@ const serverEnvSchema = z
     OSS_ADAPTER: z.enum(["real", "fake"]).default("real"),
     ALIBABA_CLOUD_ACCESS_KEY_ID: optionalNonBlankString,
     ALIBABA_CLOUD_ACCESS_KEY_SECRET: optionalNonBlankString,
+    INSPIRATION_ENABLED: optionalBoolean,
+    DASHSCOPE_API_KEY: optionalNonBlankString,
+    DASHSCOPE_WORKSPACE_ID: optionalNonBlankString,
+    DASHSCOPE_OPENAI_BASE_URL: optionalNonBlankString,
+    DASHSCOPE_NATIVE_BASE_URL: optionalNonBlankString,
+    INSPIRATION_SEARCH_MODEL: z.enum(["qwen-plus"]).default("qwen-plus"),
+    INSPIRATION_STRUCTURE_MODEL: z
+      .enum(["qwen3.8-flash"])
+      .default("qwen3.8-flash"),
     IMAGE_SEARCH_ENABLED: optionalBoolean,
     IMAGE_SEARCH_RELEASE_APPROVED: optionalBoolean,
     IMAGE_SEARCH_SERVICE_URL: optionalNonBlankString,
@@ -129,6 +159,61 @@ const serverEnvSchema = z
         path: ["OSS_ADAPTER"],
         message: "Fake OSS adapter is test-only",
       });
+    }
+
+    if (value.INSPIRATION_ENABLED) {
+      const required = [
+        "DASHSCOPE_API_KEY",
+        "DASHSCOPE_WORKSPACE_ID",
+        "DASHSCOPE_OPENAI_BASE_URL",
+        "DASHSCOPE_NATIVE_BASE_URL",
+      ] as const;
+      for (const key of required) {
+        if (!value[key]) {
+          context.addIssue({
+            code: "custom",
+            path: [key],
+            message: `${key} is required when inspiration is enabled`,
+          });
+        }
+      }
+
+      const urls = [
+        ["DASHSCOPE_OPENAI_BASE_URL", "/compatible-mode/v1"],
+        ["DASHSCOPE_NATIVE_BASE_URL", "/api/v1"],
+      ] as const;
+      const parsedUrls = urls.map(([key, suffix]) => {
+        const url = value[key]
+          ? parseProviderHttpsUrl(value[key], suffix)
+          : undefined;
+        if (value[key] && !url) {
+          context.addIssue({
+            code: "custom",
+            path: [key],
+            message: `Provider URL must use HTTPS on maas.aliyuncs.com with no credentials, query, or fragment and a path ending in ${suffix}`,
+          });
+        }
+        if (
+          url &&
+          value.DASHSCOPE_WORKSPACE_ID &&
+          url.hostname.split(".")[0] !== value.DASHSCOPE_WORKSPACE_ID
+        ) {
+          context.addIssue({
+            code: "custom",
+            path: ["DASHSCOPE_WORKSPACE_ID"],
+            message: "Workspace ID must match the first provider hostname label",
+          });
+        }
+        return url;
+      });
+      const [openaiUrl, nativeUrl] = parsedUrls;
+      if (openaiUrl && nativeUrl && openaiUrl.hostname !== nativeUrl.hostname) {
+        context.addIssue({
+          code: "custom",
+          path: ["DASHSCOPE_NATIVE_BASE_URL"],
+          message: "OpenAI and native provider URL hostnames must match",
+        });
+      }
     }
 
     if (value.IMAGE_SEARCH_ENABLED) {
