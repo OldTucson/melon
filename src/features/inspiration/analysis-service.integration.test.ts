@@ -254,8 +254,8 @@ describe("inspiration analysis lifecycle", () => {
     expect(await repository.claimFailedAnalysisRetryRow(otherOwnerId, failed.id, now)).toBeUndefined();
     expect(await repository.renameAnalysisRow(otherOwnerId, completed.id, 0, "changed", now)).toBeUndefined();
     expect(await repository.deleteAnalysisRow(otherOwnerId, completed.id)).toBeUndefined();
-    expect(await repository.enableShareRow(otherOwnerId, completed.id, randomUUID(), now)).toBeUndefined();
-    expect(await repository.disableShareRow(otherOwnerId, completed.id, now)).toBeUndefined();
+    expect(await repository.enableShareRow(otherOwnerId, completed.id, randomUUID(), now, completed.version)).toBeUndefined();
+    expect(await repository.disableShareRow(otherOwnerId, completed.id, now, completed.version)).toBeUndefined();
     expect(await repository.getOwnedAnalysisRow(ownerId, pending.id)).toEqual(pending);
     expect(await repository.getOwnedAnalysisRow(ownerId, failed.id)).toEqual(failed);
     expect(await repository.getOwnedAnalysisRow(ownerId, completed.id)).toEqual(completed);

@@ -80,15 +80,15 @@ export async function deleteAnalysisRow(ownerId: string, analysisId: string) {
   return row;
 }
 
-export async function enableShareRow(ownerId: string, analysisId: string, shareId: string, now: Date) {
+export async function enableShareRow(ownerId: string, analysisId: string, shareId: string, now: Date, version: number) {
   const [row] = await db.update(analyses).set({ ...changed(now), shareId })
-    .where(and(owned(ownerId, analysisId), eq(analyses.status, "completed"), isNull(analyses.shareId))).returning();
+    .where(and(owned(ownerId, analysisId), eq(analyses.status, "completed"), eq(analyses.version, version), isNull(analyses.shareId))).returning();
   return row;
 }
 
-export async function disableShareRow(ownerId: string, analysisId: string, now: Date) {
+export async function disableShareRow(ownerId: string, analysisId: string, now: Date, version: number) {
   const [row] = await db.update(analyses).set({ ...changed(now), shareId: null })
-    .where(and(owned(ownerId, analysisId), eq(analyses.status, "completed"), isNotNull(analyses.shareId))).returning();
+    .where(and(owned(ownerId, analysisId), eq(analyses.status, "completed"), eq(analyses.version, version), isNotNull(analyses.shareId))).returning();
   return row;
 }
 

@@ -17,7 +17,7 @@ export async function enableInspirationShare(input: InspirationIdentity) {
   if (existing.shareId) return toInspirationDetail(existing);
   const shareId = randomUUID();
   inspirationShareUrl(shareId); // Reject invalid origin configuration before writing.
-  const changed = await enableShareRow(ownerId, analysisId, shareId, new Date());
+  const changed = await enableShareRow(ownerId, analysisId, shareId, new Date(), existing.version);
   const row = changed ?? await requireOwnedInspiration(ownerId, analysisId);
   if (row.status !== "completed" || !row.shareId) throw inspirationBusy();
   return toInspirationDetail(row);
@@ -28,7 +28,7 @@ export async function disableInspirationShare(input: InspirationIdentity) {
   const existing = await requireOwnedInspiration(ownerId, analysisId);
   if (existing.status === "pending") throw inspirationBusy();
   if (!existing.shareId) return toInspirationDetail(existing);
-  const changed = await disableShareRow(ownerId, analysisId, new Date());
+  const changed = await disableShareRow(ownerId, analysisId, new Date(), existing.version);
   const row = changed ?? await requireOwnedInspiration(ownerId, analysisId);
   if (row.status === "pending" || row.shareId) throw inspirationBusy();
   return toInspirationDetail(row);
