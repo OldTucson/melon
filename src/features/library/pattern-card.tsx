@@ -116,6 +116,7 @@ export function PatternCard({
       data-mode={mode}
       data-palette={paletteEnabled ? "true" : undefined}
       data-selected={selected ? "true" : undefined}
+      data-state={selected ? "selected" : "idle"}
       role="listitem"
       aria-label={`${item.name}, ${item.extension.toUpperCase()}${selected ? ", 已选择" : ""}`}
     >

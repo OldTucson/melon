@@ -59,6 +59,7 @@ import {
   type SelectionModifiers,
 } from "./selection-store";
 import { useFoldersQuery } from "@/features/folders/folder-client";
+import { PageHeader } from "@/components/ui/page-header";
 
 async function fetchPatternPage(query: PatternQuery, cursor: string | null) {
   const searchParams = serializeLibrarySearchParams(query);
@@ -1157,16 +1158,8 @@ export function LibraryView({
       data-inspector={showInspector ? "open" : undefined}
     >
       <section className="library-center" aria-labelledby="library-title">
-        <header className="library-heading">
-          <div>
-            <p>私人图案库</p>
-            <h1 id="library-title" title={initialQuery.unfiled ? "未分类" : (activeFolder?.name ?? "全部图案")}>
-              {initialQuery.unfiled
-                ? "未分类"
-                : (activeFolder?.name ?? "全部图案")}
-            </h1>
-          </div>
-          {activeFolder && (
+        <PageHeader
+          actions={activeFolder ? (
             <label className="folder-descendants-toggle">
               <input
                 type="checkbox"
@@ -1187,8 +1180,21 @@ export function LibraryView({
               />
               包含子文件夹内容
             </label>
-          )}
-        </header>
+          ) : undefined}
+          className="library-heading"
+          eyebrow="私人图案库"
+          id="library-title"
+          title={
+            initialQuery.unfiled
+              ? "未分类"
+              : (activeFolder?.name ?? "全部图案")
+          }
+          titleAttribute={
+            initialQuery.unfiled
+              ? "未分类"
+              : (activeFolder?.name ?? "全部图案")
+          }
+        />
         <div className="library-controls">
           <LibraryToolbar
             key={querySignature}

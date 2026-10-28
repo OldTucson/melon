@@ -12,12 +12,17 @@ describe("PageHeader", () => {
         eyebrow="私人图案库"
         id="library-title"
         title="全部图案"
+        titleAttribute="完整的全部图案标题"
       />,
     );
 
     expect(screen.getByRole("heading", { name: "全部图案" })).toHaveAttribute(
       "id",
       "library-title",
+    );
+    expect(screen.getByRole("heading", { name: "全部图案" })).toHaveAttribute(
+      "title",
+      "完整的全部图案标题",
     );
     expect(screen.getByText("私人图案库")).toBeInTheDocument();
     expect(screen.getByText("128 个素材")).toBeInTheDocument();

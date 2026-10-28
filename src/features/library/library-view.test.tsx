@@ -1740,7 +1740,7 @@ describe("Mac-first workspace", () => {
       return row!;
     });
     expect(firstRow.style.gridTemplateColumns).toBe(
-      "repeat(6, minmax(0, 1fr))",
+      "repeat(5, minmax(0, 1fr))",
     );
   });
 
@@ -1774,7 +1774,7 @@ describe("Mac-first workspace", () => {
       expect(row!.style.gridTemplateColumns).toBe("repeat(4, minmax(0, 1fr))");
       return row!;
     });
-    expect(initialRow.style.height).toBe("328px");
+    expect(initialRow.style.height).toBe("335px");
 
     act(() => {
       for (const { callback, observer } of resizeObservers) {
@@ -1793,11 +1793,11 @@ describe("Mac-first workspace", () => {
     await waitFor(() => {
       const row = document.querySelector<HTMLElement>(".virtual-pattern-row");
       expect(row?.style.gridTemplateColumns).toBe("repeat(4, minmax(0, 1fr))");
-      expect(row?.style.height).toBe("338px");
+      expect(row?.style.height).toBe("345px");
       expect(
         document.querySelector<HTMLElement>(".virtual-pattern-canvas")?.style
           .height,
-      ).toBe("1014px");
+      ).toBe("1035px");
     });
   });
 

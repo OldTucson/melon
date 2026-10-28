@@ -18,6 +18,16 @@ import type { SelectionModifiers } from "./selection-store";
 
 const getRowKey = (index: number) => index;
 
+export function resolvePatternGridColumns(
+  width: number,
+  mode: LibraryViewMode,
+) {
+  if (mode === "list") return 1;
+  if (width < 520) return 1;
+  if (width < 860) return 3;
+  return Math.max(4, Math.min(6, Math.floor((width + 16) / 238)));
+}
+
 export type PatternGridHandle = {
   getScrollOffset(): number;
   restoreScrollOffset(offset: number): void;
@@ -91,17 +101,18 @@ export const PatternGrid = forwardRef<PatternGridHandle, PatternGridProps>(
     }, []);
 
     const columns = useMemo(() => {
-      if (mode === "list") return 1;
-      return Math.max(1, Math.min(6, Math.floor((width + 12) / 196)));
+      return resolvePatternGridColumns(width, mode);
     }, [mode, width]);
     const rowCount = Math.ceil(items.length / columns);
-    const paletteRowHeight = paletteEnabled ? (width <= 720 ? 44 : 26) : 0;
+    const paletteRowHeight = paletteEnabled ? (width <= 720 ? 44 : 28) : 0;
+    const rowGap = 16;
     const rowHeight =
       mode === "list"
-        ? 88 + paletteRowHeight
-        : Math.max(196, (width - (columns - 1) * 12) / columns) +
-          86 +
-          paletteRowHeight;
+        ? 96 + paletteRowHeight
+        : Math.max(196, (width - (columns - 1) * rowGap) / columns) +
+          78 +
+          paletteRowHeight +
+          rowGap;
 
     return (
       <div

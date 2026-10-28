@@ -73,6 +73,17 @@ describe("pattern card interactions", () => {
     vi.useRealTimers();
   });
 
+  it("keeps selected cards explicit while retaining keyboard actions", () => {
+    renderCard({ selected: true });
+
+    const card = screen.getByRole("listitem", { name: /Leaf, PNG, 已选择/ });
+    expect(card).toHaveAttribute("data-state", "selected");
+    expect(screen.getByRole("checkbox", { name: "选择 Leaf" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "收藏" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "预览" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "下载 Leaf" })).toBeInTheDocument();
+  });
+
   it("opens preview on a real double click without opening a closed inspector", async () => {
     const user = userEvent.setup();
     const props = renderCard();
