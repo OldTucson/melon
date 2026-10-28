@@ -13,7 +13,10 @@ export const patternDrilldownHref = (
 
 export function FieldRanking({ rows }: { rows: DashboardDto["fields"] }) {
   return (
-    <section className="dashboard-section dashboard-ranking" aria-labelledby="field-ranking-title">
+    <section
+      aria-labelledby="field-ranking-title"
+      className="dashboard-section dashboard-ranking"
+    >
       <div className="dashboard-section-heading">
         <div>
           <h2 id="field-ranking-title">授权领域</h2>
@@ -24,7 +27,10 @@ export function FieldRanking({ rows }: { rows: DashboardDto["fields"] }) {
         <div className="dashboard-empty">暂无领域授权数据</div>
       ) : (
         <div className="dashboard-table-scroll">
-          <table className="dashboard-data-table dashboard-ranking-table" aria-label="授权领域排行">
+          <table
+            aria-label="授权领域排行"
+            className="dashboard-data-table dashboard-ranking-table"
+          >
             <thead>
               <tr>
                 <th scope="col">领域</th>
@@ -56,7 +62,10 @@ export function PatternRanking({
   rows: DashboardDto["topPatterns"];
 }) {
   return (
-    <section className="dashboard-section dashboard-ranking" aria-labelledby="pattern-ranking-title">
+    <section
+      aria-labelledby="pattern-ranking-title"
+      className="dashboard-section dashboard-ranking"
+    >
       <div className="dashboard-section-heading">
         <div>
           <h2 id="pattern-ranking-title">授权图案</h2>
@@ -67,7 +76,10 @@ export function PatternRanking({
         <div className="dashboard-empty">暂无图案授权数据</div>
       ) : (
         <div className="dashboard-table-scroll">
-          <table className="dashboard-data-table dashboard-ranking-table" aria-label="授权图案排行">
+          <table
+            aria-label="授权图案排行"
+            className="dashboard-data-table dashboard-ranking-table"
+          >
             <thead>
               <tr>
                 <th scope="col">图案</th>

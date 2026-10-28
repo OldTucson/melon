@@ -4,6 +4,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { PageHeader } from "@/components/ui/page-header";
 import { readApiResponse } from "@/lib/query/client";
 import { useQueryOwnerId } from "@/lib/query/provider";
 
@@ -76,28 +77,40 @@ export function DashboardView({
 
   return (
     <main
+      aria-labelledby="dashboard-page-title"
       className="dashboard-page"
       aria-busy={dashboardQuery.isFetching ? "true" : undefined}
     >
-      <header className="dashboard-header">
-        <div className="dashboard-title">
-          <h1>数据看板</h1>
-          <p>{rangeLabel(query, data)}</p>
-        </div>
-        <DashboardFilters
-          key={serializeDashboardQuery(query).toString()}
-          onChange={updateQuery}
-          query={query}
-          resolvedRange={data.range}
-          today={today}
-        />
-      </header>
+      <PageHeader
+        actions={
+          <DashboardFilters
+            key={serializeDashboardQuery(query).toString()}
+            onChange={updateQuery}
+            query={query}
+            resolvedRange={data.range}
+            today={today}
+          />
+        }
+        className="dashboard-header"
+        description={rangeLabel(query, data)}
+        eyebrow="商业概览"
+        id="dashboard-page-title"
+        title="数据看板"
+      />
       <KpiStrip metrics={data.metrics} />
-      <div className="dashboard-overview-grid">
+      <div
+        aria-label="商业数据图表"
+        className="dashboard-overview-grid"
+        role="region"
+      >
         <RevenueTrend rows={data.trend} />
         <CurrentStateChart rows={data.currentStates} />
       </div>
-      <div className="dashboard-ranking-grid">
+      <div
+        aria-label="商业授权排行"
+        className="dashboard-ranking-grid"
+        role="region"
+      >
         <FieldRanking rows={data.fields} />
         <PatternRanking rows={data.topPatterns} />
       </div>

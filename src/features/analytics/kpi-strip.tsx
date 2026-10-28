@@ -36,8 +36,12 @@ export function KpiStrip({ metrics }: { metrics: DashboardDto["metrics"] }) {
 
   return (
     <section className="dashboard-kpis" aria-label="商业授权关键指标">
-      {items.map(({ label, value, icon: Icon, comparison }) => (
-        <div className="dashboard-kpi" key={label}>
+      {items.map(({ label, value, icon: Icon, comparison }, index) => (
+        <div
+          className="dashboard-kpi"
+          data-primary={index === 0 ? "true" : undefined}
+          key={label}
+        >
           <div className="dashboard-kpi-label">
             <Icon aria-hidden="true" />
             <span>{label}</span>

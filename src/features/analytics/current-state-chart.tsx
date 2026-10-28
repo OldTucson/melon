@@ -9,7 +9,7 @@ const statePresentation: Record<
   CommercialState,
   { label: string; color: string }
 > = {
-  unlicensed: { label: "未授权", color: "var(--text-muted)" },
+  unlicensed: { label: "未授权", color: "var(--border-strong)" },
   standard: { label: "普通授权", color: "var(--status-standard)" },
   field_exclusive: { label: "领域独占", color: "var(--status-exclusive)" },
   global_buyout: { label: "全局买断", color: "var(--status-buyout)" },
@@ -24,7 +24,10 @@ export function CurrentStateChart({
   const chartData = rows.filter((row) => row.patternCount > 0);
 
   return (
-    <section className="dashboard-section dashboard-state" aria-labelledby="current-state-title">
+    <section
+      aria-labelledby="current-state-title"
+      className="dashboard-section dashboard-state"
+    >
       <div className="dashboard-section-heading">
         <div>
           <h2 id="current-state-title">当前商业状态</h2>
@@ -44,7 +47,7 @@ export function CurrentStateChart({
                 nameKey="state"
                 outerRadius={72}
                 paddingAngle={2}
-                stroke="var(--surface)"
+                stroke="var(--surface-panel)"
                 strokeWidth={2}
               >
                 {chartData.map((row) => (

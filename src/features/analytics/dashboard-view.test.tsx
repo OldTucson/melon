@@ -142,12 +142,38 @@ describe("dashboard view", () => {
       dashboard,
     );
 
-    expect(screen.getByRole("heading", { name: "数据看板" })).toBeInTheDocument();
+    const main = screen.getByRole("main", { name: "数据看板" });
+    const title = within(main).getByRole("heading", {
+      level: 1,
+      name: "数据看板",
+    });
+    expect(title.closest("header")).toHaveClass("page-header");
     expect(
       within(
-        screen.getByRole("region", { name: "商业授权关键指标" }),
+        within(main).getByRole("region", { name: "商业授权关键指标" }),
       ).getByText("¥1,280.00"),
     ).toBeInTheDocument();
+    expect(
+      within(main).getByRole("figure", { name: "收入趋势" }),
+    ).toBeInTheDocument();
+    expect(
+      within(main).getByRole("region", { name: "当前商业状态" }),
+    ).toBeInTheDocument();
+    expect(
+      within(main).getByRole("table", { name: "授权领域排行" }),
+    ).toBeInTheDocument();
+    expect(
+      within(main).getByRole("table", { name: "授权图案排行" }),
+    ).toBeInTheDocument();
+    expect(
+      within(main).getByRole("combobox", { name: "统计时间" }),
+    ).toBeVisible();
+    expect(
+      within(main).getByRole("combobox", { name: "授权类型" }),
+    ).toBeVisible();
+    expect(
+      within(main).getByRole("combobox", { name: "授权领域" }),
+    ).toBeVisible();
     expect(screen.getByText("较上期 +25.00%")).toBeInTheDocument();
     expect(screen.getByRole("table", { name: "收入趋势数据" })).toBeInTheDocument();
     expect(screen.getByRole("list", { name: "当前商业状态数据" })).toBeInTheDocument();

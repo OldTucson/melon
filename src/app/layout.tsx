@@ -7,6 +7,7 @@ import "./styles/controls.css";
 import "./styles/workspace.css";
 import "./styles/library.css";
 import "./styles/workflows.css";
+import "./styles/dashboard.css";
 
 export const metadata: Metadata = {
   title: "melon",

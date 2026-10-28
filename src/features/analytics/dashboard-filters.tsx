@@ -72,7 +72,7 @@ export function DashboardFilters({
       pending.end > today);
 
   return (
-    <div className="dashboard-filters" aria-label="看板筛选">
+    <div className="dashboard-filters" aria-label="看板筛选" role="group">
       <label>
         <span>时间</span>
         <select

@@ -21,7 +21,10 @@ export function RevenueTrend({ rows }: { rows: DashboardDto["trend"] }) {
   const chartSafe = chartData.every((row) => row.revenueYuan !== null);
 
   return (
-    <figure className="dashboard-section dashboard-trend" aria-labelledby="revenue-trend-title">
+    <figure
+      aria-labelledby="revenue-trend-title"
+      className="dashboard-section dashboard-trend"
+    >
       <div className="dashboard-section-heading">
         <div>
           <h2 id="revenue-trend-title">收入趋势</h2>
@@ -39,18 +42,25 @@ export function RevenueTrend({ rows }: { rows: DashboardDto["trend"] }) {
               data-testid="revenue-line-chart"
             >
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData} margin={{ top: 12, right: 16, bottom: 4, left: 0 }}>
-                  <CartesianGrid stroke="var(--border)" strokeDasharray="3 5" vertical={false} />
+                <LineChart
+                  data={chartData}
+                  margin={{ top: 12, right: 16, bottom: 4, left: 0 }}
+                >
+                  <CartesianGrid
+                    stroke="var(--border-subtle)"
+                    strokeDasharray="3 5"
+                    vertical={false}
+                  />
                   <XAxis
                     axisLine={false}
                     dataKey="bucket"
                     minTickGap={24}
-                    tick={{ fill: "var(--text-muted)", fontSize: 11 }}
+                    tick={{ fill: "var(--text-secondary)", fontSize: 11 }}
                     tickLine={false}
                   />
                   <YAxis
                     axisLine={false}
-                    tick={{ fill: "var(--text-muted)", fontSize: 11 }}
+                    tick={{ fill: "var(--text-secondary)", fontSize: 11 }}
                     tickFormatter={(value: number) => `¥${value.toLocaleString("zh-CN")}`}
                     tickLine={false}
                     width={76}
@@ -58,9 +68,9 @@ export function RevenueTrend({ rows }: { rows: DashboardDto["trend"] }) {
                   <Tooltip
                     contentStyle={{
                       background: "var(--surface-raised)",
-                      border: "1px solid var(--border)",
-                      borderRadius: 5,
-                      color: "var(--text)",
+                      border: "1px solid var(--border-subtle)",
+                      borderRadius: 6,
+                      color: "var(--text-primary)",
                       fontSize: 12,
                     }}
                     formatter={(_value, _name, item) => [
@@ -70,9 +80,9 @@ export function RevenueTrend({ rows }: { rows: DashboardDto["trend"] }) {
                   />
                   <Line
                     dataKey="revenueYuan"
-                    dot={{ fill: "var(--primary)", r: 3, strokeWidth: 0 }}
+                    dot={{ fill: "var(--accent-strong)", r: 3, strokeWidth: 0 }}
                     isAnimationActive={false}
-                    stroke="var(--primary)"
+                    stroke="var(--accent-strong)"
                     strokeWidth={2}
                     type="monotone"
                   />
