@@ -75,7 +75,7 @@ export async function importWebEvidence(input: ImportInput, dependencies: Import
     if (!Number.isInteger(maxImages) || maxImages < 1 || maxImages > 8) throw unavailable();
     const fetchImage = dependencies.fetchImage ?? fetchRemoteImage;
     const createAssetId = dependencies.createAssetId ?? randomUUID;
-    const seenUrls = new Set<string>();
+    const successfulUrls = new Set<string>();
     const seenBytes = new Set<string>();
     const usedIds = new Set<string>();
     const counts = { hero: 0, evidence: 0, product: 0 };
@@ -86,8 +86,7 @@ export async function importWebEvidence(input: ImportInput, dependencies: Import
       checkAbort();
       while (queue.length < 3 && cursor < input.candidates.length) {
         const candidate = input.candidates[cursor++]!;
-        if (!allowed(candidate.role) || seenUrls.has(candidate.imageUrl)) continue;
-        seenUrls.add(candidate.imageUrl);
+        if (!allowed(candidate.role) || successfulUrls.has(candidate.imageUrl)) continue;
         // Generated before fetch; validate and normalize once for both key and row.
         const id = normalizedUuidSchema.parse(createAssetId());
         if (usedIds.has(id)) throw unavailable();
@@ -106,7 +105,7 @@ export async function importWebEvidence(input: ImportInput, dependencies: Import
       const fetched = await outcome;
       checkAbort();
       // A previous result may have filled this role while this fetch was in flight.
-      if (!allowed(candidate.role)) return;
+      if (!allowed(candidate.role) || successfulUrls.has(candidate.imageUrl)) return;
       if ("failed" in fetched) { warnings.add("INSPIRATION_WEB_VISUALS_UNAVAILABLE"); return; }
       try {
         // Read metadata from validated bytes, never from remote filenames or URL suffixes.
@@ -119,6 +118,8 @@ export async function importWebEvidence(input: ImportInput, dependencies: Import
         // Track a successful put before checking abort so compensation includes races.
         writtenKeys.push(objectKey);
         checkAbort();
+        // Speculative fetches do not reserve URLs: only an accepted write does.
+        successfulUrls.add(candidate.imageUrl);
         seenBytes.add(digest);
         counts[candidate.role]++;
         assets.push({
@@ -146,14 +147,15 @@ export async function importWebEvidence(input: ImportInput, dependencies: Import
     if (assets.length === 0) warnings.add("INSPIRATION_WEB_VISUALS_UNAVAILABLE");
     return { assets, writtenKeys, warnings: [...warnings] };
   } catch {
+    // Capture classification before cleanup can race with a later caller abort.
+    const failure = input.signal.aborted ? cancelled() : unavailable();
     controller.abort();
     // Fatal exits cannot return a compensation ledger: clean up here instead.
     // Cleanup failures are best effort; the private bucket lifecycle is the fallback.
     if (writtenKeys.length > 0) {
       try { await dependencies.store.delete(writtenKeys); } catch { /* Preserve the original failure. */ }
     }
-    if (input.signal.aborted) throw cancelled();
-    throw unavailable();
+    throw failure;
   } finally {
     input.signal.removeEventListener("abort", onAbort);
     // Cancel unused speculative fetches when caps are filled or a fatal exit occurs.

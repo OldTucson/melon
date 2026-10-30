@@ -100,13 +100,27 @@ describe("bounded deterministic evidence import", () => {
     expect(webEvidenceAssetDtoSchema.safeParse(projection).success).toBe(true);
     expect(webEvidenceAssetDtoSchema.safeParse({ ...projection, objectKey: asset.objectKey }).success).toBe(false);
   });
+  it("keeps product B eligible after speculative hero B loses the hero quota", async () => {
+    const memory = memoryStore();
+    const heroA = { ...candidate(0, "hero"), title: "Hero A" };
+    const heroB = { ...candidate(1, "hero"), title: "Hero B" };
+    const productB = { ...candidate(1, "product"), title: "Product B", sourcePageUrl: "https://source.test/product-b" };
+    const result = await importWebEvidence(input([heroA, heroB, productB]), {
+      store: memory.store, createAssetId: sequence(), fetchImage: async (url) => image(number(url)),
+    });
+    expect(result.assets.map(({ title, documentRole, ordinal }) => [title, documentRole, ordinal])).toEqual([
+      ["Hero A", "hero", 0], ["Product B", "product", 1],
+    ]);
+    expect(result.assets[1]!.sourcePageUrl).toBe("https://source.test/product-b");
+    expect(result.writtenKeys).toHaveLength(2);
+    expect(memory.objects.size).toBe(2);
+  });
   it("skips duplicate remote images and duplicate bytes independently", async () => {
-    const memory = memoryStore(); const calls: number[] = [];
+    const memory = memoryStore();
     const duplicate = { ...candidate(0), sourcePageUrl: "https://source.test/another" };
     const result = await importWebEvidence(input([candidate(0), duplicate, candidate(1), candidate(2)]), { store: memory.store, createAssetId: sequence(), fetchImage: async (url) => {
-      const n = number(url); calls.push(n); return image(n === 1 ? 0 : n);
+      const n = number(url); return image(n === 1 ? 0 : n);
     } });
-    expect(calls).toEqual([0,1,2]);
     expect(result.assets.map(({ title }) => title)).toEqual(["Image 0", "Image 2"]);
     expect(memory.objects.size).toBe(2);
   });
@@ -142,6 +156,23 @@ describe("bounded deterministic evidence import", () => {
     await Promise.resolve(); controller.abort();
     await expect(pending).rejects.toThrow(/^Web evidence import cancelled$/);
     expect(cancelled).toBe(3);
+    expect(memory.objects.size).toBe(0);
+  });
+  it("preserves the original fatal failure when the caller aborts during compensation", async () => {
+    const memory = memoryStore(); const controller = new AbortController();
+    const next = sequence(); let ids = 0;
+    const remove = memory.store.delete;
+    memory.store.delete = async (keys) => {
+      controller.abort(new Error("private cleanup abort"));
+      await remove(keys);
+    };
+    await expect(importWebEvidence(input([candidate(0), candidate(1), candidate(2), candidate(3)], controller.signal), {
+      store: memory.store,
+      createAssetId: () => { if (++ids === 4) throw new Error("private original fatal error"); return next(); },
+      fetchImage: async (url) => image(number(url)),
+    })).rejects.toThrow(/^Web evidence import unavailable$/);
+    expect(controller.signal.aborted).toBe(true);
+    expect(memory.deleted[0]).toHaveLength(1);
     expect(memory.objects.size).toBe(0);
   });
   it("compensates earlier writes on a fatal ID-generator failure", async () => {
