@@ -1723,6 +1723,89 @@ describe("Mac-first workspace", () => {
     },
   );
 
+  it("fits the preview image to the viewport after quarter-turn rotations", async () => {
+    const user = userEvent.setup();
+    renderLibrary([
+      {
+        ...makePattern(1),
+        previewAssetId: "00000000-0000-4000-8000-000000000091",
+      },
+    ]);
+
+    const card = await screen.findByRole("listitem", { name: /Pattern 1/ });
+    await user.click(within(card).getByRole("button", { name: "预览" }));
+
+    const dialog = screen.getByRole("dialog", { name: "Pattern 1 预览" });
+    const stage = dialog.querySelector<HTMLElement>(".preview-stage");
+    const image = within(dialog).getByRole("img", {
+      name: "Pattern 1 预览图",
+    });
+
+    expect(stage).toHaveAttribute("data-zoom", "1");
+    expect(stage).toHaveAttribute("data-rotation", "0");
+    expect(image).toHaveStyle({ height: "700px", width: "900px" });
+
+    await user.click(
+      within(dialog).getByRole("button", { name: "顺时针旋转 90°" }),
+    );
+
+    expect(stage).toHaveAttribute("data-rotation", "90");
+    expect(image).toHaveStyle({ height: "900px", width: "700px" });
+    expect(image.style.transform).toContain("rotate(90deg)");
+  });
+
+  it("clamps preview zoom controls and resets the view when reopened", async () => {
+    const user = userEvent.setup();
+    renderLibrary([
+      {
+        ...makePattern(1),
+        previewAssetId: "00000000-0000-4000-8000-000000000091",
+      },
+    ]);
+
+    const openPreview = async () => {
+      const card = await screen.findByRole("listitem", { name: /Pattern 1/ });
+      await user.click(within(card).getByRole("button", { name: "预览" }));
+      return screen.getByRole("dialog", { name: "Pattern 1 预览" });
+    };
+
+    let dialog = await openPreview();
+    expect(within(dialog).getByText("100%", { selector: "output" })).toBeVisible();
+
+    await user.click(within(dialog).getByRole("button", { name: "放大" }));
+    expect(within(dialog).getByText("125%", { selector: "output" })).toBeVisible();
+
+    await user.click(
+      within(dialog).getByRole("button", { name: "适应窗口" }),
+    );
+    expect(within(dialog).getByText("100%", { selector: "output" })).toBeVisible();
+
+    const zoomOut = within(dialog).getByRole("button", { name: "缩小" });
+    for (let step = 0; step < 3; step += 1) await user.click(zoomOut);
+    expect(within(dialog).getByText("25%", { selector: "output" })).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "缩小" })).toBeDisabled();
+
+    await user.click(
+      within(dialog).getByRole("button", { name: "适应窗口" }),
+    );
+    const zoomIn = within(dialog).getByRole("button", { name: "放大" });
+    for (let step = 0; step < 12; step += 1) await user.click(zoomIn);
+    expect(within(dialog).getByText("400%", { selector: "output" })).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "放大" })).toBeDisabled();
+
+    await user.click(
+      within(dialog).getByRole("button", { name: "顺时针旋转 90°" }),
+    );
+    await user.click(within(dialog).getByRole("button", { name: "关闭预览" }));
+
+    dialog = await openPreview();
+    expect(within(dialog).getByText("100%", { selector: "output" })).toBeVisible();
+    expect(dialog.querySelector(".preview-stage")).toHaveAttribute(
+      "data-rotation",
+      "0",
+    );
+  });
+
   it("measures the result region before the first ResizeObserver callback", async () => {
     vi.stubGlobal(
       "ResizeObserver",
