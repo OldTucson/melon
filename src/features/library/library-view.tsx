@@ -1,7 +1,5 @@
 "use client";
 
-/* eslint-disable @next/next/no-img-element */
-
 import * as Dialog from "@radix-ui/react-dialog";
 import {
   type InfiniteData,
@@ -9,7 +7,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { Download, X } from "lucide-react";
+import { X } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -46,7 +44,7 @@ import { BulkActionBar } from "./bulk-action-bar";
 import { isPatternEditable } from "./selection-availability";
 import type { PatternItem, PatternPage } from "./library-types";
 import { LibraryToolbar, type LibraryViewMode } from "./library-toolbar";
-import { FormatPlaceholder } from "./pattern-card";
+import { PatternPreview } from "./pattern-preview";
 import { PatternGrid, type PatternGridHandle } from "./pattern-grid";
 import { usePatternPatchMutation } from "./pattern-mutations";
 import {
@@ -1382,42 +1380,11 @@ export function LibraryView({
                   </IconButton>
                 </Dialog.Close>
               </header>
-              <PreviewStage pattern={previewPattern} />
-              <footer className="preview-footer">
-                {previewPattern.sourceAssetId ? (
-                  <a
-                    className="secondary-button"
-                    href={`/api/assets/${previewPattern.sourceAssetId}/download`}
-                  >
-                    <Download aria-hidden="true" />
-                    下载原文件
-                  </a>
-                ) : null}
-              </footer>
+              <PatternPreview key={previewPattern.id} pattern={previewPattern} />
             </Dialog.Content>
           ) : null}
         </Dialog.Portal>
       </Dialog.Root>
     </main>
-  );
-}
-
-function PreviewStage({ pattern }: { pattern: PatternPage["items"][number] }) {
-  const [failed, setFailed] = useState(false);
-  return (
-    <div className="preview-stage">
-      {pattern.previewAssetId && !failed ? (
-        <img
-          alt={`${pattern.name} 预览图`}
-          src={`/api/assets/${pattern.previewAssetId}/view`}
-          onError={() => setFailed(true)}
-        />
-      ) : (
-        <FormatPlaceholder
-          extension={pattern.extension}
-          previewStatus={pattern.previewStatus}
-        />
-      )}
-    </div>
   );
 }

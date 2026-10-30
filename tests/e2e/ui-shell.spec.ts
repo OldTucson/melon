@@ -287,9 +287,10 @@ test("workspace adapts without overflow and preserves navigation controls", asyn
   page,
 }) => {
   await page.setViewportSize(viewports[0]);
-  await page.goto("/login");
+  await page.goto("/login", { waitUntil: "networkidle" });
   await page.evaluate(() => localStorage.removeItem("melon:sidebar-mode"));
   await loginAs(page, E2E_USERS.designer);
+  await page.waitForLoadState("networkidle");
 
   const workspace = page.locator(".workspace");
   await expect(workspace).toHaveAttribute("data-sidebar", "expanded");
@@ -302,14 +303,14 @@ test("workspace adapts without overflow and preserves navigation controls", asyn
 
   await page.getByRole("button", { name: "折叠主导航" }).click();
   await expect(workspace).toHaveAttribute("data-sidebar", "collapsed");
-  await page.reload();
+  await page.reload({ waitUntil: "networkidle" });
   await expect(workspace).toHaveAttribute("data-sidebar", "collapsed");
   await page.getByRole("button", { name: "展开主导航" }).click();
   await expect(workspace).toHaveAttribute("data-sidebar", "expanded");
 
   for (const viewport of viewports) {
     await page.setViewportSize(viewport);
-    await page.goto("/library");
+    await page.goto("/library", { waitUntil: "networkidle" });
     await expect(page.getByRole("main")).toBeVisible();
     await expect(
       page.getByRole("region", { name: "全部图案" }),
@@ -326,7 +327,7 @@ test("workspace adapts without overflow and preserves navigation controls", asyn
   await expect(navigationTrigger).toBeFocused();
 
   await page.setViewportSize(viewports[0]);
-  await page.goto("/settings");
+  await page.goto("/settings", { waitUntil: "networkidle" });
   await page
     .locator(".theme-options label")
     .filter({ hasText: "夜间" })
@@ -340,7 +341,8 @@ test("workspace adapts without overflow and preserves navigation controls", asyn
   await expect(page.getByRole("radio", { name: "浅色" })).toBeChecked();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 
-  await page.goto("/library");
+  await page.waitForLoadState("networkidle");
+  await page.goto("/library", { waitUntil: "networkidle" });
   await page.locator("body").click({ position: { x: 1, y: 1 } });
   await page.keyboard.press("Tab");
   await expect(page.getByRole("button", { name: "折叠主导航" })).toBeFocused();
