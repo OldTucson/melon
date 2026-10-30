@@ -1,7 +1,7 @@
 "use client";
 
 /* eslint-disable @next/next/no-img-element -- browser session/share credentials belong on byte-route requests */
-import { useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { ExternalLink, X } from "lucide-react";
 import type { WebEvidenceAssetDto } from "@/features/inspiration-visuals/contracts";
@@ -22,6 +22,10 @@ export function EvidenceImage({
   eager?: boolean;
 }) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const imageRef = useCallback((image: HTMLImageElement | null) => {
+    // SSR images can fail before React attaches onError during hydration.
+    if (image?.complete && image.naturalWidth === 0) setFailedUrl(asset.imageUrl);
+  }, [asset.imageUrl]);
   return (
     <span
       className={styles.evidenceMedia}
@@ -31,6 +35,7 @@ export function EvidenceImage({
         <span className={styles.imageFallback}>图片暂时无法显示</span>
       ) : (
         <img
+          ref={imageRef}
           src={asset.imageUrl}
           alt={asset.altText}
           width={asset.width}

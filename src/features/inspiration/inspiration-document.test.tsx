@@ -18,6 +18,7 @@ import {
   webHeroAssetFixture,
   webProductAssetFixture,
 } from "@/features/inspiration-visuals/test-fixtures";
+import { EvidenceImage } from "./inspiration-evidence-dialog";
 import { InspirationDocument } from "./inspiration-document";
 import { InspirationVisualStatus } from "./inspiration-visual-status";
 import {
@@ -318,5 +319,24 @@ describe("continuous inspiration document", () => {
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "补充视觉素材" }));
     expect(refresh).toHaveBeenCalledOnce();
+  });
+});
+
+describe("image errors before hydration", () => {
+  it("recovers an already failed image at mount and tries a replacement URL", () => {
+    const complete = vi.spyOn(HTMLImageElement.prototype, "complete", "get").mockReturnValue(true);
+    const width = vi.spyOn(HTMLImageElement.prototype, "naturalWidth", "get").mockReturnValue(0);
+    try {
+      const { rerender } = render(<EvidenceImage asset={webHeroAssetFixture} eager />);
+      expect(screen.getByText("图片暂时无法显示")).toBeVisible();
+      expect(screen.queryByRole("img")).not.toBeInTheDocument();
+      complete.mockReturnValue(false);
+      rerender(<EvidenceImage asset={{ ...webHeroAssetFixture, imageUrl: "/api/inspiration-visual-assets/replacement" }} eager />);
+      expect(screen.queryByText("图片暂时无法显示")).not.toBeInTheDocument();
+      expect(screen.getByRole("img")).toHaveAttribute("src", "/api/inspiration-visual-assets/replacement");
+    } finally {
+      complete.mockRestore();
+      width.mockRestore();
+    }
   });
 });
