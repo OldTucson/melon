@@ -26,8 +26,7 @@ export function InspirationDocument(props: InspirationDocumentProps) {
   const visualCount = (document.hero ? 1 : 0)
     + document.marketSignals.reduce((count, { evidence }) => count + evidence.length, 0)
     + document.products.length
-    + document.directions.reduce((count, { libraryMatches, concepts }) => count + libraryMatches.length + concepts.length, 0)
-    + document.unassignedLibraryMatches.length;
+    + document.directions.reduce((count, { concepts }) => count + concepts.length, 0);
   return (
     <article className={styles.document} aria-label={title}>
       <header className={styles.documentHeader}>
@@ -72,7 +71,7 @@ export function InspirationDocument(props: InspirationDocumentProps) {
       <InspirationDirectionSection
         {...(props.mode === "public"
           ? { mode: "public" as const, directions: props.document.directions, sources: props.document.sources }
-          : { mode: "private" as const, directions: props.document.directions, unassignedLibraryMatches: props.document.unassignedLibraryMatches, sources: props.document.sources, loading: initialEnrichment })}
+          : { mode: "private" as const, directions: props.document.directions, sources: props.document.sources })}
       />
       <section className={styles.documentSection} aria-label="研究来源">
         <h3>研究来源</h3>

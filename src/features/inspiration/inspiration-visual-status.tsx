@@ -5,13 +5,10 @@ import type {
 } from "@/features/inspiration-visuals/contracts";
 import styles from "./inspiration.module.css";
 
-const warningLabels: Record<VisualWarning, string> = {
+const warningLabels = {
   INSPIRATION_WEB_VISUALS_DISABLED: "网络视觉参考暂未开启",
   INSPIRATION_WEB_VISUALS_UNAVAILABLE: "网络视觉参考暂时不可用",
-  INSPIRATION_LIBRARY_MATCH_DISABLED: "素材库色彩匹配暂未开启",
-  INSPIRATION_LIBRARY_MATCH_EMPTY: "素材库中暂未找到接近配色",
-  INSPIRATION_LIBRARY_MATCH_UNAVAILABLE: "素材库色彩匹配暂时不可用",
-};
+} satisfies Partial<Record<VisualWarning, string>>;
 
 export function InspirationVisualStatus({
   board,
@@ -28,18 +25,19 @@ export function InspirationVisualStatus({
 }) {
   const pending = refreshing || board?.refreshJob?.status === "pending";
   const failed = board?.refreshJob?.status === "failed";
-  const hasActive = !!board?.activeJob;
   const hasContent = !!(
     board?.webEvidence.length ||
-    board?.libraryMatches.length ||
     board?.concepts.length
   );
+  const hasActive = !!board?.activeJob && hasContent;
   const warnings = [
     ...new Set([
       ...(board?.activeJob?.warnings ?? []),
       ...(board?.refreshJob?.warnings ?? []),
     ]),
-  ];
+  ].filter((warning): warning is keyof typeof warningLabels =>
+    Object.hasOwn(warningLabels, warning),
+  );
   return (
     <aside
       className={styles.visualStatus}
@@ -63,7 +61,7 @@ export function InspirationVisualStatus({
         )}
         {!loading && !pending && !error && !failed && !hasContent && (
           <p className={styles.muted}>
-            暂无视觉素材，可补充网络参考与私有素材匹配。
+            暂无视觉素材，可补充网络参考。
           </p>
         )}
         {warnings.length > 0 && (

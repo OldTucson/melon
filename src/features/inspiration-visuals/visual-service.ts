@@ -22,7 +22,6 @@ import {
   type VisualJobErrorCode,
   type VisualWarning,
 } from "./contracts";
-import { matchLibraryPatterns } from "./library-matcher";
 import * as repository from "./visual-repository";
 import { getWebAgentProvider, type WebEvidenceProvider } from "./web-agent-provider";
 import { importWebEvidence, type WebEvidenceImportResult } from "./web-evidence-importer";
@@ -47,7 +46,6 @@ type CreateResearchVisualsInput = z.input<
 > & { signal?: AbortSignal };
 
 type VisualServiceDependencies = {
-  matchLibrary?: typeof matchLibraryPatterns;
   webProvider?: WebEvidenceProvider;
   importWeb?: typeof importWebEvidence;
   store?: VisualObjectStore;
@@ -138,7 +136,7 @@ async function assembleBoard(ownerId: string, analysisId: string) {
     : [];
 
   return parseInspirationStored(inspirationVisualBoardDtoSchema, {
-    refreshAvailable: getServerEnv().INSPIRATION_WEB_VISUALS_ENABLED || getServerEnv().IMAGE_SEARCH_ENABLED,
+    refreshAvailable: getServerEnv().INSPIRATION_WEB_VISUALS_ENABLED,
     activeJob: active ? toJobDto(active) : null,
     refreshJob: refresh ? toJobDto(refresh) : null,
     webEvidence: visible
@@ -161,25 +159,7 @@ async function assembleBoard(ownerId: string, analysisId: string) {
         width: asset.width,
         height: asset.height,
       })),
-    libraryMatches: visible
-      .filter(
-        (asset) =>
-          asset.kind === "library_match" &&
-          asset.patternId !== null &&
-          asset.imageAssetId !== null,
-      )
-      .map((asset) => ({
-        id: asset.id,
-        kind: "library_match" as const,
-        ordinal: asset.ordinal,
-        directionIndex: asset.directionIndex,
-        title: asset.title,
-        altText: asset.altText,
-        imageUrl: `/api/assets/${asset.imageAssetId!}/view`,
-        libraryHref: `/library?selected=${asset.patternId!}`,
-        patternId: asset.patternId!,
-        palette: asset.palette,
-      })),
+    libraryMatches: [],
     conceptJobs: [],
     concepts: [],
   });
@@ -356,30 +336,13 @@ export async function createResearchVisuals(
       ownerId: parsed.ownerId, analysisId: parsed.analysisId, jobId: job.id, candidates, signal,
     }, { store: objectStore() });
   };
-  const matchLibrary = async () => {
-    if (!env.IMAGE_SEARCH_ENABLED) {
-      return { assets: [], warnings: ["INSPIRATION_LIBRARY_MATCH_DISABLED" as const] };
-    }
-    if (signal.aborted) throw internalError();
-    return (dependencies.matchLibrary ?? matchLibraryPatterns)({ ownerId: parsed.ownerId, result, signal });
-  };
-  const [webResult, libraryResult] = await Promise.allSettled([
-    buildAndImportWebEvidence(),
-    matchLibrary(),
-  ]);
+  const [webResult] = await Promise.allSettled([buildAndImportWebEvidence()]);
   const web = webResult.status === "fulfilled"
     ? webResult.value
     : { assets: [], writtenKeys: [], warnings: ["INSPIRATION_WEB_VISUALS_UNAVAILABLE" as const] };
-  const library = libraryResult.status === "fulfilled"
-    ? libraryResult.value
-    : { assets: [], warnings: ["INSPIRATION_LIBRARY_MATCH_UNAVAILABLE" as const] };
-  const warnings = [...new Set<VisualWarning>([...web.warnings, ...library.warnings])];
-  const unavailable = warnings.includes("INSPIRATION_WEB_VISUALS_UNAVAILABLE") ||
-    warnings.includes("INSPIRATION_LIBRARY_MATCH_UNAVAILABLE");
-  const assets: repository.NewVisualAsset[] = [
-    ...web.assets.map((asset, ordinal) => ({ ...asset, ordinal })),
-    ...library.assets.map((asset, ordinal) => ({ ...asset, ordinal, id: randomUUID() })),
-  ];
+  const warnings = [...new Set<VisualWarning>(web.warnings)];
+  const unavailable = warnings.includes("INSPIRATION_WEB_VISUALS_UNAVAILABLE");
+  const assets: repository.NewVisualAsset[] = web.assets.map((asset, ordinal) => ({ ...asset, ordinal }));
 
   if (signal.aborted || assets.length === 0) {
     await deleteBestEffort(web.writtenKeys);

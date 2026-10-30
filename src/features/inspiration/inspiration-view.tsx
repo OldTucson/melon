@@ -451,7 +451,6 @@ export function InspirationView() {
         result: selected.result,
         sources: selected.sources ?? [],
         webEvidence: visuals.data?.webEvidence,
-        libraryMatches: visuals.data?.libraryMatches,
         concepts: visuals.data?.concepts,
       })
     : null;
@@ -577,7 +576,14 @@ export function InspirationView() {
                     title={selected.title}
                     prompt={selected.prompt}
                     completedAt={selected.completedAt}
-                    initialEnrichment={!visuals.data?.activeJob && (selectedVisualPending || visuals.data?.refreshJob?.status === "pending")}
+                    initialEnrichment={
+                      !(
+                        visuals.data?.webEvidence.length ||
+                        visuals.data?.concepts.length
+                      ) &&
+                      (selectedVisualPending ||
+                        visuals.data?.refreshJob?.status === "pending")
+                    }
                     headerActions={recordActions}
                   />
                 </>

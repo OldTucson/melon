@@ -54,7 +54,7 @@ describe("continuous inspiration document", () => {
     expect(loading.style.aspectRatio).toBe("4 / 3");
     expect(within(screen.getByRole("region", { name: "市场信号" })).getAllByRole("status")).toHaveLength(3);
     expect(within(screen.getByRole("region", { name: "商品参考" })).getAllByRole("status")).toHaveLength(4);
-    expect(within(screen.getByRole("region", { name: "设计灵感" })).getAllByRole("status")).toHaveLength(3);
+    expect(within(screen.getByRole("region", { name: "设计灵感" })).queryByRole("status")).not.toBeInTheDocument();
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "打开原始页面" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /查看商品/ })).not.toBeInTheDocument();
@@ -67,7 +67,7 @@ describe("continuous inspiration document", () => {
     const document = composeInspirationDocument({ result, sources: [source], webEvidence: [webHeroAssetFixture, webProductAssetFixture], libraryMatches: [libraryMatchAssetFixture], concepts: [generatedConceptAssetFixture] });
     render(<InspirationDocument document={document} title="研究" prompt="需求" completedAt="2026-10-28T02:00:00.000Z" />);
     expect(screen.getByText("2026-10-28")).toHaveAttribute("datetime", "2026-10-28T02:00:00.000Z");
-    expect(screen.getByText("1 个来源 · 4 张视觉素材")).toBeVisible();
+    expect(screen.getByText("1 个来源 · 3 张视觉素材")).toBeVisible();
   });
 
   it("keeps header, hero, conclusion, signals, all six dimensions, products, directions and sources in reading order", () => {
@@ -284,7 +284,7 @@ describe("continuous inspiration document", () => {
     ).toBeVisible();
   });
 
-  it("keeps private library matches within their direction or private supplement", () => {
+  it("omits legacy private library matches from the research document", () => {
     const document = composeInspirationDocument({
       result,
       sources: [source],
@@ -301,19 +301,10 @@ describe("continuous inspiration document", () => {
     render(
       <InspirationDocument document={document} title="研究" prompt="需求" />,
     );
-    const direction = screen.getByRole("region", { name: "柔和通勤" });
-    expect(
-      within(direction).getByRole("link", { name: /雨后花园/ }),
-    ).toHaveAttribute("href", libraryMatchAssetFixture.libraryHref);
-    expect(
-      within(screen.getByRole("region", { name: "私有素材补充" })).getByText(
-        "未分配素材",
-      ),
-    ).toBeVisible();
-    expect(screen.getAllByText("雨后花园")).toHaveLength(1);
-    expect(
-      screen.getByRole("region", { name: "研究来源" }),
-    ).not.toHaveTextContent("雨后花园");
+    expect(screen.queryByRole("link", { name: /雨后花园/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "私有素材补充" })).not.toBeInTheDocument();
+    expect(screen.queryByText("未分配素材")).not.toBeInTheDocument();
+    expect(screen.queryByText("素材库色彩匹配 · 仅自己可见")).not.toBeInTheDocument();
   });
 
   it("keeps text and a local refresh action with zero images", async () => {
@@ -344,8 +335,28 @@ describe("continuous inspiration document", () => {
       screen.getByText(result.inspirationPrompts[0]!.direction),
     ).toBeVisible();
     expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByText("暂无视觉素材，可补充网络参考。")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "补充视觉素材" }));
     expect(refresh).toHaveBeenCalledOnce();
+  });
+
+  it("ignores legacy library content and warnings in visual status", () => {
+    render(
+      <InspirationVisualStatus
+        board={{
+          ...visualBoardFixture,
+          activeJob: {
+            ...visualBoardFixture.activeJob!,
+            warnings: ["INSPIRATION_LIBRARY_MATCH_UNAVAILABLE"],
+          },
+          webEvidence: [],
+          libraryMatches: [libraryMatchAssetFixture],
+          concepts: [],
+        }}
+      />,
+    );
+    expect(screen.getByText("暂无视觉素材，可补充网络参考。")).toBeVisible();
+    expect(screen.queryByText("素材库色彩匹配暂时不可用")).not.toBeInTheDocument();
   });
 });
 
