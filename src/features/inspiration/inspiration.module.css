@@ -822,6 +822,8 @@
 
 .document {
   width: 100%;
+  max-width: 960px;
+  margin-inline: auto;
   min-width: 0;
   font-size: 15px;
   line-height: 1.8;
@@ -1061,6 +1063,12 @@
 .evidenceDialog .evidenceMedia {
   max-width: 540px;
   margin-inline: auto;
+}
+
+@media (max-width: 1280px) {
+  .productGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 900px) {
