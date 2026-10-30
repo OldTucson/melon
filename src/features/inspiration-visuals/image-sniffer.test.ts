@@ -15,6 +15,14 @@ function chunk(type: string, data: Buffer) {
   const head = Buffer.alloc(8); head.write(type); head.writeUInt32LE(data.length, 4);
   return Buffer.concat([head, data, Buffer.alloc(data.length % 2)]);
 }
+function pngChunk(type: string, data: Buffer) {
+  const bytes = Buffer.alloc(12 + data.length);
+  bytes.writeUInt32BE(data.length, 0);
+  bytes.write(type, 4, 4, "latin1");
+  data.copy(bytes, 8);
+  bytes.writeUInt32BE(crc32(bytes.subarray(4, bytes.length - 4)), bytes.length - 4);
+  return bytes;
+}
 function webp(kind: "VP8 " | "VP8L" | "VP8X") {
   const payload = kind === "VP8L" ? Buffer.from([0x2f,0,0,0,0,1]) : Buffer.from([0x10,0,0,0x9d,1,0x2a,1,0,1,0,1]);
   const chunks = kind === "VP8X" ? [chunk("VP8X", Buffer.alloc(10)), chunk("VP8 ", payload)] : [chunk(kind, payload)];
@@ -78,5 +86,59 @@ describe("structural image boundary (not a codec decoder)", () => {
   it("rejects WebP feature flags without matching chunks", () => {
     const bad = webp("VP8X"); bad[20] = 0x20;
     expect(() => sniffImage(bad, "image/webp")).toThrow();
+  });
+  it.each([
+    { name: "GIF87a", bytes: Buffer.concat([Buffer.from("GIF87a"), gif.subarray(6)]), mime: "image/gif", start: 0, length: 6 },
+    { name: "GIF89a", bytes: gif, mime: "image/gif", start: 0, length: 6 },
+    { name: "RIFF", bytes: webp("VP8 "), mime: "image/webp", start: 0, length: 4 },
+    { name: "WEBP", bytes: webp("VP8 "), mime: "image/webp", start: 8, length: 4 },
+  ])("rejects high-bit mutations of every $name signature byte", ({ bytes, mime, start, length }) => {
+    for (let index = start; index < start + length; index++) {
+      const mutated = Buffer.from(bytes);
+      mutated[index] = mutated[index]! | 0x80;
+      expect(() => sniffImage(mutated, mime)).toThrow();
+    }
+  });
+  it.each(["VP8 ", "VP8L", "VP8X"] as const)("rejects high-bit mutations of %s chunk identifiers", (kind) => {
+    for (let index = 12; index < 16; index++) {
+      const mutated = webp(kind);
+      mutated[index] = mutated[index]! | 0x80;
+      expect(() => sniffImage(mutated, "image/webp")).toThrow();
+    }
+  });
+  it.each([
+    { name: "IHDR", offset: 8 },
+    { name: "IDAT", offset: 33 },
+    { name: "IEND", offset: 56 },
+  ])("rejects high-bit PNG $name chunk bytes even with matching CRC", ({ offset }) => {
+    for (let index = offset + 4; index < offset + 8; index++) {
+      const mutated = Buffer.from(png);
+      mutated[index] = mutated[index]! | 0x80;
+      const crcOffset = offset + 8 + mutated.readUInt32BE(offset);
+      mutated.writeUInt32BE(crc32(mutated.subarray(offset + 4, crcOffset)), crcOffset);
+      expect(() => sniffImage(mutated, "image/png")).toThrow();
+    }
+  });
+  it("rejects high-bit PNG ancillary chunk identifiers with matching CRC", () => {
+    const textChunk = pngChunk("tEXt", Buffer.from("name\0value"));
+    for (let index = 4; index < 8; index++) {
+      const mutated = Buffer.from(textChunk);
+      mutated[index] = mutated[index]! | 0x80;
+      mutated.writeUInt32BE(crc32(mutated.subarray(4, mutated.length - 4)), mutated.length - 4);
+      expect(() => sniffImage(Buffer.concat([png.subarray(0, 33), mutated, png.subarray(33)]), "image/png")).toThrow();
+    }
+  });
+  it.each([
+    { name: "ancillary chunk", interrupt: pngChunk("tEXt", Buffer.from("name\0value")) },
+    { name: "palette chunk", interrupt: pngChunk("PLTE", Buffer.from([0, 0, 0])) },
+  ])("rejects an empty PNG IDAT followed by a $name before more IDAT", ({ interrupt }) => {
+    const emptyData = pngChunk("IDAT", Buffer.alloc(0));
+    const malformed = Buffer.concat([png.subarray(0, 33), emptyData, interrupt, png.subarray(33)]);
+    expect(() => sniffImage(malformed, "image/png")).toThrow();
+  });
+  it("accepts contiguous empty PNG IDAT chunks around nonempty image data", () => {
+    const emptyData = pngChunk("IDAT", Buffer.alloc(0));
+    const contiguous = Buffer.concat([png.subarray(0, 33), emptyData, png.subarray(33, 56), emptyData, png.subarray(56)]);
+    expect(sniffImage(contiguous, "image/png")).toMatchObject({ width: 1, height: 1 });
   });
 });

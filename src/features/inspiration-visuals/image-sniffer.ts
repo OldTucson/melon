@@ -17,23 +17,32 @@ function dimensions(width: number, height: number): Dimensions {
   check(width > 0 && height > 0 && width <= 32768 && height <= 32768 && width * height <= 40_000_000);
   return { width, height };
 }
+function asciiToken(bytes: Buffer, start: number, end: number): string {
+  check(end <= bytes.length);
+  const token = bytes.subarray(start, end);
+  check(token.every((byte) => byte <= 0x7f));
+  // latin1 preserves bytes; Node's "ascii" decoder silently clears high bits.
+  return token.toString("latin1");
+}
 
 function pngSize(bytes: Buffer): Dimensions {
   check(bytes.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex")));
   let offset = 8;
   let size: Dimensions | undefined;
-  let hasData = false;
+  let seenData = false;
+  let hasPayload = false;
   let dataEnded = false;
   let palette = false;
   let indexed = false;
   while (offset + 12 <= bytes.length) {
     const length = bytes.readUInt32BE(offset);
-    const type = bytes.toString("ascii", offset + 4, offset + 8);
+    const type = asciiToken(bytes, offset + 4, offset + 8);
     const start = offset + 8;
     const end = start + length;
     check(end + 4 <= bytes.length && /^[A-Za-z]{4}$/.test(type));
     check(crc32(bytes.subarray(offset + 4, end)) === bytes.readUInt32BE(end));
     check(size || type === "IHDR");
+    if (seenData && type !== "IDAT") dataEnded = true;
     if (type === "IHDR") {
       check(!size && length === 13);
       size = dimensions(bytes.readUInt32BE(start), bytes.readUInt32BE(start + 4));
@@ -43,18 +52,18 @@ function pngSize(bytes: Buffer): Dimensions {
       check(depths[color]?.includes(depth) && bytes[start + 10] === 0 && bytes[start + 11] === 0 && bytes[start + 12]! <= 1);
       indexed = color === 3;
     } else if (type === "PLTE") {
-      check(!palette && !hasData && length > 0 && length <= 768 && length % 3 === 0);
+      check(!palette && !seenData && length > 0 && length <= 768 && length % 3 === 0);
       palette = true;
     } else if (type === "IDAT") {
       check(!dataEnded && (!indexed || palette));
-      if (length) hasData = true;
+      seenData = true;
+      if (length) hasPayload = true;
     } else if (type === "IEND") {
-      check(length === 0 && hasData && end + 4 === bytes.length && size);
+      check(length === 0 && hasPayload && end + 4 === bytes.length && size);
       return size;
     } else {
       // Unknown critical chunks and animation are not an accepted single image.
       check(type[0] === type[0]!.toLowerCase() && !["acTL", "fcTL", "fdAT"].includes(type));
-      if (hasData) dataEnded = true;
     }
     offset = end + 4;
   }
@@ -110,7 +119,7 @@ function jpegSize(bytes: Buffer): Dimensions {
 }
 
 function gifSize(bytes: Buffer): Dimensions {
-  check(bytes.length >= 13 && /^(GIF87a|GIF89a)$/.test(bytes.toString("ascii", 0, 6)));
+  check(bytes.length >= 13 && /^(GIF87a|GIF89a)$/.test(asciiToken(bytes, 0, 6)));
   const size = dimensions(bytes.readUInt16LE(6), bytes.readUInt16LE(8));
   let offset = 13;
   if (bytes[10]! & 0x80) offset += 3 * (2 ** ((bytes[10]! & 7) + 1));
@@ -160,7 +169,7 @@ function gifSize(bytes: Buffer): Dimensions {
 }
 
 function webpSize(bytes: Buffer): Dimensions {
-  check(bytes.length >= 20 && bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP");
+  check(bytes.length >= 20 && asciiToken(bytes, 0, 4) === "RIFF" && asciiToken(bytes, 8, 12) === "WEBP");
   check(bytes.readUInt32LE(4) + 8 === bytes.length);
   let offset = 12;
   let canvas: Dimensions | undefined;
@@ -169,7 +178,7 @@ function webpSize(bytes: Buffer): Dimensions {
   let losslessAlpha = false;
   const seen = new Set<string>();
   while (offset + 8 <= bytes.length) {
-    const type = bytes.toString("ascii", offset, offset + 4);
+    const type = asciiToken(bytes, offset, offset + 4);
     const length = bytes.readUInt32LE(offset + 4);
     const start = offset + 8, end = start + length;
     check(end + length % 2 <= bytes.length && !seen.has(type));
