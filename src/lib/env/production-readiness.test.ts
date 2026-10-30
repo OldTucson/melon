@@ -26,6 +26,39 @@ const withEnv = (patch: Partial<ServerEnv>): ServerEnv => ({
 });
 
 describe("validateProductionReadiness", () => {
+  it("accepts released web visuals with exactly eight images independently of library search", () => {
+    expect(validateProductionReadiness(withEnv({
+      INSPIRATION_WEB_VISUALS_ENABLED: true,
+      DASHSCOPE_WEB_SEARCH_AGENT_VERSION: "release",
+      INSPIRATION_VISUAL_MAX_IMAGES: 8,
+      IMAGE_SEARCH_ENABLED: false,
+    }))).toEqual([]);
+  });
+
+  it("requires a released Agent for production web visuals", () => {
+    expect(validateProductionReadiness(withEnv({
+      INSPIRATION_WEB_VISUALS_ENABLED: true,
+      DASHSCOPE_WEB_SEARCH_AGENT_VERSION: "beta",
+      INSPIRATION_VISUAL_MAX_IMAGES: 8,
+    }))).toContain("INSPIRATION_WEB_VISUALS_RELEASE_REQUIRED");
+  });
+
+  it.each([1, 2, 3, 4, 5, 6, 7])("rejects production visual cap %s", (count) => {
+    expect(validateProductionReadiness(withEnv({
+      INSPIRATION_WEB_VISUALS_ENABLED: true,
+      DASHSCOPE_WEB_SEARCH_AGENT_VERSION: "release",
+      INSPIRATION_VISUAL_MAX_IMAGES: count,
+    }))).toContain("INSPIRATION_VISUAL_MAX_IMAGES_MUST_BE_8");
+  });
+
+  it("does not require web-visual production settings while disabled", () => {
+    expect(validateProductionReadiness(withEnv({
+      INSPIRATION_WEB_VISUALS_ENABLED: false,
+      DASHSCOPE_WEB_SEARCH_AGENT_VERSION: "beta",
+      INSPIRATION_VISUAL_MAX_IMAGES: 1,
+    }))).toEqual([]);
+  });
+
   it("accepts a complete production environment", () => {
     expect(validateProductionReadiness(validProductionEnv)).toEqual([]);
   });

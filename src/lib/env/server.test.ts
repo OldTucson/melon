@@ -34,6 +34,106 @@ const enabledInspirationEnv = {
 };
 
 describe("parseServerEnv", () => {
+  const enabledWebVisualsEnv = {
+    ...enabledInspirationEnv,
+    INSPIRATION_WEB_VISUALS_ENABLED: "true",
+    DASHSCOPE_WEB_SEARCH_AGENT_ID: "aid-demo_123-abc",
+    DASHSCOPE_WEB_SEARCH_AGENT_VERSION: "release",
+  };
+
+  it("accepts disabled web-visual defaults with blank Agent settings", () => {
+    expect(parseServerEnv({
+      ...validEnv,
+      INSPIRATION_WEB_VISUALS_ENABLED: "false",
+      DASHSCOPE_WEB_SEARCH_AGENT_ID: "   ",
+      DASHSCOPE_WEB_SEARCH_AGENT_VERSION: "",
+    })).toMatchObject({
+      INSPIRATION_WEB_VISUALS_ENABLED: false,
+      DASHSCOPE_WEB_SEARCH_AGENT_ID: undefined,
+      DASHSCOPE_WEB_SEARCH_AGENT_VERSION: undefined,
+      INSPIRATION_VISUAL_MAX_IMAGES: 8,
+    });
+  });
+
+  it.each([
+    ["INSPIRATION_ENABLED", "false"],
+    ["DASHSCOPE_API_KEY", ""],
+    ["DASHSCOPE_WEB_SEARCH_AGENT_ID", ""],
+    ["DASHSCOPE_WEB_SEARCH_AGENT_VERSION", ""],
+  ])("requires %s when web visuals are enabled", (field, value) => {
+    expect(() => parseServerEnv({
+      ...validEnv,
+      ...enabledWebVisualsEnv,
+      [field]: value,
+    })).toThrow(new RegExp(field));
+  });
+
+  it.each(["aid-ab", "wrong-abc", "aid-abc!", `aid-${"a".repeat(129)}`])(
+    "rejects invalid web-search Agent ID %s", (id) => {
+      expect(() => parseServerEnv({
+        ...validEnv,
+        ...enabledWebVisualsEnv,
+        DASHSCOPE_WEB_SEARCH_AGENT_ID: id,
+      })).toThrow(/DASHSCOPE_WEB_SEARCH_AGENT_ID/);
+    },
+  );
+
+  it.each(["aid-abc", `aid-${"a".repeat(128)}`, "  aid-Abc_123-xyz  "])(
+    "accepts and trims valid web-search Agent ID %s", (id) => {
+      expect(parseServerEnv({
+        ...validEnv,
+        ...enabledWebVisualsEnv,
+        DASHSCOPE_WEB_SEARCH_AGENT_ID: id,
+      }).DASHSCOPE_WEB_SEARCH_AGENT_ID).toBe(id.trim());
+    },
+  );
+
+  it.each(["beta", "release"])("accepts web-search Agent version %s", (version) => {
+    expect(parseServerEnv({
+      ...validEnv,
+      ...enabledWebVisualsEnv,
+      DASHSCOPE_WEB_SEARCH_AGENT_VERSION: version,
+    })).toMatchObject({
+      INSPIRATION_WEB_VISUALS_ENABLED: true,
+      IMAGE_SEARCH_ENABLED: false,
+      DASHSCOPE_WEB_SEARCH_AGENT_VERSION: version,
+    });
+  });
+
+  it("rejects unsupported web-search Agent versions", () => {
+    expect(() => parseServerEnv({
+      ...validEnv,
+      ...enabledWebVisualsEnv,
+      DASHSCOPE_WEB_SEARCH_AGENT_VERSION: "latest",
+    })).toThrow(/DASHSCOPE_WEB_SEARCH_AGENT_VERSION/);
+  });
+
+  it("requires a literal boolean web-visual flag", () => {
+    expect(() => parseServerEnv({
+      ...validEnv,
+      INSPIRATION_WEB_VISUALS_ENABLED: "1",
+    })).toThrow(/INSPIRATION_WEB_VISUALS_ENABLED/);
+  });
+
+  it.each(["development", "test"])("accepts image counts 1 through 8 in %s", (NODE_ENV) => {
+    for (const count of [1, 2, 3, 4, 5, 6, 7, 8]) {
+      expect(parseServerEnv({
+        ...validEnv,
+        ...enabledWebVisualsEnv,
+        NODE_ENV,
+        INSPIRATION_VISUAL_MAX_IMAGES: String(count),
+      }).INSPIRATION_VISUAL_MAX_IMAGES).toBe(count);
+    }
+  });
+
+  it.each(["0", "9", "1.5", "NaN"])("rejects invalid visual image cap %s", (count) => {
+    expect(() => parseServerEnv({
+      ...validEnv,
+      ...enabledWebVisualsEnv,
+      INSPIRATION_VISUAL_MAX_IMAGES: count,
+    })).toThrow(/INSPIRATION_VISUAL_MAX_IMAGES/);
+  });
+
   it("requires complete Qwen configuration only when inspiration is enabled", () => {
     expect(parseServerEnv(validEnv).INSPIRATION_ENABLED).toBe(false);
     expect(() =>

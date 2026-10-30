@@ -115,6 +115,13 @@ const serverEnvSchema = z
     ALIBABA_CLOUD_ACCESS_KEY_ID: optionalNonBlankString,
     ALIBABA_CLOUD_ACCESS_KEY_SECRET: optionalNonBlankString,
     INSPIRATION_ENABLED: optionalBoolean,
+    INSPIRATION_WEB_VISUALS_ENABLED: optionalBoolean,
+    DASHSCOPE_WEB_SEARCH_AGENT_ID: optionalTrimmedNonBlankString,
+    DASHSCOPE_WEB_SEARCH_AGENT_VERSION: z.preprocess(
+      blankToUndefined,
+      z.enum(["beta", "release"]).optional(),
+    ),
+    INSPIRATION_VISUAL_MAX_IMAGES: z.coerce.number().int().min(1).max(8).default(8),
     DASHSCOPE_API_KEY: optionalNonBlankString,
     DASHSCOPE_WORKSPACE_ID: optionalNonBlankString,
     DASHSCOPE_OPENAI_BASE_URL: optionalNonBlankString,
@@ -212,6 +219,42 @@ const serverEnvSchema = z
           code: "custom",
           path: ["DASHSCOPE_NATIVE_BASE_URL"],
           message: "OpenAI and native provider URL hostnames must match",
+        });
+      }
+    }
+
+    if (value.INSPIRATION_WEB_VISUALS_ENABLED) {
+      if (!value.INSPIRATION_ENABLED) {
+        context.addIssue({
+          code: "custom",
+          path: ["INSPIRATION_ENABLED"],
+          message: "INSPIRATION_ENABLED must be true when web visuals are enabled",
+        });
+      }
+
+      const required = [
+        "DASHSCOPE_API_KEY",
+        "DASHSCOPE_WEB_SEARCH_AGENT_ID",
+        "DASHSCOPE_WEB_SEARCH_AGENT_VERSION",
+      ] as const;
+      for (const key of required) {
+        if (!value[key]) {
+          context.addIssue({
+            code: "custom",
+            path: [key],
+            message: `${key} is required when web visuals are enabled`,
+          });
+        }
+      }
+
+      if (
+        value.DASHSCOPE_WEB_SEARCH_AGENT_ID &&
+        !/^aid-[A-Za-z0-9_-]{3,128}$/.test(value.DASHSCOPE_WEB_SEARCH_AGENT_ID)
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["DASHSCOPE_WEB_SEARCH_AGENT_ID"],
+          message: "Web-search Agent ID must match aid- followed by 3 to 128 letters, digits, underscores, or hyphens",
         });
       }
     }

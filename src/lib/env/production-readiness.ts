@@ -13,7 +13,9 @@ export type ProductionReadinessError =
   | "SITE_CONTACT_REQUIRED"
   | "LEGAL_EFFECTIVE_DATE_REQUIRED"
   | "PUBLIC_SECURITY_FILING_INCOMPLETE"
-  | "IMAGE_SEARCH_RELEASE_NOT_APPROVED";
+  | "IMAGE_SEARCH_RELEASE_NOT_APPROVED"
+  | "INSPIRATION_WEB_VISUALS_RELEASE_REQUIRED"
+  | "INSPIRATION_VISUAL_MAX_IMAGES_MUST_BE_8";
 
 const placeholderPattern =
   /(?:change[-_ ]?me|example|placeholder|replace[-_ ]?with|sample|test[-_ ]?only)/i;
@@ -109,6 +111,15 @@ export function validateProductionReadiness(
 
   if (env.IMAGE_SEARCH_ENABLED && !env.IMAGE_SEARCH_RELEASE_APPROVED) {
     errors.push("IMAGE_SEARCH_RELEASE_NOT_APPROVED");
+  }
+
+  if (env.INSPIRATION_WEB_VISUALS_ENABLED) {
+    if (env.DASHSCOPE_WEB_SEARCH_AGENT_VERSION !== "release") {
+      errors.push("INSPIRATION_WEB_VISUALS_RELEASE_REQUIRED");
+    }
+    if (env.INSPIRATION_VISUAL_MAX_IMAGES !== 8) {
+      errors.push("INSPIRATION_VISUAL_MAX_IMAGES_MUST_BE_8");
+    }
   }
 
   return errors;
