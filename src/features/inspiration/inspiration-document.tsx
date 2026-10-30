@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { InspirationDocumentDto } from "@/features/inspiration-visuals/document-contracts";
+import type { InspirationDocumentDto, PublicInspirationDocumentDto } from "@/features/inspiration-visuals/document-contracts";
 import { InspirationHeroEvidence } from "./inspiration-hero-evidence";
 import {
   DocumentSourceLinks,
@@ -10,28 +10,40 @@ import { InspirationProductReferences } from "./inspiration-product-references";
 import { InspirationDirectionSection } from "./inspiration-direction-section";
 import styles from "./inspiration.module.css";
 
-export function InspirationDocument({
-  document,
-  title,
-  prompt,
-  headerActions,
-}: {
-  document: InspirationDocumentDto;
+type InspirationDocumentProps = {
   title: string;
   prompt: string;
-  headerActions?: ReactNode;
-}) {
+} & (
+  | { mode?: "private"; document: InspirationDocumentDto; headerActions?: ReactNode }
+  | { mode: "public"; document: PublicInspirationDocumentDto; completedAt?: string; headerActions?: never }
+);
+
+export function InspirationDocument(props: InspirationDocumentProps) {
+  const { document, title, prompt } = props;
+  const Title = props.mode === "public" ? "h1" : "h2";
   return (
     <article className={styles.document} aria-label={title}>
       <header className={styles.documentHeader}>
         <div className={styles.detailHeader}>
           <div>
             <p className={styles.sectionKicker}>RESEARCH REPORT</p>
-            <h2 className={styles.recordTitle}>{title}</h2>
+            <Title className={styles.recordTitle}>{title}</Title>
           </div>
-          {headerActions}
+          {props.mode !== "public" && props.headerActions}
         </div>
         <p className={styles.originalPrompt}>{prompt}</p>
+        {props.mode === "public" && (
+          <>
+            {props.completedAt && (
+              <p className={styles.muted}>
+                完成于 <time dateTime={props.completedAt}>{props.completedAt.slice(0, 10)}</time>
+              </p>
+            )}
+            <p className={styles.originalPrompt}>
+              基于公开网络热销信号，不代表电商平台官方销量
+            </p>
+          </>
+        )}
       </header>
       <InspirationHeroEvidence asset={document.hero} />
       <section className={styles.documentIntro} aria-label="研究结论">
@@ -49,9 +61,9 @@ export function InspirationDocument({
       />
       <InspirationProductReferences products={document.products} />
       <InspirationDirectionSection
-        directions={document.directions}
-        unassignedLibraryMatches={document.unassignedLibraryMatches}
-        sources={document.sources}
+        {...(props.mode === "public"
+          ? { mode: "public" as const, directions: props.document.directions, sources: props.document.sources }
+          : { mode: "private" as const, directions: props.document.directions, unassignedLibraryMatches: props.document.unassignedLibraryMatches, sources: props.document.sources })}
       />
       <section className={styles.documentSection} aria-label="研究来源">
         <h3>研究来源</h3>

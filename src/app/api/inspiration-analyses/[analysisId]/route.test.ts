@@ -7,16 +7,16 @@ const mocks = vi.hoisted(() => ({
   requireApiUser: vi.fn(),
   getInspirationAnalysis: vi.fn(),
   renameInspirationAnalysis: vi.fn(),
-  deleteInspirationAnalysis: vi.fn(),
+  deleteInspirationWithVisualAssets: vi.fn(),
   retryInspirationAnalysis: vi.fn(),
 }));
 vi.mock("@/features/auth/api-session", () => ({ requireApiUser: mocks.requireApiUser }));
 vi.mock("@/features/inspiration/analysis-service", () => ({
   getInspirationAnalysis: mocks.getInspirationAnalysis,
   renameInspirationAnalysis: mocks.renameInspirationAnalysis,
-  deleteInspirationAnalysis: mocks.deleteInspirationAnalysis,
   retryInspirationAnalysis: mocks.retryInspirationAnalysis,
 }));
+vi.mock("@/features/inspiration-visuals/visual-service", () => ({ deleteInspirationWithVisualAssets: mocks.deleteInspirationWithVisualAssets }));
 vi.mock("@/lib/env/server", () => ({ getServerEnv: () => ({ APP_ORIGIN: "https://app.example.test" }) }));
 
 const origin = "https://app.example.test";
@@ -30,7 +30,7 @@ const request = (method: string, body?: string) => new Request(`http://internal-
 const actions = [
   { name: "detail", method: "GET", service: mocks.getInspirationAnalysis, load: async () => (await import("./route")).GET, body: undefined },
   { name: "rename", method: "PATCH", service: mocks.renameInspirationAnalysis, load: async () => (await import("./route")).PATCH, body: JSON.stringify({ title: "  新标题 e\u0301  ", version: 4 }) },
-  { name: "delete", method: "DELETE", service: mocks.deleteInspirationAnalysis, load: async () => (await import("./route")).DELETE, body: undefined },
+  { name: "delete", method: "DELETE", service: mocks.deleteInspirationWithVisualAssets, load: async () => (await import("./route")).DELETE, body: undefined },
   { name: "retry", method: "POST", service: mocks.retryInspirationAnalysis, load: async () => (await import("./retry/route")).POST, body: undefined },
 ];
 
@@ -40,7 +40,7 @@ describe("inspiration detail and retry Route Handlers", () => {
     mocks.requireApiUser.mockResolvedValue({ id: ownerId });
     mocks.getInspirationAnalysis.mockResolvedValue(inspirationDetailFixture);
     mocks.renameInspirationAnalysis.mockResolvedValue({ ...inspirationDetailFixture, title: "新标题 é", version: 5 });
-    mocks.deleteInspirationAnalysis.mockResolvedValue({ id: analysisId, deleted: true });
+    mocks.deleteInspirationWithVisualAssets.mockResolvedValue({ id: analysisId, deleted: true });
     mocks.retryInspirationAnalysis.mockResolvedValue(inspirationDetailFixture);
   });
 

@@ -2,10 +2,16 @@ import { randomUUID } from "node:crypto";
 import { eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeDatabase, db } from "@/lib/db/client";
-import { inspirationAnalyses, users } from "@/lib/db/schema";
+import { inspirationAnalyses, inspirationVisualAssets, inspirationVisualJobs, patterns, assets as storageAssets, users } from "@/lib/db/schema";
 import { AppError } from "@/lib/http/app-error";
 import { resetDatabase } from "@/test/database";
 import * as repository from "./analysis-repository";
+import * as visualRepository from "@/features/inspiration-visuals/visual-repository";
+import * as visualService from "@/features/inspiration-visuals/visual-service";
+import * as visualObjectStore from "@/features/inspiration-visuals/visual-object-store";
+import * as environment from "@/lib/env/server";
+import { authorizeOwnedVisualResource, authorizeSharedVisualResource } from "@/features/inspiration-visuals/visual-resource-service";
+import { researchVisualObjectKey } from "@/features/inspiration-visuals/visual-object-keys";
 import { createInspirationAnalysis, retryInspirationAnalysis, listInspirationAnalyses, getInspirationAnalysis, renameInspirationAnalysis, deleteInspirationAnalysis } from "./analysis-service";
 import { decodeInspirationCursor, encodeInspirationCursor } from "./inspiration-cursor";
 import type { InspirationProvider, InspirationProviderOutput } from "./qwen-provider";
@@ -282,4 +288,138 @@ describe("inspiration analysis lifecycle", () => {
     await db.update(inspirationAnalyses).set({ result: { private: "secret" } }).where(eq(inspirationAnalyses.id, row.id));
     await expect(getInspirationAnalysis({ ownerId, analysisId: row.id })).rejects.toMatchObject({ code: "INTERNAL_ERROR", status: 500 });
   });
+  async function visualDeletionFixture() {
+    const analysis = await create();
+    const patternId = randomUUID(), storageAssetId = randomUUID();
+    const libraryKey = `users/${ownerId}/patterns/${patternId}/thumbnail.png`;
+    await db.insert(patterns).values({ id: patternId, ownerId, name: "Saved inspiration", originalFilename: "saved.png", extension: "png", sizeBytes: 1024n, status: "ready", previewStatus: "ready" });
+    await db.insert(storageAssets).values({ id: storageAssetId, ownerId, patternId, role: "thumbnail", objectKey: libraryKey, originalFilename: "saved.png", detectedMimeType: "image/png", sizeBytes: 1024n, width: 640, height: 480 });
+    const objects = new Set<string>([libraryKey]);
+    const researchKeys: string[] = [];
+    for (const state of ["old", "active", "pending", "failed", "concept"] as const) {
+      const jobId = randomUUID(), assetId = randomUUID();
+      const concept = state === "concept";
+      const status = state === "pending" || state === "failed" ? state : "completed";
+      await db.insert(inspirationVisualJobs).values({ id: jobId, ownerId, analysisId: analysis.id, operationId: randomUUID(), kind: concept ? "concept_image" : "research_visuals", directionIndex: concept ? 0 : null, status, completedAt: status === "pending" ? null : new Date(), errorCode: status === "failed" ? "INSPIRATION_VISUALS_INTERRUPTED" : null });
+      const key = researchVisualObjectKey({ ownerId, analysisId: analysis.id, jobId, assetId, extension: "png" });
+      objects.add(key);
+      if (state === "old" || state === "active") researchKeys.push(key);
+      await db.insert(inspirationVisualAssets).values({ id: assetId, ownerId, analysisId: analysis.id, jobId, kind: concept ? "generated_concept" : "web_evidence", ordinal: 0, title: state, altText: state, objectKey: key, contentType: "image/png", width: 640, height: 480,
+        ...(concept ? { directionIndex: 0, savedPatternId: patternId, saveOperationId: randomUUID() } : { documentRole: "evidence", sourceIndexes: [1], sourcePageUrl: "https://example.test/evidence", sourceSiteName: "Source", sourceQuery: "query" }),
+      });
+      if (state === "active") await db.insert(inspirationVisualAssets).values({ id: randomUUID(), ownerId, analysisId: analysis.id, jobId, kind: "library_match", ordinal: 0, title: "Private library", altText: "Private library", patternId });
+    }
+    const deletions: string[][] = [];
+    const observed: { analyses: number; jobs: number; visuals: number }[] = [];
+    const store: visualObjectStore.VisualObjectStore = {
+      async put() { throw new Error("Unexpected object write"); },
+      async get() { throw new Error("Unexpected object read"); },
+      async delete(keys) {
+        observed.push({ analyses: (await db.select().from(inspirationAnalyses)).length, jobs: (await db.select().from(inspirationVisualJobs)).length, visuals: (await db.select().from(inspirationVisualAssets)).length });
+        deletions.push([...keys]); keys.forEach((key) => objects.delete(key));
+      },
+    };
+    return { analysisId: analysis.id, patternId, storageAssetId, libraryKey, objects, researchKeys, deletions, observed, store };
+  }
+
+  it("deletes all committed research web objects after the analysis and visual rows cascade, preserving saved library data", async () => {
+    const fixture = await visualDeletionFixture();
+    const result = await visualService.deleteInspirationWithVisualAssets({ ownerId, analysisId: fixture.analysisId }, { store: fixture.store });
+    expect(result).toEqual({ id: fixture.analysisId, deleted: true });
+    expect(fixture.deletions).toHaveLength(1);
+    expect(fixture.deletions.flat().sort()).toEqual(fixture.researchKeys.sort());
+    expect(fixture.observed).toEqual([{ analyses: 0, jobs: 0, visuals: 0 }]);
+    expect(fixture.objects.size).toBe(4); // Pending, failed, concept and saved-library objects are not research cleanup targets.
+    expect(fixture.objects.has(fixture.libraryKey)).toBe(true);
+    expect(await db.select().from(patterns)).toMatchObject([{ id: fixture.patternId, status: "ready" }]);
+    expect(await db.select().from(storageAssets)).toMatchObject([{ id: fixture.storageAssetId, objectKey: fixture.libraryKey }]);
+  });
+
+  it.each(["delete", "store configuration", "environment read"] as const)("preserves successful database deletion when %s cleanup fails", async (failure) => {
+    const fixture = await visualDeletionFixture();
+    if (failure === "delete") fixture.store.delete = async () => { throw new Error("private storage failure"); };
+    else if (failure === "store configuration") vi.spyOn(visualObjectStore, "createVisualObjectStore").mockImplementation(() => { throw new Error("private configuration"); });
+    else vi.spyOn(environment, "getServerEnv").mockImplementation(() => { throw new Error("private environment"); });
+    const result = await visualService.deleteInspirationWithVisualAssets({ ownerId, analysisId: fixture.analysisId }, failure === "delete" ? { store: fixture.store } : {});
+    expect(result).toEqual({ id: fixture.analysisId, deleted: true });
+    expect(await db.select().from(inspirationAnalyses)).toEqual([]);
+    expect(await db.select().from(inspirationVisualJobs)).toEqual([]);
+    expect(await db.select().from(inspirationVisualAssets)).toEqual([]);
+    expect(fixture.objects.size).toBe(6);
+  });
+
+  it("returns indistinguishable foreign and missing deletion errors without deleting objects or rows", async () => {
+    const fixture = await visualDeletionFixture();
+    const errors = [];
+    for (const analysisId of [fixture.analysisId, randomUUID()]) {
+      const error = await visualService.deleteInspirationWithVisualAssets({ ownerId: otherOwnerId, analysisId }, { store: fixture.store }).catch((caught: unknown) => caught);
+      expect(error).toMatchObject({ code: "INSPIRATION_NOT_FOUND", status: 404, message: "Inspiration analysis not found" });
+      errors.push(JSON.stringify(error));
+    }
+    expect(errors[0]).toEqual(errors[1]);
+    expect(fixture.deletions).toEqual([]);
+    expect(fixture.objects.size).toBe(6);
+    expect(await db.select().from(inspirationAnalyses)).toHaveLength(1);
+    expect(await db.select().from(inspirationVisualAssets)).toHaveLength(6);
+  });
+
+  it("lets only the successful owned deletion clean captured keys in a concurrent-delete race", async () => {
+    const fixture = await visualDeletionFixture();
+    const snapshot = visualRepository.listObjectKeysForAnalysis;
+    const bothCaptured = deferred(); let reads = 0;
+    vi.spyOn(visualRepository, "listObjectKeysForAnalysis").mockImplementation(async (...args) => {
+      const keys = await snapshot(...args);
+      if (++reads === 2) bothCaptured.resolve();
+      await bothCaptured.promise;
+      return keys;
+    });
+    const outcomes = await Promise.all([1, 2].map(() => visualService.deleteInspirationWithVisualAssets({ ownerId, analysisId: fixture.analysisId }, { store: fixture.store }).catch((caught: unknown) => caught)));
+    expect(outcomes.filter((value) => value instanceof AppError)).toHaveLength(1);
+    expect(outcomes.find((value) => value instanceof AppError)).toMatchObject({ code: "INSPIRATION_NOT_FOUND", status: 404 });
+    expect(outcomes.find((value) => !(value instanceof AppError))).toEqual({ id: fixture.analysisId, deleted: true });
+    expect(fixture.deletions).toHaveLength(1);
+    expect(fixture.deletions.flat().sort()).toEqual(fixture.researchKeys.sort());
+  });
+
+  it("preserves pending analysis conflicts and never cleans objects when core deletion fails", async () => {
+    const fixture = await visualDeletionFixture();
+    await db.update(inspirationAnalyses).set({ status: "pending", result: null, sources: null, completedAt: null }).where(eq(inspirationAnalyses.id, fixture.analysisId));
+    await expect(visualService.deleteInspirationWithVisualAssets({ ownerId, analysisId: fixture.analysisId }, { store: fixture.store })).rejects.toMatchObject({ code: "INSPIRATION_BUSY", status: 409 });
+    expect(fixture.deletions).toEqual([]);
+    expect(fixture.objects.size).toBe(6);
+    expect(await db.select().from(inspirationVisualAssets)).toHaveLength(6);
+  });
+
+  it("deletes text-only analyses without initializing any object store", async () => {
+    const row = await create();
+    const store = vi.spyOn(visualObjectStore, "createVisualObjectStore").mockImplementation(() => { throw new Error("Must not initialize storage"); });
+    expect(await visualService.deleteInspirationWithVisualAssets({ ownerId, analysisId: row.id })).toEqual({ id: row.id, deleted: true });
+    expect(store).not.toHaveBeenCalled();
+  });
+
+  it("revokes all resource reads even when a refresh commits between the cleanup snapshot and deletion", async () => {
+    const fixture = await visualDeletionFixture();
+    const shareId = randomUUID();
+    await db.update(inspirationAnalyses).set({ shareId }).where(eq(inspirationAnalyses.id, fixture.analysisId));
+    const snapshot = visualRepository.listObjectKeysForAnalysis;
+    const jobId = randomUUID(), assetId = randomUUID();
+    const key = researchVisualObjectKey({ ownerId, analysisId: fixture.analysisId, jobId, assetId, extension: "png" });
+    vi.spyOn(visualRepository, "listObjectKeysForAnalysis").mockImplementationOnce(async (...args) => {
+      const captured = await snapshot(...args);
+      await db.insert(inspirationVisualJobs).values({ id: jobId, ownerId, analysisId: fixture.analysisId, operationId: randomUUID(), kind: "research_visuals", status: "completed", completedAt: new Date() });
+      await db.insert(inspirationVisualAssets).values({ id: assetId, ownerId, analysisId: fixture.analysisId, jobId, kind: "web_evidence", ordinal: 0, title: "Concurrent refresh", altText: "Concurrent refresh", documentRole: "evidence", sourceIndexes: [1], sourcePageUrl: "https://example.test/evidence", sourceSiteName: "Source", sourceQuery: "query", objectKey: key, contentType: "image/png", width: 640, height: 480 });
+      fixture.objects.add(key);
+      return captured;
+    });
+    expect(await visualService.deleteInspirationWithVisualAssets({ ownerId, analysisId: fixture.analysisId }, { store: fixture.store })).toEqual({ id: fixture.analysisId, deleted: true });
+    expect(await db.select().from(inspirationAnalyses)).toEqual([]);
+    expect(await db.select().from(inspirationVisualJobs)).toEqual([]);
+    expect(await db.select().from(inspirationVisualAssets)).toEqual([]);
+    await expect(authorizeOwnedVisualResource({ ownerId, assetId })).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
+    await expect(authorizeSharedVisualResource({ shareId, assetId })).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
+    // Best-effort snapshot cleanup leaves this unreachable object to the research-prefix lifecycle.
+    expect(fixture.objects.has(key)).toBe(true);
+    expect(fixture.deletions.flat()).not.toContain(key);
+  });
+
 });

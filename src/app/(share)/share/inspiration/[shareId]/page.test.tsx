@@ -1,37 +1,39 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { InspirationSharedDto } from "@/features/inspiration/contracts";
+import type { InspirationSharedDocumentDto } from "@/features/inspiration-visuals/document-contracts";
 import {
   inspirationResultFixture,
   inspirationSourceFixture,
 } from "@/features/inspiration/test-fixtures";
 import { AppError } from "@/lib/http/app-error";
 
-const { getSharedInspirationAnalysis } = vi.hoisted(() => ({
-  getSharedInspirationAnalysis: vi.fn(),
+const { getSharedInspirationDocument } = vi.hoisted(() => ({
+  getSharedInspirationDocument: vi.fn(),
 }));
 vi.mock("@/features/inspiration/share-service", () => ({
-  getSharedInspirationAnalysis,
+  getSharedInspirationDocument,
 }));
 
+import { composePublicInspirationDocument } from "@/features/inspiration-visuals/document-composer";
+import { webHeroAssetFixture } from "@/features/inspiration-visuals/test-fixtures";
+
 const shareId = "00000000-0000-4000-8000-000000000009";
-const analysis: InspirationSharedDto = {
+const analysis: InspirationSharedDocumentDto = {
   title: "公开女装研究",
   prompt: "分析近 30 天都市轻通勤女装",
   completedAt: "2026-10-28T02:00:00.000Z",
-  sources: [inspirationSourceFixture],
-  result: inspirationResultFixture,
+  document: composePublicInspirationDocument({ shareId, sources: [inspirationSourceFixture], result: inspirationResultFixture, webEvidence: [webHeroAssetFixture] }),
 };
 
 beforeEach(() => {
-  getSharedInspirationAnalysis.mockReset();
+  getSharedInspirationDocument.mockReset();
 });
 afterEach(cleanup);
 
 describe("public inspiration route", () => {
   it("awaits Next Promise params and reads a public DTO by the opaque share string", async () => {
-    getSharedInspirationAnalysis.mockImplementation(async (id: string) => {
+    getSharedInspirationDocument.mockImplementation(async (id: string) => {
       if (id !== shareId) throw new Error("Unexpected public lookup");
       return analysis;
     });
@@ -46,6 +48,8 @@ describe("public inspiration route", () => {
       analysis.completedAt,
     );
     expect(screen.getByRole("region", { name: "研究来源" })).toBeVisible();
+    expect(screen.getByRole("img")).toHaveAttribute("src", `/share/inspiration/${shareId}/assets/${webHeroAssetFixture.id}`);
+    expect(getSharedInspirationDocument).toHaveBeenCalledExactlyOnceWith(shareId);
   });
 
   it("disables route caching and search indexing", async () => {
@@ -63,17 +67,17 @@ describe("public inspiration route", () => {
   ])(
     "returns notFound for malformed public ID %j before querying",
     async (id) => {
-      getSharedInspirationAnalysis.mockResolvedValue(analysis);
+      getSharedInspirationDocument.mockResolvedValue(analysis);
       const { default: Page } = await import("./page");
       await expect(
         Page({ params: Promise.resolve({ shareId: id }) }),
       ).rejects.toThrow("NEXT_HTTP_ERROR_FALLBACK;404");
-      expect(getSharedInspirationAnalysis).not.toHaveBeenCalled();
+      expect(getSharedInspirationDocument).not.toHaveBeenCalled();
     },
   );
 
   it("maps the service's unknown share 404 to notFound", async () => {
-    getSharedInspirationAnalysis.mockRejectedValue(
+    getSharedInspirationDocument.mockRejectedValue(
       new AppError("INSPIRATION_NOT_FOUND", 404, "Private failure details"),
     );
     const { default: Page } = await import("./page");
@@ -83,7 +87,7 @@ describe("public inspiration route", () => {
   });
 
   it("checks the service again on the next request so a revoked share is immediately unavailable", async () => {
-    getSharedInspirationAnalysis
+    getSharedInspirationDocument
       .mockResolvedValueOnce(analysis)
       .mockRejectedValueOnce(
         new AppError("INSPIRATION_NOT_FOUND", 404, "Not found"),
@@ -106,7 +110,7 @@ describe("public inspiration route", () => {
   ])(
     "propagates unexpected failures to the server boundary: %s",
     async (error) => {
-      getSharedInspirationAnalysis.mockRejectedValue(error);
+      getSharedInspirationDocument.mockRejectedValue(error);
       const { default: Page } = await import("./page");
       await expect(Page({ params: Promise.resolve({ shareId }) })).rejects.toBe(
         error,

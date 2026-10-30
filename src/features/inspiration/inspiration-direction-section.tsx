@@ -1,4 +1,4 @@
-import type { InspirationDocumentDto } from "@/features/inspiration-visuals/document-contracts";
+import type { InspirationDocumentDto, PublicInspirationDocumentDto } from "@/features/inspiration-visuals/document-contracts";
 import type { LibraryMatchAssetDto } from "@/features/inspiration-visuals/contracts";
 import type { InspirationSource } from "./contracts";
 import { EvidenceImage } from "./inspiration-evidence-dialog";
@@ -36,20 +36,18 @@ function PrivateMatches({ matches }: { matches: LibraryMatchAssetDto[] }) {
   );
 }
 
-export function InspirationDirectionSection({
-  directions,
-  unassignedLibraryMatches,
-  sources,
-}: {
-  directions: InspirationDocumentDto["directions"];
-  unassignedLibraryMatches: LibraryMatchAssetDto[];
-  sources: InspirationSource[];
-}) {
+type DirectionSectionProps = { sources: InspirationSource[] } & (
+  | { mode?: "private"; directions: InspirationDocumentDto["directions"]; unassignedLibraryMatches: LibraryMatchAssetDto[] }
+  | { mode: "public"; directions: PublicInspirationDocumentDto["directions"] }
+);
+
+export function InspirationDirectionSection(props: DirectionSectionProps) {
+  const { directions, sources } = props;
   return (
     <>
       <section className={styles.documentSection} aria-label="设计灵感">
         <h3>设计灵感 · 设计推演</h3>
-        {directions.map(({ direction, libraryMatches, concepts }, index) => (
+        {directions.map(({ direction, concepts }, index) => (
           <section
             className={styles.editorialDirection}
             aria-label={direction.title}
@@ -97,28 +95,28 @@ export function InspirationDirectionSection({
             />
             {concepts.length > 0 && (
               <div className={styles.conceptGrid}>
-                {concepts.map((asset) => (
+                {concepts.map((asset, conceptIndex) => (
                   <figure className={styles.evidenceFigure} key={asset.id}>
                     <EvidenceImage asset={asset} />
                     <figcaption className={styles.evidenceCaption}>
                       <strong>{asset.title}</strong>
                       <span className={styles.muted}>AI 生成 · 设计推演</span>
-                      {asset.libraryHref && (
-                        <a href={asset.libraryHref}>查看已保存素材</a>
+                      {props.mode !== "public" && props.directions[index]!.concepts[conceptIndex]!.libraryHref && (
+                        <a href={props.directions[index]!.concepts[conceptIndex]!.libraryHref!}>查看已保存素材</a>
                       )}
                     </figcaption>
                   </figure>
                 ))}
               </div>
             )}
-            <PrivateMatches matches={libraryMatches} />
+            {props.mode !== "public" && <PrivateMatches matches={props.directions[index]!.libraryMatches} />}
           </section>
         ))}
       </section>
-      {unassignedLibraryMatches.length > 0 && (
+      {props.mode !== "public" && props.unassignedLibraryMatches.length > 0 && (
         <section className={styles.documentSection} aria-label="私有素材补充">
           <h3>私有素材补充</h3>
-          <PrivateMatches matches={unassignedLibraryMatches} />
+          <PrivateMatches matches={props.unassignedLibraryMatches} />
         </section>
       )}
     </>

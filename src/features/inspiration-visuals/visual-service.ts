@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import { inspirationAnalysisResultSchema, inspirationSourcesSchema } from "@/features/inspiration/contracts";
 import {
+  deleteInspirationAnalysis,
   inspirationBusy,
   parseInspirationInput,
   parseInspirationStored,
@@ -407,4 +408,33 @@ export async function createResearchVisuals(
 
   await deleteBestEffort(supersededKeys);
   return assembleBoard(parsed.ownerId, parsed.analysisId);
+}
+
+/** Database deletion authorizes cleanup; captured keys alone never authorize it. */
+export async function deleteInspirationWithVisualAssets(
+  input: z.input<typeof visualIdentitySchema>,
+  dependencies: Pick<VisualServiceDependencies, "store"> = {},
+) {
+  const parsed = parseInspirationInput(visualIdentitySchema, input);
+  const keys = await repository.listObjectKeysForAnalysis(parsed.ownerId, parsed.analysisId);
+  // A foreign, pending, or concurrently deleted analysis must never reach storage cleanup.
+  const result = await deleteInspirationAnalysis(parsed);
+  if (keys.length > 0) {
+    try {
+      let store = dependencies.store;
+      if (!store) {
+        const env = getServerEnv();
+        store = createVisualObjectStore({
+          region: env.ALIYUN_OSS_REGION,
+          bucket: env.ALIYUN_OSS_BUCKET,
+          endpoint: env.ALIYUN_OSS_ENDPOINT,
+          cname: env.ALIYUN_OSS_CNAME,
+        });
+      }
+      await store.delete(keys);
+    } catch {
+      // Storage/configuration failure cannot undo the committed database deletion.
+    }
+  }
+  return result;
 }

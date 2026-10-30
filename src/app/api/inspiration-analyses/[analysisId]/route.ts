@@ -1,5 +1,6 @@
+import { deleteInspirationWithVisualAssets } from "@/features/inspiration-visuals/visual-service";
 import { requireApiUser } from "@/features/auth/api-session";
-import { deleteInspirationAnalysis, getInspirationAnalysis, renameInspirationAnalysis } from "@/features/inspiration/analysis-service";
+import { getInspirationAnalysis, renameInspirationAnalysis } from "@/features/inspiration/analysis-service";
 import { inspirationPatchMutationSchema } from "@/features/inspiration/contracts";
 import { assertSameOrigin, withRoute } from "@/lib/http/route";
 
@@ -23,5 +24,5 @@ export const DELETE = withRoute(async (request: Request, context: InspirationRou
   const user = await requireApiUser();
   assertSameOrigin(request);
   const { analysisId } = parseInspirationRequest(inspirationParamsSchema, await context.params);
-  return Response.json(await deleteInspirationAnalysis({ ownerId: user.id, analysisId }));
+  return Response.json(await deleteInspirationWithVisualAssets({ ownerId: user.id, analysisId }));
 });

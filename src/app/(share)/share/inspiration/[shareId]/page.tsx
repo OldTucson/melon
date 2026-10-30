@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { z } from "zod";
 
-import { getSharedInspirationAnalysis } from "@/features/inspiration/share-service";
+import { getSharedInspirationDocument } from "@/features/inspiration/share-service";
 import { SharedInspirationPage } from "@/features/inspiration/shared-inspiration-page";
 import { AppError } from "@/lib/http/app-error";
 
@@ -21,7 +21,7 @@ export default async function SharedInspirationRoute({
   const { shareId } = await params;
   if (!z.string().uuid().safeParse(shareId).success) notFound();
 
-  const analysis = await getSharedInspirationAnalysis(shareId).catch(
+  const analysis = await getSharedInspirationDocument(shareId).catch(
     (error: unknown) => {
       if (error instanceof AppError && error.status === 404) notFound();
       throw error;
