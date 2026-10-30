@@ -31,11 +31,12 @@ export type WebEvidenceProvider = {
 export const webAgentRequestIdSchema = z.string().min(1).max(200).regex(/^[A-Za-z0-9_-]+$/u);
 const text = (max: number) => z.string().min(1).max(max).trim().min(1)
   .refine((value) => !/[\u0000-\u001f\u007f]/u.test(value));
-const httpsUrl = z.string().min(1).max(2048)
+const webUrl = z.string().min(1).max(2048)
   .refine((value) => !/[\s\u0000-\u001f\u007f\\]/u.test(value))
   .transform((value, context) => {
     const parsed = URL.parse(value);
-    if (!parsed || parsed.protocol !== "https:" || parsed.username || parsed.password) {
+    if (!parsed || (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+      parsed.username || parsed.password) {
       context.addIssue({ code: "custom", message: "Invalid image source URL" });
       return z.NEVER;
     }
@@ -66,9 +67,9 @@ export const webAgentImagesSchema = z.array(z.object({
   idx: z.number().int().min(0).max(10_000),
   query: text(300),
   title: text(500),
-  url: httpsUrl,
+  url: webUrl,
   image_info: z.object({
-    url: httpsUrl,
+    url: webUrl,
     width: z.number().int().min(1).max(32_768),
     height: z.number().int().min(1).max(32_768),
   }).refine(({ width, height }) => width * height <= 40_000_000),

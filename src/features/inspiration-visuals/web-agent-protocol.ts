@@ -110,6 +110,7 @@ export async function parseWebAgentStream(
     rawCandidateCount += images.length;
     if (rawCandidateCount > MAX_RAW_CANDIDATES) throw new WebAgentProtocolError();
     for (const image of images) {
+      if (!image.image_info.url.startsWith("https://") || !image.url.startsWith("https://")) continue;
       const identity = JSON.stringify([image.image_info.url, image.url]);
       if (seen.has(identity)) continue;
       seen.add(identity);

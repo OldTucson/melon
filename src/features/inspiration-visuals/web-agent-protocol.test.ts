@@ -91,6 +91,25 @@ describe("Web Search Agent SSE protocol", () => {
     })])))).resolves.toEqual({ requestId: "request-1", candidates: [expected] });
   });
 
+  it("keeps safe HTTPS results when a provider image batch also contains HTTP results", async () => {
+    const safe = candidate({ idx: 2, query: "linen editorial", title: "Linen editorial" });
+    await expect(parse(event(chunk([
+      candidate({
+        url: "http://journal.test/insecure",
+        image_info: { url: "http://images.test/insecure.jpg", width: 800, height: 600 },
+      }),
+      safe,
+    ])))).resolves.toEqual({
+      requestId: "request-1",
+      candidates: [{
+        query: "linen editorial",
+        title: "Linen editorial",
+        sourcePageUrl: "https://journal.test/article",
+        imageUrl: "https://images.test/shirt.jpg?sig=a%2Fb&x=1",
+      }],
+    });
+  });
+
   it.each([
     "data: {broken-secret\n\n",
     event({ code: "InvalidApiKey", message: "secret", request_id: "request-1" }),
@@ -108,7 +127,6 @@ describe("Web Search Agent SSE protocol", () => {
     event(chunk([candidate({ idx: -1 })])),
     event(chunk([candidate({ url: `https://journal.test/${"x".repeat(2048)}` })])),
     event(chunk([candidate({ url: `https://journal.test/${"亚".repeat(300)}` })])),
-    event(chunk([candidate({ url: "http://journal.test/page" })])),
     event(chunk([candidate({ url: "https://user:secret@journal.test/page" })])),
     event(chunk([candidate({ image_info: { url: "javascript:alert(1)", width: 800, height: 600 } })])),
     ...[0, -1, 1.5, 32_769, "800", null].map((width) => event(chunk([candidate({
