@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { closeDatabase, db } from "@/lib/db/client";
@@ -210,6 +211,8 @@ describe("inspiration visual schema", () => {
         analysisId: analysisA,
         jobId: job!.id,
         kind: "web_evidence",
+        documentRole: "evidence",
+        sourceIndexes: [],
         ordinal: 0,
         title: "秀场证据",
         altText: "低饱和绿色造型",
@@ -388,5 +391,199 @@ describe("inspiration visual schema", () => {
         saveOperationId,
       }),
     ]);
+  });
+
+  const webAsset = (jobId: string) => ({
+    id: randomUUID(),
+    ownerId: ownerA,
+    analysisId: analysisA,
+    jobId,
+    kind: "web_evidence" as const,
+    ordinal: 0,
+    title: "秀场证据",
+    altText: "绿色造型",
+    sourcePageUrl: "https://example.test/runway",
+    sourceSiteName: "Example",
+    sourceQuery: "green tailoring",
+    objectKey: "inspiration/web/evidence.webp",
+    contentType: "image/webp",
+    width: 1200,
+    height: 900,
+    documentRole: "evidence" as const,
+    sourceIndexes: [3, 1],
+  });
+
+  it.each(["hero", "evidence", "product"] as const)(
+    "stores the web role %s",
+    async (documentRole) => {
+      const [job] = await insertJob();
+      const [asset] = await db
+        .insert(inspirationVisualAssets)
+        .values({
+          ...webAsset(job!.id),
+          documentRole,
+          ...(documentRole === "product"
+            ? { brand: "Melon", productName: "棉麻衬衫", priceText: "¥299" }
+            : {}),
+        })
+        .returning();
+      expect(asset).toMatchObject({ documentRole, sourceIndexes: [3, 1] });
+    },
+  );
+
+  it.each([
+    { documentRole: null },
+    { sourceIndexes: null },
+    { sourceIndexes: {} },
+    { documentRole: "product", productName: null },
+    { documentRole: "product", productName: "   " },
+    { brand: "Melon" },
+    { productName: "衬衫" },
+    { priceText: "¥299" },
+    { documentRole: "hero", brand: "Melon" },
+  ])("rejects invalid web document fields %j", async (overrides) => {
+    const [job] = await insertJob();
+    await expectConstraint(
+      db.insert(inspirationVisualAssets).values({
+        ...webAsset(job!.id),
+        ...overrides,
+      } as typeof inspirationVisualAssets.$inferInsert),
+      "23514",
+      "productName" in overrides && overrides.productName === "   "
+        ? "inspiration_visual_assets_product_length_check"
+        : "inspiration_visual_assets_kind_check",
+    );
+  });
+
+  it.each([
+    ["brand", 120],
+    ["productName", 300],
+    ["priceText", 120],
+  ] as const)("bounds stored product %s at %i", async (field, max) => {
+    const [job] = await insertJob();
+    const product = {
+      ...webAsset(job!.id),
+      documentRole: "product" as const,
+      productName: "衬衫",
+    };
+    await db
+      .insert(inspirationVisualAssets)
+      .values({ ...product, [field]: "a".repeat(max) });
+    await expectConstraint(
+      db.insert(inspirationVisualAssets).values({
+        ...product,
+        id: randomUUID(),
+        ordinal: 1,
+        [field]: "a".repeat(max + 1),
+      }),
+      "23514",
+      "inspiration_visual_assets_product_length_check",
+    );
+  });
+
+  it.each(["library_match", "generated_concept"] as const)(
+    "rejects document fields on %s",
+    async (kind) => {
+      const [job] = await insertJob();
+      const asset =
+        kind === "library_match"
+          ? {
+              id: randomUUID(),
+              ownerId: ownerA,
+              analysisId: analysisA,
+              jobId: job!.id,
+              kind,
+              ordinal: 0,
+              title: "图案",
+              altText: "图案",
+              patternId: patternA,
+            }
+          : {
+              ...webAsset(job!.id),
+              kind,
+              directionIndex: 0,
+              sourcePageUrl: null,
+              sourceSiteName: null,
+              sourceQuery: null,
+            };
+      await expectConstraint(
+        db.insert(inspirationVisualAssets).values({
+          ...asset,
+          documentRole: "hero",
+          sourceIndexes: [],
+        }),
+        "23514",
+        "inspiration_visual_assets_kind_check",
+      );
+    },
+  );
+
+  it("backfills legacy web evidence without changing completed text analyses", async () => {
+    const journal = JSON.parse(
+      await readFile("drizzle/meta/_journal.json", "utf8"),
+    ) as { entries: { tag: string }[] };
+    const entry = journal.entries.find(({ tag }) =>
+      tag.includes("editorial_inspiration_visuals"),
+    );
+    expect(entry, "editorial migration must be generated").toBeDefined();
+    const migration = await readFile(`drizzle/${entry!.tag}.sql`, "utf8");
+    const previous = await readFile(
+      "drizzle/0009_melon_inspiration_visuals.sql",
+      "utf8",
+    );
+    const legacyTable = previous.slice(
+      previous.indexOf('CREATE TABLE "inspiration_visual_assets"'),
+      previous.indexOf(
+        "--> statement-breakpoint",
+        previous.indexOf('CREATE TABLE "inspiration_visual_assets"'),
+      ),
+    );
+    await db
+      .update(inspirationAnalyses)
+      .set({
+        status: "completed",
+        sources: [{ index: 1 }],
+        result: { headline: "Original report" },
+        completedAt: new Date(),
+      })
+      .where(eq(inspirationAnalyses.id, analysisA));
+    const before = await db
+      .select()
+      .from(inspirationAnalyses)
+      .where(eq(inspirationAnalyses.id, analysisA));
+    const migrationSchema = `editorial_migration_${randomUUID().replaceAll("-", "")}`;
+    await db.transaction(async (tx) => {
+      await tx.execute(sql.raw(`CREATE SCHEMA "${migrationSchema}"`));
+      await tx.execute(
+        sql.raw(`SET LOCAL search_path TO "${migrationSchema}", public`),
+      );
+      await tx.execute(sql.raw(legacyTable));
+      await tx.execute(sql`INSERT INTO inspiration_visual_assets
+        (id, owner_id, analysis_id, job_id, kind, ordinal, title, alt_text,
+         source_page_url, source_site_name, source_query, object_key, content_type, width, height)
+        VALUES (${randomUUID()}, ${ownerA}, ${analysisA}, ${randomUUID()}, 'web_evidence', 0,
+          'Legacy evidence', 'Legacy image', 'https://example.test/source', 'Example', 'query', 'legacy.webp', 'image/webp', 100, 100)`);
+      for (const statement of migration
+        .replaceAll('"public".', `"${migrationSchema}".`)
+        .split("--> statement-breakpoint")) {
+        if (statement.trim()) await tx.execute(sql.raw(statement));
+      }
+      const rows = await tx.execute(
+        sql`SELECT document_role, source_indexes, object_key FROM inspiration_visual_assets`,
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        document_role: "evidence",
+        source_indexes: [],
+        object_key: "legacy.webp",
+      });
+      await tx.execute(sql.raw(`DROP SCHEMA "${migrationSchema}" CASCADE`));
+    });
+    expect(
+      await db
+        .select()
+        .from(inspirationAnalyses)
+        .where(eq(inspirationAnalyses.id, analysisA)),
+    ).toEqual(before);
   });
 });

@@ -37,6 +37,13 @@ export const inspirationVisualAssetKinds = [
   "generated_concept",
 ] as const;
 
+export const inspirationDocumentRoles = ["hero", "evidence", "product"] as const;
+
+export const inspirationDocumentRoleEnum = pgEnum(
+  "inspiration_document_role",
+  inspirationDocumentRoles,
+);
+
 export const inspirationVisualJobKindEnum = pgEnum(
   "inspiration_visual_job_kind",
   inspirationVisualJobKinds,
@@ -161,6 +168,11 @@ export const inspirationVisualAssets = pgTable(
     sourcePageUrl: text("source_page_url"),
     sourceSiteName: text("source_site_name"),
     sourceQuery: text("source_query"),
+    documentRole: inspirationDocumentRoleEnum("document_role"),
+    sourceIndexes: jsonb("source_indexes").$type<number[]>(),
+    brand: text("brand"),
+    productName: text("product_name"),
+    priceText: text("price_text"),
     patternId: uuid("pattern_id"),
     savedPatternId: uuid("saved_pattern_id").references(() => patterns.id, {
       onDelete: "set null",
@@ -231,6 +243,12 @@ export const inspirationVisualAssets = pgTable(
         and (${table.sourceQuery} is null or char_length(btrim(${table.sourceQuery})) between 1 and 300)`,
     ),
     check(
+      "inspiration_visual_assets_product_length_check",
+      sql`(${table.brand} is null or char_length(btrim(${table.brand})) between 1 and 120)
+        and (${table.productName} is null or char_length(btrim(${table.productName})) between 1 and 300)
+        and (${table.priceText} is null or char_length(btrim(${table.priceText})) between 1 and 120)`,
+    ),
+    check(
       "inspiration_visual_assets_storage_length_check",
       sql`(${table.objectKey} is null or char_length(${table.objectKey}) between 1 and 1024)
         and (${table.contentType} is null or char_length(${table.contentType}) between 1 and 100)`,
@@ -254,6 +272,15 @@ export const inspirationVisualAssets = pgTable(
       "inspiration_visual_assets_kind_check",
       sql`(
         (${table.kind} = 'web_evidence'
+          and ${table.documentRole} is not null
+          and ${table.sourceIndexes} is not null
+          and jsonb_typeof(${table.sourceIndexes}) = 'array'
+          and ((${table.documentRole} = 'product'
+              and ${table.productName} is not null)
+            or (${table.documentRole} in ('hero', 'evidence')
+              and ${table.brand} is null
+              and ${table.productName} is null
+              and ${table.priceText} is null))
           and ${table.directionIndex} is null
           and ${table.sourcePageUrl} is not null
           and ${table.sourcePageUrl} ~ '^https://'
@@ -267,6 +294,11 @@ export const inspirationVisualAssets = pgTable(
           and ${table.width} is not null
           and ${table.height} is not null)
         or (${table.kind} = 'library_match'
+          and ${table.documentRole} is null
+          and ${table.sourceIndexes} is null
+          and ${table.brand} is null
+          and ${table.productName} is null
+          and ${table.priceText} is null
           and ${table.patternId} is not null
           and ${table.savedPatternId} is null
           and ${table.saveOperationId} is null
@@ -278,6 +310,11 @@ export const inspirationVisualAssets = pgTable(
           and ${table.width} is null
           and ${table.height} is null)
         or (${table.kind} = 'generated_concept'
+          and ${table.documentRole} is null
+          and ${table.sourceIndexes} is null
+          and ${table.brand} is null
+          and ${table.productName} is null
+          and ${table.priceText} is null
           and ${table.directionIndex} is not null
           and ${table.directionIndex} between 0 and 4
           and ${table.patternId} is null

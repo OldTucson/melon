@@ -165,4 +165,146 @@ describe("inspiration visual contracts", () => {
       }),
     ).toThrow();
   });
+
+  const evidence = {
+    ...webEvidenceAssetFixture,
+    role: "evidence",
+    sourceIndexes: [3, 1],
+    brand: null,
+    productName: null,
+    priceText: null,
+  };
+  const product = {
+    ...evidence,
+    role: "product",
+    brand: "Melon",
+    productName: "棉麻衬衫",
+    priceText: "¥299",
+  };
+
+  it.each(["hero", "evidence", "product"])(
+    "accepts the web document role %s",
+    (role) => {
+      const asset = role === "product" ? product : { ...evidence, role };
+      expect(webEvidenceAssetDtoSchema.parse(asset)).toEqual(asset);
+    },
+  );
+
+  it("preserves unique source index order and accepts up to twenty references", () => {
+    expect(webEvidenceAssetDtoSchema.parse(evidence).sourceIndexes).toEqual([
+      3, 1,
+    ]);
+    expect(
+      webEvidenceAssetDtoSchema.safeParse({
+        ...evidence,
+        sourceIndexes: Array.from({ length: 20 }, (_, index) => index + 1),
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each(
+    [
+      [],
+      [1, 1],
+      [0],
+      [101],
+      [1.5],
+      Array.from({ length: 21 }, (_, index) => index + 1),
+    ].map((sourceIndexes) => ({ sourceIndexes })),
+  )(
+    "checks bounded unique source indexes: $sourceIndexes",
+    ({ sourceIndexes }) => {
+      // An empty array is valid for migrated legacy evidence.
+      expect(
+        webEvidenceAssetDtoSchema.safeParse({ ...evidence, sourceIndexes })
+          .success,
+      ).toBe(sourceIndexes.length === 0);
+    },
+  );
+
+  it.each([
+    { role: "cover" },
+    { role: undefined },
+    { sourceIndexes: undefined },
+    { role: "product", productName: null },
+    { role: "product", productName: "   " },
+    { brand: "Melon" },
+    { productName: "衬衫" },
+    { priceText: "¥299" },
+    { role: "hero", brand: "Melon" },
+  ])("rejects invalid web role metadata %j", (overrides) => {
+    expect(
+      webEvidenceAssetDtoSchema.safeParse({ ...evidence, ...overrides })
+        .success,
+    ).toBe(false);
+  });
+
+  it.each([
+    ["brand", 120],
+    ["productName", 300],
+    ["priceText", 120],
+  ] as const)("bounds product %s at %i characters", (field, max) => {
+    expect(
+      webEvidenceAssetDtoSchema.safeParse({
+        ...product,
+        [field]: "a".repeat(max),
+      }).success,
+    ).toBe(true);
+    expect(
+      webEvidenceAssetDtoSchema.safeParse({
+        ...product,
+        [field]: "a".repeat(max + 1),
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each([
+    "ownerId",
+    "requestId",
+    "providerRequestId",
+    "objectKey",
+    "remoteImageUrl",
+  ])("rejects private browser metadata %s", (field) => {
+    expect(
+      webEvidenceAssetDtoSchema.safeParse({ ...evidence, [field]: "private" })
+        .success,
+    ).toBe(false);
+  });
+
+  it.each([libraryMatchAssetDtoSchema, generatedConceptAssetDtoSchema])(
+    "keeps document roles exclusive to web evidence",
+    (schema) => {
+      const fixture =
+        schema === libraryMatchAssetDtoSchema
+          ? libraryMatchAssetFixture
+          : generatedConceptAssetFixture;
+      expect(schema.safeParse({ ...fixture, role: "hero" }).success).toBe(
+        false,
+      );
+    },
+  );
+
+  it.each([
+    inspirationVisualBoardDtoSchema,
+    publicInspirationVisualBoardDtoSchema,
+  ])("limits both board variants to one hero and four products", (schema) => {
+    const base =
+      schema === inspirationVisualBoardDtoSchema
+        ? visualBoardFixture
+        : { concepts: [] };
+    const hero = { ...evidence, role: "hero" };
+    expect(
+      schema.safeParse({
+        ...base,
+        webEvidence: [hero, ...Array(4).fill(product)],
+      }).success,
+    ).toBe(true);
+    expect(
+      schema.safeParse({ ...base, webEvidence: [hero, hero] }).success,
+    ).toBe(false);
+    expect(
+      schema.safeParse({ ...base, webEvidence: Array(5).fill(product) })
+        .success,
+    ).toBe(false);
+  });
 });

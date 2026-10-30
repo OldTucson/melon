@@ -12,6 +12,11 @@ export const visualJobFixture = {
 export const webEvidenceAssetFixture = {
   id: "00000000-0000-4000-8000-000000000102",
   kind: "web_evidence" as const,
+  role: "evidence" as const,
+  sourceIndexes: [1],
+  brand: null,
+  productName: null,
+  priceText: null,
   ordinal: 0,
   title: "轻盈通勤叠穿",
   altText: "米白色轻盈通勤女装叠穿参考",
@@ -22,6 +27,27 @@ export const webEvidenceAssetFixture = {
   sourceQuery: "都市轻通勤 女装 叠穿",
   width: 1200,
   height: 1600,
+};
+
+export const webHeroAssetFixture = {
+  ...webEvidenceAssetFixture,
+  id: "00000000-0000-4000-8000-000000000107",
+  role: "hero" as const,
+  title: "轻通勤灵感主视觉",
+  imageUrl:
+    "/api/inspiration-visual-assets/00000000-0000-4000-8000-000000000107",
+};
+
+export const webProductAssetFixture = {
+  ...webEvidenceAssetFixture,
+  id: "00000000-0000-4000-8000-000000000108",
+  role: "product" as const,
+  title: "棉麻通勤衬衫",
+  imageUrl:
+    "/api/inspiration-visual-assets/00000000-0000-4000-8000-000000000108",
+  brand: "Melon",
+  productName: "棉麻通勤衬衫",
+  priceText: "¥299",
 };
 
 export const libraryMatchAssetFixture = {

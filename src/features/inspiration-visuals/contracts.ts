@@ -116,17 +116,55 @@ const assetBaseShape = {
   imageUrl: localPathSchema,
 };
 
+export const inspirationDocumentRoleSchema = z.enum([
+  "hero",
+  "evidence",
+  "product",
+]);
+
+const sourceIndexesSchema = z
+  .array(z.number().int().min(1).max(100))
+  .max(20)
+  .refine((indexes) => new Set(indexes).size === indexes.length, {
+    message: "duplicate source indexes",
+  });
+
 export const webEvidenceAssetDtoSchema = z
   .object({
     ...assetBaseShape,
     kind: z.literal("web_evidence"),
+    role: inspirationDocumentRoleSchema,
+    sourceIndexes: sourceIndexesSchema,
+    brand: displayText(120).nullable(),
+    productName: displayText(300).nullable(),
+    priceText: displayText(120).nullable(),
     sourcePageUrl: httpsUrlSchema,
     sourceSiteName: displayText(120),
     sourceQuery: displayText(300),
     ...imageDimensions,
   })
   .strict()
-  .superRefine(validatePixelBudget);
+  .superRefine((asset, context) => {
+    validatePixelBudget(asset, context);
+    if (asset.role === "product") {
+      if (asset.productName === null) {
+        context.addIssue({
+          code: "custom",
+          path: ["productName"],
+          message: "product name is required",
+        });
+      }
+    } else if (
+      asset.brand !== null ||
+      asset.productName !== null ||
+      asset.priceText !== null
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "product metadata requires the product role",
+      });
+    }
+  });
 
 const paletteSchema = z
   .array(paletteHexSchema)
@@ -197,6 +235,28 @@ const conceptJobSchema = inspirationVisualJobDtoSchema.refine(
   { message: "concept job must be pending or failed" },
 );
 
+function validateDocumentRoleCounts(
+  board: { webEvidence: { role: InspirationDocumentRole }[] },
+  context: z.RefinementCtx,
+) {
+  if (board.webEvidence.filter((asset) => asset.role === "hero").length > 1) {
+    context.addIssue({
+      code: "custom",
+      path: ["webEvidence"],
+      message: "only one hero may be shown per board",
+    });
+  }
+  if (
+    board.webEvidence.filter((asset) => asset.role === "product").length > 4
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["webEvidence"],
+      message: "only four products may be shown per board",
+    });
+  }
+}
+
 export const inspirationVisualBoardDtoSchema = z
   .object({
     refreshAvailable: z.boolean(),
@@ -209,6 +269,7 @@ export const inspirationVisualBoardDtoSchema = z
   })
   .strict()
   .superRefine((board, context) => {
+    validateDocumentRoleCounts(board, context);
     const directionIndexes = board.conceptJobs.map(
       (job) => job.directionIndex,
     );
@@ -225,7 +286,12 @@ export const publicInspirationVisualBoardDtoSchema = z
     webEvidence: z.array(webEvidenceAssetDtoSchema).max(8),
     concepts: z.array(publicGeneratedConceptAssetDtoSchema).max(15),
   })
-  .strict();
+  .strict()
+  .superRefine(validateDocumentRoleCounts);
+
+export type InspirationDocumentRole = z.output<
+  typeof inspirationDocumentRoleSchema
+>;
 
 export type ResearchVisualMutation = z.output<
   typeof researchVisualMutationSchema
