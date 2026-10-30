@@ -9,7 +9,7 @@ import { sniffImage, type ImageMetadata } from "./image-sniffer";
 import { resolvePublicAddress, validateRemoteUrl, type AddressResolver } from "./remote-address";
 
 export type ImageRequestFactory = (options: RequestOptions, onResponse: (response: IncomingMessage) => void) => ClientRequest;
-export type RemoteImageDependencies = { resolve?: AddressResolver; request?: ImageRequestFactory };
+export type RemoteImageDependencies = { resolve?: AddressResolver; request?: ImageRequestFactory; signal?: AbortSignal };
 export type RemoteImage = ImageMetadata & { bytes: Buffer };
 
 const MAX_BODY = 8 * 1024 * 1024;
@@ -122,10 +122,13 @@ function requestImage(url: URL, pinned: LookupAddress, request: ImageRequestFact
 
 /** The authoritative remote URL, DNS, transport, and image-container boundary. */
 export async function fetchRemoteImage(value: string, dependencies: RemoteImageDependencies = {}): Promise<RemoteImage> {
+  if (dependencies.signal?.aborted) throw new Error("Remote image cancelled");
   const controller = new AbortController();
   const deadline = Date.now() + TOTAL_MS;
   let rejectDeadline!: (error: Error) => void;
   const expired = new Promise<never>((_resolve, reject) => { rejectDeadline = reject; });
+  const onCallerAbort = () => { controller.abort(); rejectDeadline(failure()); };
+  dependencies.signal?.addEventListener("abort", onCallerAbort, { once: true });
   const timer = setTimeout(() => { controller.abort(); rejectDeadline(failure()); }, TOTAL_MS);
   try {
     let url = validateRemoteUrl(value);
@@ -144,8 +147,10 @@ export async function fetchRemoteImage(value: string, dependencies: RemoteImageD
     }
   } catch {
     // Never propagate network/parser messages, URLs, queries, response bytes, or causes.
+    if (dependencies.signal?.aborted) throw new Error("Remote image cancelled");
     throw failure();
   } finally {
+    dependencies.signal?.removeEventListener("abort", onCallerAbort);
     clearTimeout(timer);
     controller.abort();
   }

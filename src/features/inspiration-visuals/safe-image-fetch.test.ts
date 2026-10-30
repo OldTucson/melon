@@ -149,3 +149,40 @@ describe("safe remote image fetch", () => {
     expect(error).toBeInstanceOf(Error); expect(String(error)).not.toMatch(/secret|private|https/); expect(error).not.toHaveProperty("cause");
   });
 });
+
+describe("caller cancellation", () => {
+  it("rejects a pre-aborted caller without DNS, sockets or retained listeners", async () => {
+    const t = transport();
+    const controller = new AbortController();
+    controller.abort(new Error("https://private.test?token=secret"));
+    const add = vi.spyOn(controller.signal, "addEventListener");
+    await expect(fetchRemoteImage("https://example.com", { ...t, signal: controller.signal })).rejects.toThrow(/^Remote image cancelled$/);
+    expect(t.resolve).not.toHaveBeenCalled();
+    expect(t.options).toHaveLength(0);
+    expect(add).not.toHaveBeenCalled();
+  });
+  it("cancels pending DNS and prevents a late answer from opening a socket", async () => {
+    const t = transport();
+    const controller = new AbortController();
+    let finish!: (addresses: { address: string; family: number }[]) => void;
+    t.resolve.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const remove = vi.spyOn(controller.signal, "removeEventListener");
+    const pending = expect(fetchRemoteImage("https://example.com", { ...t, signal: controller.signal })).rejects.toThrow(/^Remote image cancelled$/);
+    controller.abort();
+    await pending;
+    finish([{ address: "8.8.8.8", family: 4 }]);
+    await Promise.resolve();
+    expect(t.options).toHaveLength(0);
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+  });
+  it("destroys an active request and partial response on caller abort", async () => {
+    const controller = new AbortController();
+    const t = transport([{ stream: (response) => {
+      response.write(gif.subarray(0, 5));
+      controller.abort(new Error("secret upstream cancellation"));
+    } }]);
+    await expect(fetchRemoteImage("https://example.com", { ...t, signal: controller.signal })).rejects.toThrow(/^Remote image cancelled$/);
+    expect(t.requests[0]!.destroy).toHaveBeenCalled();
+    expect(t.responses[0]!.destroyed).toBe(true);
+  });
+});
