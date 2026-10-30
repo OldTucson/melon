@@ -121,6 +121,44 @@ describe("web evidence intent planning", () => {
 });
 
 describe("web evidence candidate classification", () => {
+  it.each([
+    { sourcePageUrl: "http://shop.test/item?sku=shirt" },
+    { imageUrl: "http://images.test/shirt.jpg" },
+    { sourcePageUrl: "https://user@shop.test/item?sku=shirt" },
+    { sourcePageUrl: "https://user:password@shop.test/item?sku=shirt" },
+    { imageUrl: "https://user@images.test/shirt.jpg" },
+    { imageUrl: "https://user:password@images.test/shirt.jpg" },
+  ])("rejects non-HTTPS or credential-bearing candidate URLs: %j", (overrides) => {
+    expect(classifyWebEvidenceCandidates({
+      intents: [productIntent], sources,
+      candidates: [candidate(overrides)],
+    })).toEqual([]);
+  });
+
+  it("supports HTTP report sources without rewriting them or weakening candidate HTTPS", () => {
+    const httpSources = sources.map((source) => ({
+      ...source, url: source.url.replace("https:", "http:"),
+    }));
+    const before = structuredClone(httpSources);
+    const intents = planWebEvidenceIntents({ prompt: "Fashion brief", result: report(), sources: httpSources });
+    const classified = classifyWebEvidenceCandidates({
+      intents: [productIntent], sources: httpSources,
+      candidates: [
+        candidate({ sourcePageUrl: "https://shop.test/item?sku=shirt#photo", imageUrl: "https://images.test/shirt.jpg#preview" }),
+        candidate({ sourcePageUrl: "http://shop.test/item?sku=shirt" }),
+      ],
+    });
+
+    expect(intents[0]?.sourceIndexes).toEqual([7, 2]);
+    expect(classified).toHaveLength(1);
+    expect(classified[0]).toMatchObject({
+      role: "product", sourceIndexes: [2],
+      sourcePageUrl: "https://shop.test/item?sku=shirt",
+      imageUrl: "https://images.test/shirt.jpg",
+    });
+    expect(httpSources).toEqual(before);
+  });
+
   it("matches normalized intent queries and uses the validated product name rather than provider title", () => {
     const [classified] = classifyWebEvidenceCandidates({
       intents: [productIntent], sources,

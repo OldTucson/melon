@@ -153,7 +153,7 @@ export function classifyWebEvidenceCandidates({ intents, sources, candidates }: 
   for (const candidate of candidates) {
     const page = canonicalUrl(candidate.sourcePageUrl);
     const image = canonicalUrl(candidate.imageUrl);
-    if (!page || !image) continue;
+    if (!page || !image || page.protocol !== "https:" || image.protocol !== "https:") continue;
     const identity = JSON.stringify([image.href, sourcePageKey(page)]);
     if (seen.has(identity)) continue;
     seen.add(identity);
