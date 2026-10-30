@@ -2,6 +2,7 @@ import type { InspirationDocumentDto, PublicInspirationDocumentDto } from "@/fea
 import type { LibraryMatchAssetDto } from "@/features/inspiration-visuals/contracts";
 import type { InspirationSource } from "./contracts";
 import { EvidenceImage } from "./inspiration-evidence-dialog";
+import { EvidenceLoadingFigure } from "./inspiration-hero-evidence";
 import { DocumentSourceLinks } from "./inspiration-signal-section";
 import styles from "./inspiration.module.css";
 
@@ -37,7 +38,7 @@ function PrivateMatches({ matches }: { matches: LibraryMatchAssetDto[] }) {
 }
 
 type DirectionSectionProps = { sources: InspirationSource[] } & (
-  | { mode?: "private"; directions: InspirationDocumentDto["directions"]; unassignedLibraryMatches: LibraryMatchAssetDto[] }
+  | { mode?: "private"; directions: InspirationDocumentDto["directions"]; unassignedLibraryMatches: LibraryMatchAssetDto[]; loading?: boolean }
   | { mode: "public"; directions: PublicInspirationDocumentDto["directions"] }
 );
 
@@ -110,6 +111,11 @@ export function InspirationDirectionSection(props: DirectionSectionProps) {
               </div>
             )}
             {props.mode !== "public" && <PrivateMatches matches={props.directions[index]!.libraryMatches} />}
+            {props.mode !== "public" && props.loading && props.directions[index]!.libraryMatches.length === 0 && (
+              <div className={styles.privateMatchList}>
+                <EvidenceLoadingFigure label="素材库匹配正在加载" />
+              </div>
+            )}
           </section>
         ))}
       </section>

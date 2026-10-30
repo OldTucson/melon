@@ -17,9 +17,11 @@ type Media = {
 export function EvidenceImage({
   asset,
   eager = false,
+  editorial = false,
 }: {
   asset: Media;
   eager?: boolean;
+  editorial?: boolean;
 }) {
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const imageRef = useCallback((image: HTMLImageElement | null) => {
@@ -29,7 +31,7 @@ export function EvidenceImage({
   return (
     <span
       className={styles.evidenceMedia}
-      style={{ aspectRatio: `${asset.width} / ${asset.height}` }}
+      style={{ aspectRatio: editorial ? "4 / 3" : `${asset.width} / ${asset.height}` }}
     >
       {failedUrl === asset.imageUrl ? (
         <span className={styles.imageFallback}>图片暂时无法显示</span>
@@ -86,6 +88,7 @@ export function InspirationEvidenceDialog({
             </Dialog.Close>
           </div>
           <Dialog.Description>{asset.sourceSiteName}</Dialog.Description>
+          <p className={styles.muted}>查询意图：{asset.sourceQuery}</p>
           <EvidenceImage asset={asset} eager />
           <div className={styles.evidenceCaption}>
             <OriginalPageLink asset={asset} />

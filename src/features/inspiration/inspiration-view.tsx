@@ -222,13 +222,11 @@ export function InspirationView() {
     mutationFn: inspirationApi.create,
     onSuccess: async (data) => {
       setNewDialogOpen(false);
-      await saveDetail(data);
       if (data.status === "completed") {
-        refreshVisuals.mutate({
-          analysisId: data.id,
-          operationId: crypto.randomUUID(),
-        });
+        // Register pending before publishing the report or awaiting refetches.
+        startVisuals(data.id);
       }
+      await saveDetail(data);
     },
     onError: onFailure,
   });
@@ -397,22 +395,26 @@ export function InspirationView() {
     setError(null);
     setNotice(null);
   }
-  function refreshSelectedVisuals() {
+  function startVisuals(analysisId: string) {
+    // Both entry points use the mutation lifecycle, independent of selection.
     if (
-      !selected ||
-      selected.status !== "completed" ||
-      visuals.data?.refreshJob?.status === "pending" ||
+      client.getQueryData<typeof visuals.data>(
+        inspirationVisualKeys.detail(ownerId, analysisId),
+      )?.refreshJob?.status === "pending" ||
       client.isMutating({
         ...pendingVisualMutationFilters,
         predicate: (mutation) =>
           (mutation.state.variables as { analysisId: string } | undefined)
-            ?.analysisId === selected.id,
+            ?.analysisId === analysisId,
       }) > 0
     ) return;
     refreshVisuals.mutate({
-      analysisId: selected.id,
+      analysisId,
       operationId: crypto.randomUUID(),
     });
+  }
+  function refreshSelectedVisuals() {
+    if (selected?.status === "completed") startVisuals(selected.id);
   }
   const selectedVisualMutation =
     refreshVisuals.variables?.analysisId === selected?.id;
@@ -574,6 +576,8 @@ export function InspirationView() {
                     document={document}
                     title={selected.title}
                     prompt={selected.prompt}
+                    completedAt={selected.completedAt}
+                    initialEnrichment={!visuals.data?.activeJob && (selectedVisualPending || visuals.data?.refreshJob?.status === "pending")}
                     headerActions={recordActions}
                   />
                 </>

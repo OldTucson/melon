@@ -3,7 +3,7 @@ import { E2E_USERS } from "./environment";
 import { loginAs } from "./fixtures";
 import {
   test, expect, seedDocument, revokeShare, removeWebAsset,
-  documentFixture, installDocumentBytes,
+  documentFixture, installDocumentBytes, setDocumentEnrichmentPending,
 } from "./inspiration-document-fixtures";
 
 const screenshotStyle = "nextjs-portal { visibility: hidden !important; }";
@@ -120,22 +120,77 @@ for (const viewport of viewports) {
     }
   });
 
+  test(`${viewport.width}x${viewport.height}: initial enrichment reserves geometry through delayed completion`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    await seedDocument(8);
+    await setDocumentEnrichmentPending(true);
+    await installDocumentBytes(page, 8);
+    await loginAs(page, E2E_USERS.designer);
+    await page.goto("/inspiration");
+    const article = page.getByRole("article", { name: documentFixture.title });
+    await expect(article).toBeVisible();
+    const hero = article.getByRole("region", { name: "主视觉", exact: true });
+    await expect(hero.getByRole("status", { name: "主视觉正在加载" })).toBeVisible({ timeout: 5000 });
+    await expect(article.getByRole("region", { name: "研究结论" })).toContainText("公开网络信号指向轻盈面料");
+    await expect(article.getByRole("region", { name: "市场信号" }).getByRole("status")).toHaveCount(3);
+    await expect(article.getByRole("region", { name: "商品参考" }).getByRole("status")).toHaveCount(4);
+    await expect(article.getByRole("link", { name: "打开原始页面" })).toHaveCount(0);
+    const measure = () => article.evaluate((node) => {
+      const origin = node.getBoundingClientRect().top;
+      const sections = Array.from(node.querySelectorAll(":scope > section")).map((section) => {
+        const rect = section.getBoundingClientRect();
+        return { name: section.getAttribute("aria-label"), top: rect.top - origin, bottom: rect.bottom - origin };
+      });
+      return { sections, overflow: document.documentElement.scrollWidth > innerWidth || document.body.scrollWidth > innerWidth };
+    });
+    const before = await measure();
+    expect(before.overflow).toBe(false);
+    for (let i = 1; i < before.sections.length; i++) expect(before.sections[i]!.top + 1).toBeGreaterThanOrEqual(before.sections[i - 1]!.bottom);
+    const mediaBefore = await hero.getByRole("status").boundingBox();
+    await alignSection(hero);
+    await page.screenshot({ path: testInfo.outputPath(`pending-${viewport.width}x${viewport.height}.png`), style: screenshotStyle });
+    // Completion happens only after the pending report has been read and measured.
+    await setDocumentEnrichmentPending(false);
+    await expect(article.getByRole("button", { name: /^预览：/ })).toHaveCount(8);
+    await expect(article.getByRole("status")).toHaveCount(0);
+    const after = await measure();
+    const mediaAfter = await hero.getByRole("button").boundingBox();
+    expect(mediaAfter!.width).toBeCloseTo(mediaBefore!.width, 1);
+    expect(mediaAfter!.height).toBeCloseTo(mediaBefore!.height, 1);
+    expect(after.sections.find(({ name }) => name === "研究结论")!.top).toBeCloseTo(before.sections.find(({ name }) => name === "研究结论")!.top, 1);
+    expect(after.sections.find(({ name }) => name === "商品参考")!.top).toBeCloseTo(before.sections.find(({ name }) => name === "商品参考")!.top, 1);
+    expect(after.sections.find(({ name }) => name === "设计灵感")!.top).toBeCloseTo(before.sections.find(({ name }) => name === "设计灵感")!.top, 1);
+    await assertDocument(page, 8, viewport.columns);
+    await alignSection(hero);
+    await page.screenshot({ path: testInfo.outputPath(`completed-${viewport.width}x${viewport.height}.png`), style: screenshotStyle });
+  });
+
   test(`${viewport.width}x${viewport.height}: broken media preserves ratio and source`, async ({ page }, testInfo) => {
     await page.setViewportSize(viewport);
     await seedDocument(8);
-    await installDocumentBytes(page, 8);
-    await page.goto(documentFixture.sharePath);
+    let releaseHero!: () => void;
+    const heroResponse = new Promise<void>((resolve) => { releaseHero = resolve; });
+    await installDocumentBytes(page, 8, true, heroResponse);
+    await page.goto(documentFixture.sharePath, { waitUntil: "domcontentloaded" });
     const trigger = page.getByRole("button", { name: "预览：棉麻主视觉", exact: true });
-    const before = (await trigger.boundingBox())!;
-    await installDocumentBytes(page, 8, true);
-    await page.reload();
+    // Measure before the first response, avoiding WebKit's decoded-image cache.
+    // Use document coordinates because preview focus may scroll the viewport.
+    const geometry = () => trigger.evaluate((node) => {
+      const rect = node.getBoundingClientRect();
+      return { x: rect.x + scrollX, y: rect.y + scrollY, width: rect.width, height: rect.height };
+    });
+    await expect(trigger.getByRole("img")).toBeVisible();
+    const before = await geometry();
+    expect(before.width / before.height).toBeCloseTo(4 / 3, 2);
+    releaseHero();
+    await expect(trigger.getByText("图片暂时无法显示")).toBeVisible();
     // A newly mounted dialog handles the same corrupt bytes after hydration.
     await trigger.click();
     const hydratedDialog = page.getByRole("dialog", { name: "棉麻主视觉", exact: true });
     await expect(hydratedDialog.getByText("图片暂时无法显示")).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(trigger.getByText("图片暂时无法显示")).toBeVisible();
-    expect(await trigger.boundingBox()).toEqual(before);
+    expect(await geometry()).toEqual(before);
     await expect(page.getByRole("region", { name: "主视觉" }).getByRole("link", { name: "打开原始页面" })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath(`broken-${viewport.width}x${viewport.height}.png`), fullPage: true, style: screenshotStyle });
   });
@@ -156,7 +211,9 @@ async function keyboardDialog(page: Page, trigger: Locator) {
   await trigger.scrollIntoViewIfNeeded();
   // Reach the trigger using actual sequential keyboard navigation.
   await page.locator("body").click({ position: { x: 1, y: 1 } });
-  for (let i = 0; i < 100 && !(await trigger.evaluate((node) => node === document.activeElement)); i++) await page.keyboard.press("Tab");
+  // macOS WebKit uses Option-Tab for links/buttons under its default keyboard preference.
+  const tab = process.platform === "darwin" && page.context().browser()?.browserType().name() === "webkit" ? "Alt+Tab" : "Tab";
+  for (let i = 0; i < 100 && !(await trigger.evaluate((node) => node === document.activeElement)); i++) await page.keyboard.press(tab);
   await expect(trigger).toBeFocused();
   await page.keyboard.press("Enter");
   const dialog = page.getByRole("dialog", { name: "棉麻主视觉", exact: true });

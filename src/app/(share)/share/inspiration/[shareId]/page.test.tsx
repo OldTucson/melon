@@ -48,6 +48,7 @@ describe("public inspiration route", () => {
       analysis.completedAt,
     );
     expect(screen.getByRole("region", { name: "研究来源" })).toBeVisible();
+    expect(screen.getByText("1 个来源 · 1 张视觉素材")).toBeVisible();
     expect(screen.getByRole("img")).toHaveAttribute("src", `/share/inspiration/${shareId}/assets/${webHeroAssetFixture.id}`);
     expect(getSharedInspirationDocument).toHaveBeenCalledExactlyOnceWith(shareId);
   });

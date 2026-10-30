@@ -938,6 +938,15 @@
   overflow-wrap: anywhere;
 }
 
+/* Reserve attribution space with the media; long source text may still wrap. */
+.evidenceFigure .evidenceCaption {
+  min-height: 128px;
+}
+
+.evidenceFigure[data-product="true"] .evidenceCaption {
+  min-height: 200px;
+}
+
 .evidenceCaption strong {
   font-size: 14px;
   font-weight: 600;

@@ -63,8 +63,11 @@ function canonicalUrl(value: string) {
 }
 
 function sourcePageKey(url: URL) {
-  // Compare parameter order independently without rewriting signed download URLs.
+  // A report's HTTP reference may identify its HTTPS upgrade. Preserve every
+  // query parameter: SKU and similar values are part of the product identity.
+  // This comparison never rewrites the candidate or signed image download URL.
   const key = new URL(url.href);
+  key.protocol = "https:";
   key.searchParams.sort();
   return key.href;
 }
@@ -173,16 +176,17 @@ export function classifyWebEvidenceCandidates({ intents, sources, candidates }: 
         ? mappedSources(queryIntent.sourceIndexes, sources)
         : pageSources.map(({ source }) => source);
 
-    // Derive the host from the current report, rather than trusting intent.sourceHosts.
-    const productHostMatches = intent?.role === "product" && mappedSources(intent.sourceIndexes, sources)
-      .some((source) => host(new URL(source.url)) === host(page));
+    // A query or shared host cannot bind a product name to a different page.
+    // Require the candidate's exact page among this product reference's sources.
+    const productPageMatches = intent?.role === "product" && exact
+      .some(({ source }) => intent.sourceIndexes.includes(source.index));
     const title = displayText(candidate.title, 300);
     const sourceQuery = displayText(intent?.query ?? candidate.query, 300);
     if (title === null || sourceQuery === null) continue;
     seen.add(identity);
     const productName = displayText(intent?.productName, 300);
     const role = intent?.role === "product"
-      ? productHostMatches && productName !== null ? "product" : "evidence"
+      ? productPageMatches && productName !== null ? "product" : "evidence"
       : intent?.role ?? "evidence";
     classified.push({
       intentOrder: intent ? intents.indexOf(intent) : intents.length,

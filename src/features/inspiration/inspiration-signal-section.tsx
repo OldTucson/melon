@@ -1,7 +1,7 @@
 import { ExternalLink } from "lucide-react";
 import type { InspirationDocumentDto } from "@/features/inspiration-visuals/document-contracts";
 import type { InspirationSource } from "./contracts";
-import { EvidenceFigure } from "./inspiration-hero-evidence";
+import { EvidenceFigure, EvidenceLoadingFigure } from "./inspiration-hero-evidence";
 import styles from "./inspiration.module.css";
 
 export const signalStrengths = {
@@ -47,9 +47,11 @@ export function DocumentSourceLinks({
 export function InspirationSignalSection({
   signals,
   sources,
+  loading = false,
 }: {
   signals: InspirationDocumentDto["marketSignals"];
   sources: InspirationSource[];
+  loading?: boolean;
 }) {
   return (
     <section className={styles.documentSection} aria-label="市场信号">
@@ -58,7 +60,7 @@ export function InspirationSignalSection({
         signals.map(({ signal, evidence }, index) => (
           <div
             className={styles.marketSignal}
-            data-has-evidence={evidence.length > 0}
+            data-has-evidence={evidence.length > 0 || (loading && index < 3)}
             key={index}
           >
             <div className={styles.signalText}>
@@ -73,11 +75,15 @@ export function InspirationSignalSection({
                 sources={sources}
               />
             </div>
-            {evidence.length > 0 && (
+            {(evidence.length > 0 || (loading && index < 3)) && (
               <div className={styles.signalEvidence}>
                 {evidence.map((asset) => (
                   <EvidenceFigure key={asset.id} asset={asset} />
                 ))}
+                {loading && evidence.length === 0 && Array.from(
+                  { length: Math.floor(3 / signals.length) + (index < 3 % signals.length ? 1 : 0) },
+                  (_, slot) => <EvidenceLoadingFigure key={slot} label="市场证据正在加载" />,
+                )}
               </div>
             )}
           </div>

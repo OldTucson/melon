@@ -121,6 +121,34 @@ describe("web evidence intent planning", () => {
 });
 
 describe("web evidence candidate classification", () => {
+  it.each([
+    ["different product with meaningful query", "https://shop.test/item?sku=dress", "linen shirt", [4]],
+    ["different product path", "https://shop.test/product/dress", "linen shirt", [2]],
+    ["editorial page on the same host", "https://shop.test/blog/summer", "linen shirt", [2]],
+    ["host-only evidence", "https://shop.test/", "unknown query", [2, 4]],
+    ["query-only evidence", "https://elsewhere.test/item", "linen shirt", [2]],
+  ])("downgrades %s instead of attaching the referenced shirt name", (_name, sourcePageUrl, query, sourceIndexes) => {
+    const [classified] = classifyWebEvidenceCandidates({
+      intents: [{ ...productIntent, brand: "Validated brand" }], sources,
+      candidates: [candidate({ sourcePageUrl, query, priceText: "¥999" })],
+    });
+    expect(classified).toMatchObject({
+      role: "evidence", productName: null, brand: null, priceText: null, sourceIndexes,
+    });
+  });
+
+  it("binds an HTTP product reference to its exact HTTPS page without conflating query identities", () => {
+    const classified = classifyWebEvidenceCandidates({
+      intents: [productIntent],
+      sources: sources.map((source) => ({ ...source, url: source.url.replace("https:", "http:") })),
+      candidates: [candidate({ query: "unknown" }), candidate({ sourcePageUrl: "https://shop.test/item?sku=dress" })],
+    });
+    expect(classified).toMatchObject([
+      { role: "product", productName: "Validated linen shirt", sourceIndexes: [2] },
+      { role: "evidence", productName: null, brand: null, priceText: null, sourceIndexes: [4] },
+    ]);
+  });
+
   it("bounds classified text before import so provider titles cannot break browser projections", () => {
     const [classified] = classifyWebEvidenceCandidates({
       intents: [{ ...productIntent, query: "q".repeat(350), productName: "  " + "p".repeat(350) + "  ", brand: "  " + "b".repeat(150) + "  " }],
@@ -280,6 +308,7 @@ describe("web evidence candidate classification", () => {
       ],
     });
 
+    expect(classified.map(({ role }) => role)).toEqual(["product", "evidence"]);
     expect(classified.map(({ sourcePageUrl }) => sourcePageUrl)).toEqual([
       "https://shop.test/item?sku=shirt", "https://shop.test/item?sku=dress",
     ]);

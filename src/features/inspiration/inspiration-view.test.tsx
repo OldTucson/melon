@@ -361,6 +361,60 @@ describe("inspiration workspace", () => {
     });
   });
 
+  it("reserves the automatic operation before delayed invalidation exposes the completed report to a manual click", async () => {
+    const user = userEvent.setup();
+    let releaseInvalidation!: () => void;
+    let finishVisuals!: (board: InspirationVisualBoardDto) => void;
+    const invalidation = new Promise<void>((resolve) => { releaseInvalidation = resolve; });
+    const actualVisualApi = await vi.importActual<typeof import("@/features/inspiration-visuals/inspiration-visual-api")>("@/features/inspiration-visuals/inspiration-visual-api");
+    visualMocks.create.mockImplementation(actualVisualApi.inspirationVisualApi.create);
+    const originalFetch = globalThis.fetch;
+    const posts: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input) === `${endpoint}/visuals` && init?.method === "POST") {
+        posts.push(JSON.parse(String(init.body)).operationId);
+        return new Promise<Response>((resolve) => { finishVisuals = (board) => resolve(json(board)); });
+      }
+      return originalFetch(input, init);
+    }));
+    const { client } = renderWorkspace();
+    await screen.findByText("暂无研究记录");
+    const invalidate = client.invalidateQueries.bind(client);
+    vi.spyOn(client, "invalidateQueries").mockImplementationOnce(async (filters) => {
+      await invalidation;
+      await invalidate(filters);
+    });
+    await submit(user);
+    await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+    const status = await screen.findByRole("complementary", { name: "视觉素材状态" });
+    await waitFor(() => expect(within(status).getByRole("button")).toBeVisible());
+    // Deliberately click in the formerly unguarded window, before invalidation resolves.
+    await user.click(within(status).getByRole("button"));
+    await waitFor(() => expect(visualMocks.create).toHaveBeenCalledTimes(1));
+    const operation = visualMocks.create.mock.calls[0]![1].operationId;
+    await act(async () => releaseInvalidation());
+    await waitFor(() => expect(screen.queryByText("正在分析…")).not.toBeInTheDocument());
+    expect(visualMocks.create).toHaveBeenCalledExactlyOnceWith(completed.id, { operationId: operation });
+    expect(posts).toEqual([operation]);
+    expect(within(status).getByRole("button")).toBeDisabled();
+    await act(async () => finishVisuals(visualBoardFixture));
+  });
+
+  it("reserves initial automatic media without hiding text and removes placeholders when complete", async () => {
+    const user = userEvent.setup();
+    let finish!: (board: InspirationVisualBoardDto) => void;
+    visualMocks.create.mockImplementation(() => new Promise<InspirationVisualBoardDto>((resolve) => { finish = resolve; }));
+    renderWorkspace();
+    await screen.findByText("暂无研究记录");
+    await submit(user);
+    await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+    expect(screen.getByRole("status", { name: "主视觉正在加载" })).toBeVisible();
+    expect(screen.getByText(completed.result!.summary)).toBeVisible();
+    expect(screen.getByText("2026-10-28")).toHaveAttribute("datetime", completed.completedAt);
+    await act(async () => finish(visualBoardFixture));
+    await waitFor(() => expect(screen.queryByRole("status", { name: "主视觉正在加载" })).not.toBeInTheDocument());
+  });
+
   it("creates one stable visual operation per manual click and a new one on retry", async () => {
     const user = userEvent.setup();
     record = completed;
@@ -417,6 +471,7 @@ describe("inspiration workspace", () => {
       server.nextId,
     ]);
     expect(screen.getByRole("img", { name: "米白色轻盈通勤女装叠穿参考" })).toBeVisible();
+    expect(screen.queryByRole("status", { name: "主视觉正在加载" })).not.toBeInTheDocument();
 
     // Settling the latest mutation must not release another report's lock.
     await act(async () => finish.get(server.nextId)!(visualBoardFixture));
@@ -490,6 +545,7 @@ describe("inspiration workspace", () => {
     expect(screen.getByRole("button", { name: "重试视觉素材" })).toBeEnabled();
     expect(screen.getByRole("heading", { name: "材质" })).toBeVisible();
     expect(screen.getByRole("img", { name: "米白色轻盈通勤女装叠穿参考" })).toBeVisible();
+    expect(screen.queryByRole("status", { name: "主视觉正在加载" })).not.toBeInTheDocument();
     expect(visualMocks.create).not.toHaveBeenCalled();
   });
 

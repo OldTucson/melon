@@ -44,6 +44,32 @@ const compose = (
 afterEach(cleanup);
 
 describe("continuous inspiration document", () => {
+  it("reserves bounded media within readable editorial sections during initial enrichment", () => {
+    const { rerender } = render(<InspirationDocument document={compose([])} title="研究" prompt="需求" initialEnrichment />);
+    expect(screen.getByText(result.summary)).toBeVisible();
+    expect(screen.getByText(result.inspirationPrompts[0]!.direction)).toBeVisible();
+    const hero = screen.getByRole("region", { name: "主视觉" });
+    const loading = within(hero).getByRole("status", { name: "主视觉正在加载" });
+    expect(loading).toHaveAttribute("aria-busy", "true");
+    expect(loading.style.aspectRatio).toBe("4 / 3");
+    expect(within(screen.getByRole("region", { name: "市场信号" })).getAllByRole("status")).toHaveLength(3);
+    expect(within(screen.getByRole("region", { name: "商品参考" })).getAllByRole("status")).toHaveLength(4);
+    expect(within(screen.getByRole("region", { name: "设计灵感" })).getAllByRole("status")).toHaveLength(3);
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "打开原始页面" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /查看商品/ })).not.toBeInTheDocument();
+    rerender(<InspirationDocument document={compose()} title="研究" prompt="需求" />);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "主视觉" })).getByRole("img").parentElement!.style.aspectRatio).toBe("4 / 3");
+  });
+
+  it("shows completion metadata and counts only assets present in the strict document", () => {
+    const document = composeInspirationDocument({ result, sources: [source], webEvidence: [webHeroAssetFixture, webProductAssetFixture], libraryMatches: [libraryMatchAssetFixture], concepts: [generatedConceptAssetFixture] });
+    render(<InspirationDocument document={document} title="研究" prompt="需求" completedAt="2026-10-28T02:00:00.000Z" />);
+    expect(screen.getByText("2026-10-28")).toHaveAttribute("datetime", "2026-10-28T02:00:00.000Z");
+    expect(screen.getByText("1 个来源 · 4 张视觉素材")).toBeVisible();
+  });
+
   it("keeps header, hero, conclusion, signals, all six dimensions, products, directions and sources in reading order", () => {
     render(
       <InspirationDocument
@@ -173,7 +199,7 @@ describe("continuous inspiration document", () => {
     const image = screen.getByRole("img");
     const media = image.parentElement!;
     const ratio = media.style.aspectRatio;
-    expect(ratio).toBe("1200 / 1600");
+    expect(ratio).toBe("4 / 3");
     fireEvent.error(image);
     expect(media.style.aspectRatio).toBe(ratio);
     expect(screen.getByText("图片暂时无法显示")).toBeVisible();
@@ -207,6 +233,7 @@ describe("continuous inspiration document", () => {
       name: webHeroAssetFixture.title,
     });
     expect(within(dialog).getByText("示例时尚站")).toBeVisible();
+    expect(within(dialog).getByText(`查询意图：${webHeroAssetFixture.sourceQuery}`)).toBeVisible();
     expect(
       within(dialog).getByRole("link", { name: "打开原始页面" }),
     ).toHaveAttribute("href", webHeroAssetFixture.sourcePageUrl);

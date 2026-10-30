@@ -16,9 +16,9 @@ export function EvidenceFigure({
   product?: boolean;
 }) {
   return (
-    <figure className={styles.evidenceFigure}>
+    <figure className={styles.evidenceFigure} data-product={product}>
       <InspirationEvidenceDialog asset={asset}>
-        <EvidenceImage asset={asset} eager={eager} />
+        <EvidenceImage asset={asset} eager={eager} editorial />
       </InspirationEvidenceDialog>
       <figcaption className={styles.evidenceCaption}>
         <strong>
@@ -43,15 +43,28 @@ export function EvidenceFigure({
   );
 }
 
+export function EvidenceLoadingFigure({ label, product = false }: { label: string; product?: boolean }) {
+  return (
+    <figure className={styles.evidenceFigure} data-product={product}>
+      <span className={styles.evidenceMedia} style={{ aspectRatio: "4 / 3" }} role="status" aria-label={label} aria-busy="true">
+        <span className={styles.imageFallback}>{label}</span>
+      </span>
+      <figcaption className={styles.evidenceCaption} aria-hidden="true" />
+    </figure>
+  );
+}
+
 export function InspirationHeroEvidence({
   asset,
+  loading = false,
 }: {
   asset: WebEvidenceAssetDto | null;
+  loading?: boolean;
 }) {
-  if (!asset) return null;
+  if (!asset && !loading) return null;
   return (
     <section className={styles.heroEvidence} aria-label="主视觉">
-      <EvidenceFigure asset={asset} eager />
+      {asset ? <EvidenceFigure asset={asset} eager /> : <EvidenceLoadingFigure label="主视觉正在加载" />}
     </section>
   );
 }
