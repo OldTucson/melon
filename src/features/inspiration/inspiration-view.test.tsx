@@ -271,6 +271,15 @@ afterEach(() => {
 });
 
 describe("inspiration workspace", () => {
+  it("renders every dimension as a continuous section without tabs", async () => {
+    record = completed;
+    renderWorkspace();
+    await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+    for (const name of ["款式", "类型", "风格", "品类", "色款", "材质"])
+      expect(screen.getByRole("heading", { name })).toBeVisible();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+  });
+
   it("labels the inspiration workspace as the page main content", () => {
     renderWorkspace();
 
@@ -393,7 +402,7 @@ describe("inspiration workspace", () => {
     ).toBeEnabled();
   });
 
-  it("keeps the active library mosaic while a visual refresh is pending", async () => {
+  it("keeps active private matches and disables another request while refresh is pending", async () => {
     record = completed;
     visualMocks.get.mockResolvedValue({
       ...visualBoardFixture,
@@ -410,10 +419,56 @@ describe("inspiration workspace", () => {
       await screen.findByRole("img", { name: "绿色植物图案" }),
     ).toBeVisible();
     expect(screen.getByRole("status")).toHaveTextContent("正在补充视觉素材");
+    expect(screen.getByRole("button", { name: "正在补充…" })).toBeDisabled();
+    expect(visualMocks.create).not.toHaveBeenCalled();
     expect(screen.getByRole("link", { name: /雨后花园/ })).toHaveAttribute(
       "href",
       visualBoardFixture.libraryMatches[0]!.libraryHref,
     );
+  });
+
+  it("retains document content and branch-specific warnings after a failed partial refresh", async () => {
+    record = completed;
+    visualMocks.get.mockResolvedValue({
+      ...visualBoardFixture,
+      refreshJob: {
+        ...visualBoardFixture.activeJob,
+        id: "00000000-0000-4000-8000-000000000199",
+        status: "failed",
+        errorCode: "INSPIRATION_VISUALS_UNAVAILABLE",
+        warnings: ["INSPIRATION_WEB_VISUALS_UNAVAILABLE"],
+      },
+    });
+    renderWorkspace();
+    await screen.findByRole("img", { name: "绿色植物图案" });
+    expect(screen.getByText("网络视觉参考暂时不可用")).toBeVisible();
+    expect(screen.getByText("本次视觉补充未完成，已保留现有参考。")).toBeVisible();
+    expect(screen.queryByText(/文字报告不受影响/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重试视觉素材" })).toBeEnabled();
+    expect(screen.getByRole("heading", { name: "材质" })).toBeVisible();
+    expect(screen.getByRole("img", { name: "米白色轻盈通勤女装叠穿参考" })).toBeVisible();
+    expect(visualMocks.create).not.toHaveBeenCalled();
+  });
+
+  it("retains the same document DOM during a manual pending refresh and rejected request", async () => {
+    const user = userEvent.setup();
+    record = completed;
+    visualMocks.get.mockResolvedValue(visualBoardFixture);
+    let reject!: (error: Error) => void;
+    visualMocks.create.mockImplementation(() => new Promise((_resolve, rejectPromise) => { reject = rejectPromise; }));
+    renderWorkspace();
+    const image = await screen.findByRole("img", { name: "米白色轻盈通勤女装叠穿参考" });
+    const headline = screen.getByRole("heading", { name: "都市轻通勤的柔和层次" });
+    await user.click(screen.getByRole("button", { name: "刷新视觉素材" }));
+    const pendingButton = screen.getByRole("button", { name: "正在补充…" });
+    expect(pendingButton).toBeDisabled();
+    await user.click(pendingButton);
+    expect(visualMocks.create).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("img", { name: "米白色轻盈通勤女装叠穿参考" })).toBe(image);
+    await act(async () => reject(new Error("request failed")));
+    expect(await screen.findByRole("alert")).toHaveTextContent("已保留现有参考");
+    expect(screen.getByRole("img", { name: "米白色轻盈通勤女装叠穿参考" })).toBe(image);
+    expect(screen.getByRole("heading", { name: "都市轻通勤的柔和层次" })).toBe(headline);
   });
 
   it("keeps the full text report visible when visual loading fails", async () => {

@@ -26,9 +26,10 @@ import { inspirationApi } from "./inspiration-api";
 import { InspirationHistoryDialog } from "./inspiration-history-dialog";
 import { InspirationNewDialog } from "./inspiration-new-dialog";
 import { InspirationPromptForm } from "./inspiration-prompt-form";
-import { InspirationResult } from "./inspiration-result";
+import { InspirationDocument } from "./inspiration-document";
+import { composeInspirationDocument } from "@/features/inspiration-visuals/document-composer";
 import { InspirationShareDialog } from "./inspiration-share-dialog";
-import { InspirationVisualBoard } from "./inspiration-visual-board";
+import { InspirationVisualStatus } from "./inspiration-visual-status";
 import { InspirationWorkspaceHeader } from "./inspiration-workspace-header";
 import { inspirationKeys } from "./query-keys";
 import styles from "./inspiration.module.css";
@@ -382,7 +383,12 @@ export function InspirationView() {
     setNotice(null);
   }
   function refreshSelectedVisuals() {
-    if (!selected || selected.status !== "completed") return;
+    if (
+      !selected ||
+      selected.status !== "completed" ||
+      visuals.data?.refreshJob?.status === "pending" ||
+      (refreshVisuals.isPending && refreshVisuals.variables?.analysisId === selected.id)
+    ) return;
     refreshVisuals.mutate({
       analysisId: selected.id,
       operationId: crypto.randomUUID(),
@@ -390,6 +396,43 @@ export function InspirationView() {
   }
   const selectedVisualMutation =
     refreshVisuals.variables?.analysisId === selected?.id;
+
+  const recordActions = selected && selected.status !== "pending" ? (
+    <div className={styles.actions}>
+      <IconButton
+        label="重命名"
+        disabled={editing}
+        onClick={(event) => openDialog("rename", event.currentTarget)}
+      >
+        <Pencil aria-hidden="true" />
+      </IconButton>
+      {selected.status === "completed" && (
+        <IconButton
+          label="分享研究"
+          disabled={editing}
+          onClick={(event) => openDialog("share", event.currentTarget)}
+        >
+          <Share2 aria-hidden="true" />
+        </IconButton>
+      )}
+      <IconButton
+        label="删除研究"
+        disabled={editing || pending}
+        onClick={(event) => openDialog("delete", event.currentTarget)}
+      >
+        <Trash2 aria-hidden="true" />
+      </IconButton>
+    </div>
+  ) : null;
+  const document = selected?.status === "completed" && selected.result
+    ? composeInspirationDocument({
+        result: selected.result,
+        sources: selected.sources ?? [],
+        webEvidence: visuals.data?.webEvidence,
+        libraryMatches: visuals.data?.libraryMatches,
+        concepts: visuals.data?.concepts,
+      })
+    : null;
 
   return (
     <main
@@ -465,46 +508,18 @@ export function InspirationView() {
           )}
           {selected && !unavailable && (
             <>
-              <header className={styles.detailHeader}>
-                <div>
-                  <p className={styles.sectionKicker}>RESEARCH REPORT</p>
-                  <h2 className={styles.recordTitle}>{selected.title}</h2>
-                </div>
-                {selected.status !== "pending" && (
-                  <div className={styles.actions}>
-                    <IconButton
-                      label="重命名"
-                      disabled={editing}
-                      onClick={(event) =>
-                        openDialog("rename", event.currentTarget)
-                      }
-                    >
-                      <Pencil aria-hidden="true" />
-                    </IconButton>
-                    {selected.status === "completed" && (
-                      <IconButton
-                        label="分享研究"
-                        disabled={editing}
-                        onClick={(event) =>
-                          openDialog("share", event.currentTarget)
-                        }
-                      >
-                        <Share2 aria-hidden="true" />
-                      </IconButton>
-                    )}
-                    <IconButton
-                      label="删除研究"
-                      disabled={editing || pending}
-                      onClick={(event) =>
-                        openDialog("delete", event.currentTarget)
-                      }
-                    >
-                      <Trash2 aria-hidden="true" />
-                    </IconButton>
-                  </div>
-                )}
-              </header>
-              <p className={styles.originalPrompt}>{selected.prompt}</p>
+              {!document && (
+                <>
+                  <header className={styles.detailHeader}>
+                    <div>
+                      <p className={styles.sectionKicker}>RESEARCH REPORT</p>
+                      <h2 className={styles.recordTitle}>{selected.title}</h2>
+                    </div>
+                    {recordActions}
+                  </header>
+                  <p className={styles.originalPrompt}>{selected.prompt}</p>
+                </>
+              )}
               {selected.status === "pending" && (
                 <p role="status">正在分析这份研究…</p>
               )}
@@ -525,34 +540,23 @@ export function InspirationView() {
                   </button>
                 </div>
               )}
-              {selected.status === "completed" && selected.result && (
-                <InspirationResult
-                  result={selected.result}
-                  sources={selected.sources ?? []}
-                  visualSummary={
-                    <InspirationVisualBoard
-                      placement="summary"
-                      board={visuals.data}
-                      loading={visuals.isPending}
-                      error={
-                        visuals.isError ||
-                        (selectedVisualMutation &&
-                          refreshVisuals.isError &&
-                          visuals.data === undefined)
-                      }
-                      refreshing={
-                        selectedVisualMutation && refreshVisuals.isPending
-                      }
-                      onRefresh={refreshSelectedVisuals}
-                    />
-                  }
-                  libraryMatches={
-                    <InspirationVisualBoard
-                      placement="library"
-                      board={visuals.data}
-                    />
-                  }
-                />
+              {document && (
+                <>
+                  <InspirationVisualStatus
+                    board={visuals.data}
+                    loading={visuals.isPending}
+                    error={visuals.isError || (selectedVisualMutation && refreshVisuals.isError)}
+                    refreshing={selectedVisualMutation && refreshVisuals.isPending}
+                    onRefresh={refreshSelectedVisuals}
+                  />
+                  <InspirationDocument
+                    key={selected.id}
+                    document={document}
+                    title={selected.title}
+                    prompt={selected.prompt}
+                    headerActions={recordActions}
+                  />
+                </>
               )}
               {activeDialog?.kind === "share" && (
                 <InspirationShareDialog
