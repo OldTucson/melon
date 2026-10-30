@@ -5,10 +5,12 @@ import * as Dialog from "@radix-ui/react-dialog";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import {
   useInfiniteQuery,
+  useMutationState,
   useMutation,
   useQuery,
   useQueryClient,
   type InfiniteData,
+  type MutationFilters,
   type QueryClient,
 } from "@tanstack/react-query";
 import { Pencil, RefreshCw, Share2, Trash2 } from "lucide-react";
@@ -183,7 +185,20 @@ export function InspirationView() {
     }
     await invalidate();
   };
+  const visualMutationKey = [...inspirationKeys.all(ownerId), "refresh-visuals"];
+  const pendingVisualMutationFilters: MutationFilters = {
+    mutationKey: visualMutationKey,
+    status: "pending",
+  };
+  // Subscribe to all owned pending requests; selection changes only the lookup.
+  const pendingVisualAnalysisIds = useMutationState({
+    filters: pendingVisualMutationFilters,
+    select: (mutation) =>
+      (mutation.state.variables as { analysisId: string } | undefined)?.analysisId,
+  });
+  const selectedVisualPending = pendingVisualAnalysisIds.includes(selectedId ?? "");
   const refreshVisuals = useMutation({
+    mutationKey: visualMutationKey,
     mutationFn: ({
       analysisId,
       operationId,
@@ -387,7 +402,12 @@ export function InspirationView() {
       !selected ||
       selected.status !== "completed" ||
       visuals.data?.refreshJob?.status === "pending" ||
-      (refreshVisuals.isPending && refreshVisuals.variables?.analysisId === selected.id)
+      client.isMutating({
+        ...pendingVisualMutationFilters,
+        predicate: (mutation) =>
+          (mutation.state.variables as { analysisId: string } | undefined)
+            ?.analysisId === selected.id,
+      }) > 0
     ) return;
     refreshVisuals.mutate({
       analysisId: selected.id,
@@ -546,7 +566,7 @@ export function InspirationView() {
                     board={visuals.data}
                     loading={visuals.isPending}
                     error={visuals.isError || (selectedVisualMutation && refreshVisuals.isError)}
-                    refreshing={selectedVisualMutation && refreshVisuals.isPending}
+                    refreshing={selectedVisualPending}
                     onRefresh={refreshSelectedVisuals}
                   />
                   <InspirationDocument

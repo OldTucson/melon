@@ -383,6 +383,49 @@ describe("inspiration workspace", () => {
     expect(secondOperation).not.toBe(firstOperation);
   });
 
+  it("keeps A's refresh pending across A → B → A while both requests are unresolved", async () => {
+    const user = userEvent.setup();
+    const server = pollingHistoryServer();
+    server.completeAndReorder();
+    server.currentFirst();
+    const finish = new Map<string, (board: InspirationVisualBoardDto) => void>();
+    visualMocks.get.mockResolvedValue(visualBoardFixture);
+    visualMocks.create.mockImplementation((analysisId: string) =>
+      new Promise<InspirationVisualBoardDto>((resolve) => {
+        finish.set(analysisId, resolve);
+      }),
+    );
+    renderWorkspace();
+    await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+    await user.click(await screen.findByRole("button", { name: "刷新视觉素材" }));
+    await waitFor(() => expect(finish.has(completed.id)).toBe(true));
+
+    await selectHistoryRecord(user, /夏日材质研究/);
+    await screen.findByRole("heading", { name: "夏日材质新结果" });
+    await user.click(await screen.findByRole("button", { name: "刷新视觉素材" }));
+    await waitFor(() => expect(finish.has(server.nextId)).toBe(true));
+
+    await selectHistoryRecord(user, /都市轻通勤女装研究/);
+    await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+    const refresh = screen.getByRole("complementary", { name: "视觉素材状态" });
+    const button = within(refresh).getByRole("button");
+    expect(button).toBeDisabled();
+    expect(button).toHaveTextContent("正在补充…");
+    await user.click(button);
+    expect(visualMocks.create.mock.calls.map(([id]) => id)).toEqual([
+      completed.id,
+      server.nextId,
+    ]);
+    expect(screen.getByRole("img", { name: "米白色轻盈通勤女装叠穿参考" })).toBeVisible();
+
+    // Settling the latest mutation must not release another report's lock.
+    await act(async () => finish.get(server.nextId)!(visualBoardFixture));
+    expect(button).toBeDisabled();
+    await act(async () => finish.get(completed.id)!(visualBoardFixture));
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(visualMocks.create).toHaveBeenCalledTimes(2);
+  });
+
   it("hides visual refresh when the server reports that it is unavailable", async () => {
     record = completed;
     visualMocks.get.mockResolvedValue({
