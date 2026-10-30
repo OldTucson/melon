@@ -1,7 +1,7 @@
 import "server-only";
 
 import { createHash, randomUUID } from "node:crypto";
-import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, lte, ne, sql } from "drizzle-orm";
 
 import { createAlibabaBrowserCredentialIssuer } from "@/features/storage/cloud-credentials";
 import {
@@ -60,6 +60,17 @@ import { derivePatternName, sanitizeDownloadName } from "./filenames";
 const UPLOAD_SESSION_DURATION_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_VERIFICATION_TIMEOUT_MS = 10_000;
 const CLEANUP_WARNING = "UPLOAD_MULTIPART_CLEANUP_PENDING" as const;
+const ACTIVE_UPLOAD_SESSION_STATUSES = [
+  "initialized",
+  "uploading",
+  "completing",
+] as const;
+const ACTIVE_UPLOAD_PATTERN_STATUSES = new Set<PatternRow["status"]>([
+  "draft",
+  "hashing",
+  "uploading",
+  "processing",
+]);
 
 type UploadDatabase = typeof db;
 type PatternRow = typeof patterns.$inferSelect;
@@ -603,6 +614,75 @@ export function createUploadService(dependencies: UploadServiceDependencies) {
   }
 
   return {
+    async expireStaleSessions(input: { limit?: number } = {}) {
+      const limit = input.limit ?? 100;
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
+        throw new Error("UPLOAD_CLEANUP_LIMIT_INVALID");
+      }
+      const timestamp = now();
+      const candidates = await database
+        .select({
+          id: uploadSessions.id,
+          ownerId: uploadSessions.ownerId,
+        })
+        .from(uploadSessions)
+        .where(
+          and(
+            inArray(uploadSessions.status, ACTIVE_UPLOAD_SESSION_STATUSES),
+            lte(uploadSessions.expiresAt, timestamp),
+          ),
+        )
+        .orderBy(asc(uploadSessions.expiresAt), asc(uploadSessions.id))
+        .limit(limit);
+
+      let expired = 0;
+      for (const candidate of candidates) {
+        const updated = await database.transaction(async (tx) => {
+          const state = await lockOwnedUploadState(
+            tx,
+            candidate.ownerId,
+            candidate.id,
+          );
+          if (
+            !state ||
+            !ACTIVE_UPLOAD_SESSION_STATUSES.includes(
+              state.session.status as (typeof ACTIVE_UPLOAD_SESSION_STATUSES)[number],
+            ) ||
+            timestamp < state.session.expiresAt
+          ) {
+            return false;
+          }
+
+          if (ACTIVE_UPLOAD_PATTERN_STATUSES.has(state.pattern.status)) {
+            await persistFailure(
+              tx,
+              state.session,
+              "UPLOAD_SESSION_EXPIRED",
+              timestamp,
+              "expired",
+            );
+          } else {
+            await tx
+              .update(uploadSessions)
+              .set({
+                status: "expired",
+                lastErrorCode: "UPLOAD_SESSION_EXPIRED",
+                updatedAt: timestamp,
+              })
+              .where(
+                and(
+                  eq(uploadSessions.ownerId, state.session.ownerId),
+                  eq(uploadSessions.id, state.session.id),
+                ),
+              );
+          }
+          return true;
+        });
+        if (updated) expired += 1;
+      }
+      return expired;
+    },
+
     async initialize(input: { ownerId: string; input: UploadInitInput }) {
       const ownerId = parseOwnerId(input.ownerId);
       const parsed = parseUploadInit(input.input);
@@ -1470,6 +1550,12 @@ export const completeUpload = (
 export const cancelUpload = (
   input: Parameters<ReturnType<typeof createUploadService>["cancel"]>[0],
 ) => getDefaultUploadService().cancel(input);
+
+export const expireStaleUploadSessions = (
+  input?: Parameters<
+    ReturnType<typeof createUploadService>["expireStaleSessions"]
+  >[0],
+) => getDefaultUploadService().expireStaleSessions(input);
 
 export const signAssetDownload = (
   input: Parameters<

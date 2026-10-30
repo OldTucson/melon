@@ -213,6 +213,8 @@ sudo chown -h root:root /opt/melon/current
 sudo install -o root -g root -m 0644 /opt/melon/current/deploy/systemd/melon-web.service /etc/systemd/system/melon-web.service
 sudo install -o root -g root -m 0644 /opt/melon/current/deploy/systemd/melon-preview-cleanup.service /etc/systemd/system/melon-preview-cleanup.service
 sudo install -o root -g root -m 0644 /opt/melon/current/deploy/systemd/melon-preview-cleanup.timer /etc/systemd/system/melon-preview-cleanup.timer
+sudo install -o root -g root -m 0644 /opt/melon/current/deploy/systemd/melon-upload-cleanup.service /etc/systemd/system/melon-upload-cleanup.service
+sudo install -o root -g root -m 0644 /opt/melon/current/deploy/systemd/melon-upload-cleanup.timer /etc/systemd/system/melon-upload-cleanup.timer
 sudo install -o root -g root -m 0644 /opt/melon/current/deploy/systemd/melon-trash-cleanup.service /etc/systemd/system/melon-trash-cleanup.service
 sudo install -o root -g root -m 0644 /opt/melon/current/deploy/systemd/melon-trash-cleanup.timer /etc/systemd/system/melon-trash-cleanup.timer
 sudo install -o root -g root -m 0644 /opt/melon/current/deploy/systemd/melon-auth-cleanup.service /etc/systemd/system/melon-auth-cleanup.service
@@ -222,6 +224,8 @@ sudo systemd-analyze verify \
   /etc/systemd/system/melon-web.service \
   /etc/systemd/system/melon-preview-cleanup.service \
   /etc/systemd/system/melon-preview-cleanup.timer \
+  /etc/systemd/system/melon-upload-cleanup.service \
+  /etc/systemd/system/melon-upload-cleanup.timer \
   /etc/systemd/system/melon-trash-cleanup.service \
   /etc/systemd/system/melon-trash-cleanup.timer \
   /etc/systemd/system/melon-auth-cleanup.service \
@@ -230,6 +234,7 @@ sudo systemd-analyze verify \
 sudo systemctl daemon-reload
 sudo systemctl enable --now \
   melon-preview-cleanup.timer \
+  melon-upload-cleanup.timer \
   melon-trash-cleanup.timer \
   melon-auth-cleanup.timer \
   melon-web.service
@@ -267,7 +272,7 @@ curl --fail --silent --show-error https://your-production-host.example/api/healt
 
 ## 日志、保留和告警
 
-将 `melon-web`、三个 cleanup service、反向代理和 RDS 审计/错误日志转发到受控日志系统，保留至少 180 天（六个月）。日志平台必须限制访问并配置生命周期；任何日志都不得记录密码、`AUTH_SECRET`、AccessKey、STS token、内部 token、签名 URL、原始查询图片或图案源文件。
+将 `melon-web`、四个 cleanup service、反向代理和 RDS 审计/错误日志转发到受控日志系统，保留至少 180 天（六个月）。日志平台必须限制访问并配置生命周期；任何日志都不得记录密码、`AUTH_SECRET`、AccessKey、STS token、内部 token、签名 URL、原始查询图片或图案源文件。
 
 至少配置以下告警：
 
@@ -276,13 +281,13 @@ curl --fail --silent --show-error https://your-production-host.example/api/healt
 - PostgreSQL 连接、存储、备份、复制延迟及 RDS 快照失败。
 - OSS 403/5xx、STS 签发失败和对象删除失败。
 - 任一 cleanup service 非零退出，或 systemd timer 未处于 active、最近触发时间超过两个计划周期。
-- 回收站持续 `deleting`、预览清理持续 pending、登录限流清理长时间未执行。
+- 回收站持续 `deleting`、上传或预览清理持续 pending、登录限流清理长时间未执行。
 
 定时器告警不得只看 timer 是否存在，还要监控对应 service 的最近退出状态：
 
 ```bash
-systemctl is-active melon-preview-cleanup.timer melon-trash-cleanup.timer melon-auth-cleanup.timer
-systemctl show -p Result melon-preview-cleanup.service melon-trash-cleanup.service melon-auth-cleanup.service
+systemctl is-active melon-preview-cleanup.timer melon-upload-cleanup.timer melon-trash-cleanup.timer melon-auth-cleanup.timer
+systemctl show -p Result melon-preview-cleanup.service melon-upload-cleanup.service melon-trash-cleanup.service melon-auth-cleanup.service
 journalctl -u 'melon-*-cleanup.service' --since '-2 days' --no-pager
 ```
 
@@ -309,7 +314,7 @@ curl --fail --silent --show-error http://127.0.0.1:3000/api/health/ready
 - [ ] RDS 快照、逻辑备份、校验和及隔离恢复演练均有记录。
 - [ ] `npm run prod:check` 在目标环境输出 PASS。
 - [ ] 迁移记录正确，主站 `live` 和 `ready` 的回环及 HTTPS 检查均通过。
-- [ ] systemd unit 通过 `systemd-analyze verify`，三个 timer 已启用且运行时间合理。
+- [ ] systemd unit 通过 `systemd-analyze verify`，四个 timer 已启用且运行时间合理。
 - [ ] TLS、安全头、代理 IP 覆盖规则和端口隔离已验证。
 - [ ] 日志保留为 180 天且告警已进行一次受控触发测试。
 - [ ] ICP/公安备案只展示真实已取得的值。

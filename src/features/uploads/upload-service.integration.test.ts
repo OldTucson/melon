@@ -623,6 +623,58 @@ describe("upload service lifecycle", () => {
     });
   });
 
+  it("expires abandoned sessions without changing uploads before their deadline", async () => {
+    const abandoned = await service.initialize({
+      ownerId: ownerA,
+      input: initInput(),
+    });
+    now = new Date(INITIAL_NOW.getTime() + 12 * 60 * 60 * 1_000);
+    const active = await service.initialize({
+      ownerId: ownerA,
+      input: initInput(),
+    });
+    now = new Date(abandoned.session.expiresAt);
+
+    const cleanupService = service as typeof service & {
+      expireStaleSessions(): Promise<number>;
+    };
+    await expect(cleanupService.expireStaleSessions()).resolves.toBe(1);
+
+    const [abandonedSession] = await db
+      .select()
+      .from(uploadSessions)
+      .where(eq(uploadSessions.id, abandoned.session.id));
+    const [abandonedPattern] = await db
+      .select()
+      .from(patterns)
+      .where(eq(patterns.id, abandoned.pattern.id));
+    const [activeSession] = await db
+      .select()
+      .from(uploadSessions)
+      .where(eq(uploadSessions.id, active.session.id));
+    const [activePattern] = await db
+      .select()
+      .from(patterns)
+      .where(eq(patterns.id, active.pattern.id));
+
+    expect(abandonedSession).toMatchObject({
+      status: "expired",
+      lastErrorCode: "UPLOAD_SESSION_EXPIRED",
+    });
+    expect(abandonedPattern).toMatchObject({
+      status: "failed",
+      lastErrorCode: "UPLOAD_SESSION_EXPIRED",
+    });
+    expect(activeSession).toMatchObject({
+      status: "initialized",
+      lastErrorCode: null,
+    });
+    expect(activePattern).toMatchObject({
+      status: "uploading",
+      lastErrorCode: null,
+    });
+  });
+
   it("refreshes the same active operation without storing credential material", async () => {
     const initialized = await service.initialize({
       ownerId: ownerA,

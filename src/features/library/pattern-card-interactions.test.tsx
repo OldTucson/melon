@@ -84,6 +84,21 @@ describe("pattern card interactions", () => {
     expect(screen.getByRole("link", { name: "下载 Leaf" })).toBeInTheDocument();
   });
 
+  it("labels a failed upload instead of reporting a pending preview", () => {
+    renderCard({
+      item: {
+        ...item,
+        status: "failed",
+        previewStatus: "pending",
+        previewAssetId: null,
+        thumbnailAssetId: null,
+      },
+    });
+
+    expect(screen.getByText("上传失败")).toBeInTheDocument();
+    expect(screen.queryByText("正在准备预览")).not.toBeInTheDocument();
+  });
+
   it("opens preview on a real double click without opening a closed inspector", async () => {
     const user = userEvent.setup();
     const props = renderCard();

@@ -144,10 +144,12 @@ describe("web systemd operations contract", () => {
   });
 
   it("schedules all maintenance commands with hardened one-shot units", async () => {
-    const [previewService, previewTimer, trashService, trashTimer, authService, authTimer] =
+    const [previewService, previewTimer, uploadService, uploadTimer, trashService, trashTimer, authService, authTimer] =
       await Promise.all([
         readRepositoryFile("deploy/systemd/melon-preview-cleanup.service"),
         readRepositoryFile("deploy/systemd/melon-preview-cleanup.timer"),
+        readRepositoryFile("deploy/systemd/melon-upload-cleanup.service"),
+        readRepositoryFile("deploy/systemd/melon-upload-cleanup.timer"),
         readRepositoryFile("deploy/systemd/melon-trash-cleanup.service"),
         readRepositoryFile("deploy/systemd/melon-trash-cleanup.timer"),
         readRepositoryFile("deploy/systemd/melon-auth-cleanup.service"),
@@ -155,15 +157,17 @@ describe("web systemd operations contract", () => {
       ]);
 
     expect(previewTimer).toMatch(/OnUnitActiveSec=5min/);
+    expect(uploadTimer).toMatch(/OnUnitActiveSec=5min/);
     expect(trashTimer).toMatch(/OnCalendar=daily/);
     expect(authTimer).toMatch(/OnCalendar=daily/);
-    for (const timer of [previewTimer, trashTimer, authTimer]) {
+    for (const timer of [previewTimer, uploadTimer, trashTimer, authTimer]) {
       expect(timer).toMatch(/Persistent=true/);
       expect(timer).toMatch(/WantedBy=timers\.target/);
     }
 
     for (const [service, command] of [
       [previewService, "preview:cleanup"],
+      [uploadService, "upload:cleanup"],
       [trashService, "trash:cleanup"],
       [authService, "auth:cleanup"],
     ]) {

@@ -106,6 +106,7 @@ export function PatternPreview({ pattern }: { pattern: PatternItem }) {
           ) : (
             <FormatPlaceholder
               extension={pattern.extension}
+              status={pattern.status}
               previewStatus={pattern.previewStatus}
             />
           )}
