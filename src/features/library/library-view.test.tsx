@@ -1537,7 +1537,9 @@ describe("Mac-first workspace", () => {
     const first = await screen.findByRole("listitem", { name: /Pattern 1/ });
     const second = screen.getByRole("listitem", { name: /Pattern 2/ });
     fireEvent.click(within(first).getByRole("checkbox"));
-    fireEvent.click(within(second).getByRole("checkbox"), { metaKey: true });
+    fireEvent.click(within(second).getByRole("checkbox"));
+    expect(within(first).getByRole("checkbox")).toBeChecked();
+    expect(within(second).getByRole("checkbox")).toBeChecked();
     fireEvent.click(
       within(first).getByRole("button", { name: "打开 Pattern 1 检查器" }),
       { detail: 0 },
@@ -1964,15 +1966,24 @@ describe("Mac-first workspace", () => {
     ).not.toBeChecked();
   });
 
-  it("uses Command-click on card checkboxes for additive selection", () => {
+  it("toggles card checkboxes independently without modifier keys", () => {
     renderLibrary([makePattern(1), makePattern(2)]);
 
     selectPattern("Pattern 1");
-    selectPattern("Pattern 2", { metaKey: true });
+    selectPattern("Pattern 2");
 
     expect(
       screen.getByRole("checkbox", { name: "选择 Pattern 1" }),
     ).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: "选择 Pattern 2" }),
+    ).toBeChecked();
+
+    selectPattern("Pattern 1");
+
+    expect(
+      screen.getByRole("checkbox", { name: "选择 Pattern 1" }),
+    ).not.toBeChecked();
     expect(
       screen.getByRole("checkbox", { name: "选择 Pattern 2" }),
     ).toBeChecked();

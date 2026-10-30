@@ -134,6 +134,7 @@ export function PatternCard({
             ctrlKey: event.ctrlKey,
             metaKey: event.metaKey,
             shiftKey: event.shiftKey,
+            toggle: true,
           });
         }}
         onDoubleClick={(event) => event.stopPropagation()}

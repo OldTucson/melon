@@ -20,6 +20,15 @@ describe("library selection store", () => {
     });
   });
 
+  it("toggles independent checkbox selections without keyboard modifiers", () => {
+    store.getState().select("b", orderedIds, { toggle: true });
+    store.getState().select("d", orderedIds, { toggle: true });
+    store.getState().select("b", orderedIds, { toggle: true });
+
+    expect(store.getState().selectedIds).toEqual(["d"]);
+    expect(store.getState().anchorId).toBe("b");
+  });
+
   it("uses Command to toggle discrete patterns and keeps the clicked anchor", () => {
     store.getState().select("b", orderedIds, {});
     store.getState().select("d", orderedIds, { metaKey: true });

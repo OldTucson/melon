@@ -178,7 +178,7 @@ function selectImageSearchResult(
       return { ...current, selectedIds: orderedIds.slice(start, end + 1) };
     }
   }
-  if (modifiers.metaKey || modifiers.ctrlKey) {
+  if (modifiers.toggle || modifiers.metaKey || modifiers.ctrlKey) {
     const selectedIds = current.selectedIds.includes(id)
       ? current.selectedIds.filter((selectedId) => selectedId !== id)
       : [...current.selectedIds, id];
