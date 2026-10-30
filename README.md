@@ -174,3 +174,51 @@ RUN_REAL_OSS_TESTS=1 npm run test:integration -- src/features/storage/oss-adapte
 - [主站生产运行手册](docs/operations/web-production.md)
 - [以图搜图生产运行手册](docs/operations/visual-search.md)
 - [以图搜图验证记录](docs/verification/2026-10-20-visual-search.md)
+
+## 编辑式灵感报告：候选发布与回滚门禁
+
+生产保持 `INSPIRATION_ENABLED=false`、`INSPIRATION_WEB_VISUALS_ENABLED=false`，先完成 schema 迁移与代码部署。已有私邀账户政策不变；本阶段不开放注册或生成图片。视觉增强失败不得影响已完成的文字报告，刷新失败应保留上一个完整视觉集合。
+
+候选环境配置服务端 `DASHSCOPE_API_KEY`、`DASHSCOPE_WEB_SEARCH_AGENT_ID`（`aid-…`）和 `DASHSCOPE_WEB_SEARCH_AGENT_VERSION`（固定为已验证的 `beta` 或 `release`）。不要使用 `NEXT_PUBLIC_*`，不要把凭据、Agent 请求/响应或图片下载地址写进浏览器、截图、CI 附件和日志。只有候选环境的真实报告验收时才启用 `INSPIRATION_ENABLED=true`、`INSPIRATION_WEB_VISUALS_ENABLED=true`；生产开关须等下面全部门禁通过。
+
+先运行完整离线门禁（只用隔离测试数据库，不访问 provider 或真实 OSS）：
+
+```bash
+npm test
+npm run test:integration
+npm run typecheck
+npm run lint
+npm run build
+npm run test:e2e -- tests/e2e/inspiration-document.spec.ts --project=chromium-desktop
+git diff --check
+```
+
+若本机 `.env.local` 启用了尚未获生产批准的功能，原样 `npm run build` 会被环境 schema 拒绝（例如 `IMAGE_SEARCH_RELEASE_APPROVED`）。保留该安全校验，不伪造批准、不修改本地凭据；关闭功能的候选制品使用下列显式命令，并分别记录原始失败与候选构建结果：
+
+```bash
+IMAGE_SEARCH_ENABLED=false INSPIRATION_ENABLED=false INSPIRATION_WEB_VISUALS_ENABLED=false npm run build
+```
+
+该 spec 直接调用时自动使用既有 metadata-only Playwright 设置；数据库名必须以 `_e2e` 结尾。fixture 只写研究、完成的任务、来源和私有素材元数据，媒体为本地固定 PNG，仅拦截同源应用图片字节路由；不会上传、下载远程图片或运行真实 OSS。测试前后使用仓库隔离数据库保护，资源鉴权拒绝与撤销请求不经过图片拦截。端口占用时用 `E2E_PORT=空闲端口` 重跑，不终止其他进程。不要对生产或非测试数据库执行 fixture。截图保存于 `test-results/inspiration-document-*/`；人工检查登录/分享状态在 1512×982、1280×800、390×844 下的页面顶部、商品区及完整共享文档，确认无重叠、裁切、空白媒体或来源链接丢失。测试同时要求 0/1/4/8 图、960px 左右阅读宽度、3→2→1 商品列、键盘预览/焦点恢复、失败图片等比例占位、私有素材隔离及撤销 404。
+
+经明确批准一次付费请求后，在候选环境终端中安全注入上面的三个 Agent 变量，再运行：
+
+```bash
+npm run test:inspiration:web-real
+```
+
+这条命令显式设置 `RUN_REAL_INSPIRATION_WEB_TESTS=1`，最多发送一次 Agent 请求，无重试、不下载候选图片，仅校验结构化图片候选；输出只含数量和格式校验后的稳定请求 ID。默认 `npm test` 跳过真实分支，只运行离线安全契约。该测试不自动读取 `.env.local`，缺失或无效配置在请求前以固定错误码终止；凭据存在本身不代表同意付费。禁止以重新运行循环补足候选，必须先评审失败原因并重新授权。通过结构化 smoke 仍不代表真实图片、商品可靠性或来源真实性通过。
+
+随后执行候选环境真实端到端验收（人工浏览器；没有把生产数据接入离线 E2E 的快捷命令）：
+
+1. 启动独立候选实例，例如 `npm run start -- --hostname 127.0.0.1 --port 3220`，通过受控候选入口使用私邀测试账号创建一份真实报告。确认文字先可读且只自动启动一次视觉增强；最终至少有一个 hero、一个 evidence、一个可靠商品图片。无可靠商品即发布失败，不得伪造卡片。
+2. 逐一打开原始来源页面，核对商品名称、品牌/网站、图片与上下文；不得把 Agent 标题当作可靠商品事实。确认应用图片请求只走本地字节路由，浏览器无 provider HTML、远程图片地址、内部存储信息或原始失败信息。
+3. 刷新视觉并确认 pending/失败期间旧集合保留、完成后整体替换；验证 owner 可读、跨用户不可读，未登录有效分享可读但无私有图库匹配。撤销分享后旧页面及资产地址均为 404；删除分析后视觉行级联删除，研究对象执行 best-effort 清理，已保存图库素材保持完整。
+4. 对真实报告的登录与分享页面分别捕获三种目标视口截图并人工逐张检查。离线 fixture 截图不能替代这一步。保留不含敏感数据的验收记录和稳定失败码。
+5. schema、离线全部检查、一次 Agent smoke、真实 hero/evidence/可靠商品、每个来源页、owner/share 字节、撤销、删除清理及全部视口截图全部通过后，才做蓝绿切流。先验证关闭开关的绿色实例，保留旧版本和可恢复数据库备份，再按私邀范围启用生产 `INSPIRATION_WEB_VISUALS_ENABLED`（以及文字功能开关），观察后扩大私邀范围。
+
+OSS 为独立外部门禁：bucket 必须私有。服务端角色只获得目标 bucket 研究对象范围所需的 `GetObject`、`PutObject`、`DeleteObject` 最小权限；仅在明确使用列表清理时增加限范围列举权限，禁止公共读、宽泛 `oss:*` 或把研究对象授权给浏览器上传角色。对 `users/*/inspiration/*/research/` 对象设置 30 天生命周期兜底（实际 key 结构及 OSS 的过滤能力须由运维验证，必要时用专用研究 bucket/标签规则），不得覆盖已保存图库或概念素材。发布前在候选 bucket 验证权限和到期规则，而不是仅把这段文字视为已配置。
+
+Task 11 删除清理采用删除前对象快照与 best-effort 删除：并发导入可能在快照后、分析删除前落入新对象，或清理时 OSS 失败，从而留下孤儿；不要宣称原子对象删除或保证重试。部署后的研究范围生命周期是这类竞态/孤儿的外部兜底；30 天规则未配置和验证即不允许启用。监控只能记录稳定错误码、任务耗时、导入数量、失败数量、内存和 OSS 增长汇总，不记录 query/需求文本、远程 URL（含 query string）、provider body、对象 key、owner ID、凭据或授权头。
+
+回滚首先将 `INSPIRATION_WEB_VISUALS_ENABLED=false` 并按部署方式重启/滚动更新，使新视觉导入与刷新停止；保留已完成文字及既有授权访问，不清空数据、不撤销已保存图库。必要时切回蓝色旧版本，保持私邀入口且概念生成继续禁用，验证文字历史与分享撤销仍正常。回滚不等于删除对象，也不能取消已经在途的工作；继续监控稳定码/数量与研究范围生命周期，修复并重过全部门禁后再启用。

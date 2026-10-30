@@ -5,9 +5,14 @@ import {
   E2E_DATABASE_URL,
   E2E_IMAGE_SEARCH,
   E2E_IMAGE_SEARCH_STUB_PORT,
-  E2E_METADATA_ONLY,
+  E2E_METADATA_ONLY as metadataOnly,
   E2E_PORT,
 } from "./tests/e2e/environment";
+
+// This spec never runs the legacy OSS setup, including when invoked directly.
+const inspirationDocument = process.argv.some((argument) => argument.includes("inspiration-document.spec"));
+const E2E_METADATA_ONLY = metadataOnly || inspirationDocument;
+if (E2E_METADATA_ONLY) process.env.E2E_METADATA_ONLY = "1";
 
 // Playwright workers reload this config without the original spec path in argv.
 if (E2E_IMAGE_SEARCH) process.env.E2E_IMAGE_SEARCH = "1";
@@ -37,6 +42,7 @@ export default defineConfig({
     : E2E_METADATA_ONLY
       ? {
           testMatch: [
+            "inspiration-document.spec.ts",
             "commercial-authorizations.spec.ts",
             "dashboard.spec.ts",
             "ui-shell.spec.ts",
@@ -44,6 +50,7 @@ export default defineConfig({
         }
       : {
           testIgnore: [
+            "inspiration-document.spec.ts",
             "commercial-authorizations.spec.ts",
             "dashboard.spec.ts",
             "image-search.spec.ts",
@@ -121,6 +128,8 @@ export default defineConfig({
             APP_ORIGIN: E2E_BASE_URL,
             DATABASE_URL: E2E_DATABASE_URL,
             MELON_E2E_SERVER: "1",
+            INSPIRATION_ENABLED: "false",
+            INSPIRATION_WEB_VISUALS_ENABLED: "false",
             IMAGE_SEARCH_ENABLED: E2E_IMAGE_SEARCH ? "true" : "false",
             ...(E2E_METADATA_ONLY ? metadataEnvironment : {}),
             ...(E2E_IMAGE_SEARCH
