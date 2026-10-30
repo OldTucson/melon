@@ -121,6 +121,40 @@ describe("web evidence intent planning", () => {
 });
 
 describe("web evidence candidate classification", () => {
+  it("bounds classified text before import so provider titles cannot break browser projections", () => {
+    const [classified] = classifyWebEvidenceCandidates({
+      intents: [{ ...productIntent, query: "q".repeat(350), productName: "  " + "p".repeat(350) + "  ", brand: "  " + "b".repeat(150) + "  " }],
+      sources: sources.map((source) => ({ ...source, siteName: "s".repeat(150) })),
+      candidates: [candidate({ query: "q".repeat(350), title: "  " + "t".repeat(500) + "  ", priceText: "  $25  " })],
+    });
+    expect(classified).toMatchObject({
+      title: "t".repeat(300), sourceQuery: "q".repeat(300), sourceSiteName: "s".repeat(120),
+      productName: "p".repeat(300), brand: "b".repeat(120), priceText: "$25",
+    });
+    // The importer copies title to altText, so its 500-character limit also holds.
+    expect(classified!.title.length).toBeLessThanOrEqual(500);
+  });
+
+  it("bounds unmapped query and hostname fallbacks and trims display text", () => {
+    const hostname = `${"a".repeat(60)}.${"b".repeat(60)}.test`;
+    const [classified] = classifyWebEvidenceCandidates({
+      intents: [], sources: [],
+      candidates: [candidate({ sourcePageUrl: `https://${hostname}/page`, query: "q".repeat(350), title: "  Image title  " })],
+    });
+    expect(classified).toMatchObject({ title: "Image title", sourceQuery: "q".repeat(300), sourceSiteName: `${"a".repeat(60)}.${"b".repeat(59)}` });
+  });
+
+  it("keeps a valid duplicate as a fallback after rejecting a blank title", () => {
+    const classified = classifyWebEvidenceCandidates({
+      intents: [], sources: [], candidates: [candidate({ title: "   " }), candidate({ title: "Valid fallback" })],
+    });
+    expect(classified.map(({ title }) => title)).toEqual(["Valid fallback"]);
+  });
+
+  it("drops blank display titles before fetching or storing images", () => {
+    expect(classifyWebEvidenceCandidates({ intents: [], sources: [], candidates: [candidate({ title: "   " })] })).toEqual([]);
+  });
+
   it.each([
     { sourcePageUrl: "http://shop.test/item?sku=shirt" },
     { imageUrl: "http://images.test/shirt.jpg" },

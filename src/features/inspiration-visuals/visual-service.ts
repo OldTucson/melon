@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 
 import { z } from "zod";
 
-import { inspirationAnalysisResultSchema } from "@/features/inspiration/contracts";
+import { inspirationAnalysisResultSchema, inspirationSourcesSchema } from "@/features/inspiration/contracts";
 import {
   inspirationBusy,
   parseInspirationInput,
@@ -23,6 +23,10 @@ import {
 } from "./contracts";
 import { matchLibraryPatterns } from "./library-matcher";
 import * as repository from "./visual-repository";
+import { getWebAgentProvider, type WebEvidenceProvider } from "./web-agent-provider";
+import { importWebEvidence, type WebEvidenceImportResult } from "./web-evidence-importer";
+import { classifyWebEvidenceCandidates, planWebEvidenceIntents } from "./web-evidence-intents";
+import { createVisualObjectStore, type VisualObjectStore } from "./visual-object-store";
 
 const STALE_RESEARCH_JOB_MS = 3 * 60_000;
 
@@ -43,6 +47,9 @@ type CreateResearchVisualsInput = z.input<
 
 type VisualServiceDependencies = {
   matchLibrary?: typeof matchLibraryPatterns;
+  webProvider?: WebEvidenceProvider;
+  importWeb?: typeof importWebEvidence;
+  store?: VisualObjectStore;
   now?: () => Date;
   createId?: () => string;
 };
@@ -130,7 +137,7 @@ async function assembleBoard(ownerId: string, analysisId: string) {
     : [];
 
   return parseInspirationStored(inspirationVisualBoardDtoSchema, {
-    refreshAvailable: getServerEnv().IMAGE_SEARCH_ENABLED,
+    refreshAvailable: getServerEnv().INSPIRATION_WEB_VISUALS_ENABLED || getServerEnv().IMAGE_SEARCH_ENABLED,
     activeJob: active ? toJobDto(active) : null,
     refreshJob: refresh ? toJobDto(refresh) : null,
     webEvidence: visible
@@ -142,6 +149,11 @@ async function assembleBoard(ownerId: string, analysisId: string) {
         title: asset.title,
         altText: asset.altText,
         imageUrl: `/api/inspiration-visual-assets/${asset.id}`,
+        role: asset.documentRole,
+        sourceIndexes: asset.sourceIndexes,
+        brand: asset.brand,
+        productName: asset.productName,
+        priceText: asset.priceText,
         sourcePageUrl: asset.sourcePageUrl,
         sourceSiteName: asset.sourceSiteName,
         sourceQuery: asset.sourceQuery,
@@ -290,63 +302,109 @@ export async function createResearchVisuals(
   }
   if (!job) throw internalError();
 
-  let matched: Awaited<ReturnType<typeof matchLibraryPatterns>>;
+  const signal = input.signal ?? new AbortController().signal;
+  const env = getServerEnv();
+  let store = dependencies.store;
+  const objectStore = () => (store ??= createVisualObjectStore({
+    region: env.ALIYUN_OSS_REGION,
+    bucket: env.ALIYUN_OSS_BUCKET,
+    endpoint: env.ALIYUN_OSS_ENDPOINT,
+    cname: env.ALIYUN_OSS_CNAME,
+  }));
+  const deleteBestEffort = async (keys: readonly string[]) => {
+    if (keys.length === 0) return;
+    try { await objectStore().delete(keys); } catch { /* Never replace the job outcome with a cleanup error. */ }
+  };
+
+  // Snapshot prior committed keys before external work. Never collect keys after
+  // commit: another refresh may already own the target by then.
+  let supersededKeys: string[];
   try {
-    matched = await (dependencies.matchLibrary ?? matchLibraryPatterns)({
-      ownerId: parsed.ownerId,
-      result,
-      signal: input.signal ?? new AbortController().signal,
-    });
+    supersededKeys = await repository.listObjectKeysForAnalysis(parsed.ownerId, parsed.analysisId);
   } catch {
+    return failAttempt(parsed.ownerId, parsed.analysisId, job.id, "INSPIRATION_VISUALS_UNAVAILABLE", [], now());
+  }
+
+  const buildAndImportWebEvidence = async (): Promise<WebEvidenceImportResult> => {
+    if (!env.INSPIRATION_WEB_VISUALS_ENABLED) {
+      return { assets: [], writtenKeys: [], warnings: ["INSPIRATION_WEB_VISUALS_DISABLED"] };
+    }
+    if (signal.aborted) throw internalError();
+    const sources = parseInspirationStored(inspirationSourcesSchema, analysis.sources);
+    const intents = planWebEvidenceIntents({ prompt: analysis.prompt, result, sources });
+    if (intents.length === 0) return { assets: [], writtenKeys: [], warnings: [] };
+    let response;
+    try {
+      response = await (dependencies.webProvider ?? getWebAgentProvider()).search({
+        requestId: job.id,
+        prompt: analysis.prompt,
+        headline: result.headline,
+        summary: result.summary,
+        intents,
+        signal,
+      });
+    } catch (error) {
+      if (!signal.aborted && error instanceof AppError && error.code === "INSPIRATION_VISUALS_EMPTY") {
+        return { assets: [], writtenKeys: [], warnings: [] };
+      }
+      throw error;
+    }
+    const candidates = classifyWebEvidenceCandidates({ intents, sources, candidates: response.candidates });
+    if (candidates.length === 0) return { assets: [], writtenKeys: [], warnings: [] };
+    return (dependencies.importWeb ?? importWebEvidence)({
+      ownerId: parsed.ownerId, analysisId: parsed.analysisId, jobId: job.id, candidates, signal,
+    }, { store: objectStore() });
+  };
+  const matchLibrary = async () => {
+    if (!env.IMAGE_SEARCH_ENABLED) {
+      return { assets: [], warnings: ["INSPIRATION_LIBRARY_MATCH_DISABLED" as const] };
+    }
+    if (signal.aborted) throw internalError();
+    return (dependencies.matchLibrary ?? matchLibraryPatterns)({ ownerId: parsed.ownerId, result, signal });
+  };
+  const [webResult, libraryResult] = await Promise.allSettled([
+    buildAndImportWebEvidence(),
+    matchLibrary(),
+  ]);
+  const web = webResult.status === "fulfilled"
+    ? webResult.value
+    : { assets: [], writtenKeys: [], warnings: ["INSPIRATION_WEB_VISUALS_UNAVAILABLE" as const] };
+  const library = libraryResult.status === "fulfilled"
+    ? libraryResult.value
+    : { assets: [], warnings: ["INSPIRATION_LIBRARY_MATCH_UNAVAILABLE" as const] };
+  const warnings = [...new Set<VisualWarning>([...web.warnings, ...library.warnings])];
+  const unavailable = warnings.includes("INSPIRATION_WEB_VISUALS_UNAVAILABLE") ||
+    warnings.includes("INSPIRATION_LIBRARY_MATCH_UNAVAILABLE");
+  const assets: repository.NewVisualAsset[] = [
+    ...web.assets.map((asset, ordinal) => ({ ...asset, ordinal })),
+    ...library.assets.map((asset, ordinal) => ({ ...asset, ordinal, id: randomUUID() })),
+  ];
+
+  if (signal.aborted || assets.length === 0) {
+    await deleteBestEffort(web.writtenKeys);
     return failAttempt(
-      parsed.ownerId,
-      parsed.analysisId,
-      job.id,
-      "INSPIRATION_VISUALS_UNAVAILABLE",
-      [],
-      now(),
+      parsed.ownerId, parsed.analysisId, job.id,
+      signal.aborted || unavailable ? "INSPIRATION_VISUALS_UNAVAILABLE" : "INSPIRATION_VISUALS_EMPTY",
+      warnings, now(),
     );
   }
 
-  if (matched.assets.length === 0) {
-    return failAttempt(
-      parsed.ownerId,
-      parsed.analysisId,
-      job.id,
-      "INSPIRATION_VISUALS_EMPTY",
-      matched.warnings,
-      now(),
-    );
-  }
-
-  let completion: Awaited<
-    ReturnType<typeof repository.completeResearchJob>
-  >;
+  let completion: Awaited<ReturnType<typeof repository.completeResearchJob>>;
   try {
-    completion = await repository.completeResearchJob(
-      parsed.ownerId,
-      job.id,
-      matched.assets,
-      matched.warnings,
-      now(),
-    );
+    completion = await repository.completeResearchJob(parsed.ownerId, job.id, assets, warnings, now());
   } catch {
-    return failAttempt(
-      parsed.ownerId,
-      parsed.analysisId,
-      job.id,
-      "INSPIRATION_VISUALS_UNAVAILABLE",
-      matched.warnings,
-      now(),
-    );
+    await deleteBestEffort(web.writtenKeys);
+    return failAttempt(parsed.ownerId, parsed.analysisId, job.id, "INSPIRATION_VISUALS_UNAVAILABLE", warnings, now());
   }
-  if (!completion) {
-    await requireOwnedInspiration(parsed.ownerId, parsed.analysisId);
-    throw visualBusy();
-  }
-  if (completion.state === "empty") {
-    throw visualFailure("INSPIRATION_VISUALS_EMPTY", completion.job.id);
+  if (!completion || completion.state === "empty") {
+    await deleteBestEffort(web.writtenKeys);
+    if (!completion) {
+      await requireOwnedInspiration(parsed.ownerId, parsed.analysisId);
+      throw visualBusy();
+    }
+    throw visualFailure(unavailable ? "INSPIRATION_VISUALS_UNAVAILABLE" : "INSPIRATION_VISUALS_EMPTY", completion.job.id);
   }
 
+  await deleteBestEffort(supersededKeys);
   return assembleBoard(parsed.ownerId, parsed.analysisId);
 }

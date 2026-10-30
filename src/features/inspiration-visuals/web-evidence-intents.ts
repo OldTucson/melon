@@ -140,6 +140,10 @@ const boundedText = (value: string | null | undefined, max: number) => {
     : null;
 };
 
+// Normalize before importing: title is also used as altText (whose limit is 500).
+const displayText = (value: string | null | undefined, max: number) =>
+  boundedText(value?.trim().slice(0, max).replace(/[\uD800-\uDBFF]$/u, ""), max);
+
 /** Classifies alternatives; the importer enforces final asset quotas after failures. */
 export function classifyWebEvidenceCandidates({ intents, sources, candidates }: {
   intents: readonly WebEvidenceIntent[];
@@ -156,8 +160,6 @@ export function classifyWebEvidenceCandidates({ intents, sources, candidates }: 
     if (!page || !image || page.protocol !== "https:" || image.protocol !== "https:") continue;
     const identity = JSON.stringify([image.href, sourcePageKey(page)]);
     if (seen.has(identity)) continue;
-    seen.add(identity);
-
     const exact = sourcePages.filter((source) => sourcePageKey(source.page) === sourcePageKey(page));
     const queryIntent = intents.find((intent) => normalizeText(intent.query) === normalizeText(candidate.query));
     const samePath = sourcePages.filter((source) => pagePath(source.page) === pagePath(page));
@@ -174,22 +176,27 @@ export function classifyWebEvidenceCandidates({ intents, sources, candidates }: 
     // Derive the host from the current report, rather than trusting intent.sourceHosts.
     const productHostMatches = intent?.role === "product" && mappedSources(intent.sourceIndexes, sources)
       .some((source) => host(new URL(source.url)) === host(page));
+    const title = displayText(candidate.title, 300);
+    const sourceQuery = displayText(intent?.query ?? candidate.query, 300);
+    if (title === null || sourceQuery === null) continue;
+    seen.add(identity);
+    const productName = displayText(intent?.productName, 300);
     const role = intent?.role === "product"
-      ? productHostMatches && intent.productName !== null ? "product" : "evidence"
+      ? productHostMatches && productName !== null ? "product" : "evidence"
       : intent?.role ?? "evidence";
     classified.push({
       intentOrder: intent ? intents.indexOf(intent) : intents.length,
       candidate: {
         role,
-        title: candidate.title,
+        title,
         imageUrl: image.href,
         sourcePageUrl: page.href,
-        sourceSiteName: boundedText(pageSources[0]?.source.siteName, 120)
-          ?? boundedText(candidate.sourceSiteName, 120) ?? host(page),
-        sourceQuery: intent?.query ?? candidate.query,
+        sourceSiteName: displayText(pageSources[0]?.source.siteName, 120)
+          ?? displayText(candidate.sourceSiteName, 120) ?? displayText(host(page), 120)!,
+        sourceQuery,
         sourceIndexes: mapped.map(({ index }) => index),
-        productName: role === "product" ? intent!.productName : null,
-        brand: role === "product" ? intent!.brand : null,
+        productName: role === "product" ? productName : null,
+        brand: role === "product" ? displayText(intent!.brand, 120) : null,
         priceText: role === "product" ? boundedText(candidate.priceText, 120) : null,
       },
     });

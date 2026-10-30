@@ -1,7 +1,5 @@
 import "server-only";
 
-import { randomUUID } from "node:crypto";
-
 import {
   and,
   asc,
@@ -34,7 +32,7 @@ export type VisualAssetRow = typeof visualAssets.$inferSelect;
 export type NewVisualAsset = Omit<
   typeof visualAssets.$inferInsert,
   "id" | "ownerId" | "analysisId" | "jobId" | "createdAt"
->;
+> & { id: string };
 
 export type VisibleVisualAssetRow = VisualAssetRow & {
   imageAssetId: string | null;
@@ -202,7 +200,8 @@ export async function completeResearchJob(
         .set({
           status: "failed",
           warnings: [...warnings],
-          errorCode: "INSPIRATION_VISUALS_EMPTY",
+          errorCode: warnings.some((warning) => warning === "INSPIRATION_WEB_VISUALS_UNAVAILABLE" || warning === "INSPIRATION_LIBRARY_MATCH_UNAVAILABLE")
+            ? "INSPIRATION_VISUALS_UNAVAILABLE" : "INSPIRATION_VISUALS_EMPTY",
           completedAt,
           updatedAt: completedAt,
         })
@@ -239,7 +238,6 @@ export async function completeResearchJob(
       await tx.insert(visualAssets).values(
         eligibleAssets.map((asset) => ({
           ...asset,
-          id: randomUUID(),
           ownerId: job.ownerId,
           analysisId: job.analysisId,
           jobId: job.id,
@@ -311,6 +309,12 @@ export async function listVisibleAssets(ownerId: string, jobId: string) {
       previewAssetId: previewAssets.id,
     })
     .from(visualAssets)
+    .innerJoin(visualJobs, and(
+      eq(visualJobs.id, visualAssets.jobId),
+      eq(visualJobs.ownerId, visualAssets.ownerId),
+      eq(visualJobs.analysisId, visualAssets.analysisId),
+      eq(visualJobs.status, "completed"),
+    ))
     .leftJoin(
       patterns,
       and(
@@ -374,4 +378,40 @@ export async function listVisibleAssets(ownerId: string, jobId: string) {
             []),
     }),
   );
+}
+
+/** Private authorization lookup: pending and failed job objects are never served. */
+export async function findOwnedCompletedAsset(ownerId: string, assetId: string) {
+  const [row] = await db
+    .select(getTableColumns(visualAssets))
+    .from(visualAssets)
+    .innerJoin(visualJobs, and(
+      eq(visualJobs.id, visualAssets.jobId),
+      eq(visualJobs.ownerId, visualAssets.ownerId),
+      eq(visualJobs.analysisId, visualAssets.analysisId),
+      eq(visualJobs.status, "completed"),
+    ))
+    .where(and(eq(visualAssets.ownerId, ownerId), eq(visualAssets.id, assetId)))
+    .limit(1);
+  return row;
+}
+
+export async function listObjectKeysForJob(ownerId: string, jobId: string) {
+  const rows = await db.select({ objectKey: visualAssets.objectKey }).from(visualAssets)
+    .where(and(eq(visualAssets.ownerId, ownerId), eq(visualAssets.jobId, jobId), isNotNull(visualAssets.objectKey)));
+  return rows.map(({ objectKey }) => objectKey!);
+}
+
+/** Only committed research objects can be superseded by a research refresh. */
+export async function listObjectKeysForAnalysis(ownerId: string, analysisId: string) {
+  const rows = await db.select({ objectKey: visualAssets.objectKey }).from(visualAssets)
+    .innerJoin(visualJobs, and(
+      eq(visualJobs.id, visualAssets.jobId),
+      eq(visualJobs.ownerId, visualAssets.ownerId),
+      eq(visualJobs.analysisId, visualAssets.analysisId),
+      eq(visualJobs.kind, "research_visuals"),
+      eq(visualJobs.status, "completed"),
+    ))
+    .where(and(eq(visualAssets.ownerId, ownerId), eq(visualAssets.analysisId, analysisId), eq(visualAssets.kind, "web_evidence"), isNotNull(visualAssets.objectKey)));
+  return rows.map(({ objectKey }) => objectKey!);
 }

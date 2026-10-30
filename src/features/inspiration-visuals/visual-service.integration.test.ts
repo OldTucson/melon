@@ -25,6 +25,13 @@ import {
   users,
 } from "@/lib/db/schema";
 import { resetDatabase } from "@/test/database";
+import * as environment from "@/lib/env/server";
+import { AppError } from "@/lib/http/app-error";
+import * as repository from "./visual-repository";
+import { importWebEvidence } from "./web-evidence-importer";
+import type { WebEvidenceProvider } from "./web-agent-provider";
+import type { VisualObjectStore } from "./visual-object-store";
+import { parseVisualObjectKey } from "./visual-object-keys";
 
 import type {
   LibraryMatchCandidate,
@@ -51,6 +58,8 @@ describe("inspiration visual service", () => {
   let otherAnalysisId: string;
 
   beforeEach(async () => {
+    const env = environment.getServerEnv();
+    vi.spyOn(environment, "getServerEnv").mockReturnValue({ ...env, IMAGE_SEARCH_ENABLED: true, INSPIRATION_WEB_VISUALS_ENABLED: false });
     await resetDatabase();
     ownerId = randomUUID();
     otherOwnerId = randomUUID();
@@ -254,10 +263,10 @@ describe("inspiration visual service", () => {
     expect(board.activeJob).toMatchObject({
       kind: "research_visuals",
       status: "completed",
-      warnings: ["INSPIRATION_WEB_VISUALS_UNAVAILABLE"],
+      warnings: ["INSPIRATION_WEB_VISUALS_DISABLED", "INSPIRATION_WEB_VISUALS_UNAVAILABLE"],
     });
     expect(board.refreshJob).toBeNull();
-    expect(board.refreshAvailable).toBe(false);
+    expect(board.refreshAvailable).toBe(true);
     expect(board.libraryMatches).toEqual([
       {
         id: expect.any(String),
@@ -478,7 +487,7 @@ describe("inspiration visual service", () => {
       id: (error as { details: { jobId: string } }).details.jobId,
       status: "failed",
       errorCode: "INSPIRATION_VISUALS_EMPTY",
-      warnings: ["INSPIRATION_LIBRARY_MATCH_EMPTY"],
+      warnings: ["INSPIRATION_WEB_VISUALS_DISABLED", "INSPIRATION_LIBRARY_MATCH_EMPTY"],
     });
   });
 
@@ -565,4 +574,259 @@ describe("inspiration visual service", () => {
     });
     expect(await db.select().from(inspirationVisualAssets)).toEqual([]);
   });
+  function webHarness() {
+    vi.mocked(environment.getServerEnv).mockReturnValue({ ...environment.getServerEnv(), INSPIRATION_WEB_VISUALS_ENABLED: true });
+    const objects = new Map<string, Uint8Array>();
+    const deleted: string[][] = [];
+    const store: VisualObjectStore = {
+      async put({ key, bytes }) { objects.set(key, bytes); },
+      async get(key) { return { bytes: objects.get(key)!, contentType: "image/jpeg" }; },
+      async delete(keys) { deleted.push([...keys]); keys.forEach((key) => objects.delete(key)); },
+    };
+    const webProvider: WebEvidenceProvider = { search: vi.fn(async (input: Parameters<WebEvidenceProvider["search"]>[0]) => ({
+      requestId: input.requestId,
+      candidates: input.intents.filter(({ role }) => role === "hero" || role === "product").map((intent, index) => ({
+        query: intent.query, title: `Evidence ${index}`, imageUrl: `https://images.test/${index}.jpg`,
+        sourcePageUrl: inspirationSourceFixture.url, sourceSiteName: "Source", priceText: "$25",
+      })),
+    })) };
+    const importWeb: typeof importWebEvidence = vi.fn(async (input) => importWebEvidence(input, {
+      store,
+      fetchImage: async (url) => {
+        const bytes = Buffer.from([0xff,0xd8,0xff,0xc0,0,11,8,0,1,0,1,1,1,0x11,0,0xff,0xda,0,8,1,1,0,0,63,0,0x12,0xff,0x00,0x34,0xff,0xd9]);
+        bytes[25] = url.includes("/0.") ? 1 : 2;
+        return { bytes, contentType: "image/jpeg", extension: "jpg", width: 1, height: 1 };
+      },
+    }));
+    const matchLibrary = vi.fn<typeof matchLibraryPatterns>(async () => ({ assets: [], warnings: [] }));
+    const run = (operationId = randomUUID(), signal?: AbortSignal) => createResearchVisuals(
+      { ownerId, analysisId, operationId, signal }, { webProvider, importWeb, store, matchLibrary },
+    );
+    return { objects, deleted, store, webProvider, importWeb, matchLibrary, run };
+  }
+
+  it("atomically completes web and library branches preserving image IDs and editorial metadata", async () => {
+    const { patternId } = await seedPattern();
+    const web = webHarness();
+    web.matchLibrary.mockResolvedValue({ assets: [candidate(patternId, { ordinal: 9 })], warnings: [] });
+    const board = await web.run();
+    expect(board.webEvidence.map(({ role }) => role)).toEqual(["hero", "product"]);
+    expect(board.webEvidence[1]).toMatchObject({ sourceIndexes: [1], productName: "棉麻衬衫叠穿", brand: null, priceText: "$25" });
+    expect(board.libraryMatches[0]).toMatchObject({ patternId, ordinal: 0 });
+    expect(web.webProvider.search).toHaveBeenCalledTimes(1);
+    const keys = await repository.listObjectKeysForJob(ownerId, board.activeJob!.id);
+    expect(keys.sort()).toEqual([...web.objects.keys()].sort());
+    for (const asset of board.webEvidence) {
+      expect(keys.some((key) => parseVisualObjectKey(key).assetId === asset.id)).toBe(true);
+      expect(asset.imageUrl).toBe(`/api/inspiration-visual-assets/${asset.id}`);
+      expect(await repository.findOwnedCompletedAsset(otherOwnerId, asset.id)).toBeUndefined();
+      expect(await repository.findOwnedCompletedAsset(ownerId, asset.id)).toMatchObject({ id: asset.id });
+    }
+    expect(await repository.listObjectKeysForAnalysis(otherOwnerId, analysisId)).toEqual([]);
+    expect(JSON.stringify(board)).not.toMatch(/objectKey|contentType|providerRequestId|providerTaskId/);
+  });
+
+  it.each(["empty", "unavailable", "disabled"] as const)("completes web evidence when library is %s", async (state) => {
+    const web = webHarness();
+    if (state === "unavailable") web.matchLibrary.mockRejectedValue(new Error("private library failure"));
+    if (state === "disabled") vi.mocked(environment.getServerEnv).mockReturnValue({ ...environment.getServerEnv(), IMAGE_SEARCH_ENABLED: false });
+    const board = await web.run();
+    expect(board.webEvidence).toHaveLength(2);
+    expect(board.libraryMatches).toEqual([]);
+    expect(board.refreshAvailable).toBe(true);
+    if (state !== "empty") expect(board.activeJob!.warnings).toContain(state === "disabled" ? "INSPIRATION_LIBRARY_MATCH_DISABLED" : "INSPIRATION_LIBRARY_MATCH_UNAVAILABLE");
+    if (state === "disabled") expect(web.matchLibrary).not.toHaveBeenCalled();
+  });
+
+  it("retains library matches when the web provider is unavailable", async () => {
+    const { patternId } = await seedPattern();
+    const web = webHarness();
+    vi.mocked(web.webProvider.search).mockRejectedValue(new Error("private upstream response"));
+    web.matchLibrary.mockResolvedValue({ assets: [candidate(patternId)], warnings: [] });
+    const board = await web.run();
+    expect(board.libraryMatches).toHaveLength(1);
+    expect(board.activeJob!.warnings).toEqual(["INSPIRATION_WEB_VISUALS_UNAVAILABLE"]);
+    expect(web.importWeb).not.toHaveBeenCalled();
+  });
+
+  it("commits partial image imports with deduplicated warnings", async () => {
+    const web = webHarness();
+    const put = web.store.put;
+    web.store.put = async (input) => { if (input.bytes[25] === 2) throw new Error("write failed"); await put(input); };
+    const board = await web.run();
+    expect(board.webEvidence).toHaveLength(1);
+    expect(board.activeJob!.warnings).toEqual(["INSPIRATION_WEB_VISUALS_UNAVAILABLE"]);
+    expect(web.objects.size).toBe(1);
+  });
+
+  it.each([
+    ["empty", false, "INSPIRATION_VISUALS_EMPTY"],
+    ["unavailable", true, "INSPIRATION_VISUALS_UNAVAILABLE"],
+    ["empty", true, "INSPIRATION_VISUALS_UNAVAILABLE"],
+  ] as const)("classifies no assets with web %s and library failure %s", async (state, libraryFailure, code) => {
+    const web = webHarness();
+    vi.mocked(web.webProvider.search).mockRejectedValue(new AppError(state === "empty" ? "INSPIRATION_VISUALS_EMPTY" : "INSPIRATION_VISUALS_UNAVAILABLE", 503, "redacted"));
+    if (libraryFailure) web.matchLibrary.mockResolvedValue({ assets: [], warnings: ["INSPIRATION_LIBRARY_MATCH_UNAVAILABLE"] });
+    await expect(web.run()).rejects.toMatchObject({ code });
+    expect((await getInspirationVisualBoard({ ownerId, analysisId })).refreshJob!.errorCode).toBe(code);
+  });
+
+  it("returns stable disabled warnings without paid calls", async () => {
+    const web = webHarness();
+    vi.mocked(environment.getServerEnv).mockReturnValue({ ...environment.getServerEnv(), INSPIRATION_WEB_VISUALS_ENABLED: false, IMAGE_SEARCH_ENABLED: false });
+    await expect(web.run()).rejects.toMatchObject({ code: "INSPIRATION_VISUALS_EMPTY" });
+    const board = await getInspirationVisualBoard({ ownerId, analysisId });
+    expect(board.refreshAvailable).toBe(false);
+    expect(board.refreshJob!.warnings).toEqual(["INSPIRATION_WEB_VISUALS_DISABLED", "INSPIRATION_LIBRARY_MATCH_DISABLED"]);
+    expect(web.webProvider.search).not.toHaveBeenCalled();
+    expect(web.importWeb).not.toHaveBeenCalled();
+    expect(web.matchLibrary).not.toHaveBeenCalled();
+  });
+
+  it("replays a web operation without provider, importer or matcher calls", async () => {
+    const web = webHarness();
+    const operationId = randomUUID();
+    const board = await web.run(operationId);
+    await expect(web.run(operationId)).resolves.toEqual(board);
+    expect(web.webProvider.search).toHaveBeenCalledTimes(1);
+    expect(web.importWeb).toHaveBeenCalledTimes(1);
+    expect(web.matchLibrary).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["transaction throws", "pending ownership lost"] as const)("compensates every written key when %s", async (failure) => {
+    const web = webHarness();
+    if (failure === "transaction throws") vi.spyOn(repository, "completeResearchJob").mockRejectedValue(new Error("database failed"));
+    else web.matchLibrary.mockImplementation(async () => {
+      const [pending] = await db.select().from(inspirationVisualJobs);
+      await repository.failPendingJob(ownerId, pending!.id, "INSPIRATION_VISUALS_INTERRUPTED", new Date());
+      return { assets: [], warnings: [] };
+    });
+    await expect(web.run()).rejects.toMatchObject({ code: failure === "transaction throws" ? "INSPIRATION_VISUALS_UNAVAILABLE" : "INSPIRATION_VISUALS_BUSY" });
+    expect(web.deleted.flat()).toHaveLength(2);
+    expect(web.objects.size).toBe(0);
+    expect(await db.select().from(inspirationVisualAssets)).toEqual([]);
+  });
+
+  it("compensates normal import results if the shared request aborts before completion", async () => {
+    const web = webHarness();
+    const controller = new AbortController();
+    const imported = deferred();
+    const importWeb = web.importWeb;
+    vi.mocked(importWeb).mockImplementationOnce(async (input, dependencies) => {
+      const result = await importWebEvidence(input, { ...dependencies, store: web.store, fetchImage: async () => ({ bytes: Buffer.from([0xff,0xd8,0xff,0xc0,0,11,8,0,1,0,1,1,1,0x11,0,0xff,0xda,0,8,1,1,0,0,63,0,0x12,0xff,0x00,0x34,0xff,0xd9]), contentType: "image/jpeg", extension: "jpg", width: 1, height: 1 }) });
+      imported.resolve();
+      return result;
+    });
+    web.matchLibrary.mockImplementation(async ({ signal }) => { await imported.promise; expect(signal).toBe(controller.signal); controller.abort(); return { assets: [], warnings: [] }; });
+    await expect(web.run(randomUUID(), controller.signal)).rejects.toMatchObject({ code: "INSPIRATION_VISUALS_UNAVAILABLE" });
+    expect(web.objects.size).toBe(0);
+    expect(web.deleted.flat()).toHaveLength(1);
+    expect(await db.select().from(inspirationVisualAssets)).toEqual([]);
+  });
+
+  it.each([false, true])("deletes superseded keys only after refresh commit, cleanup failure=%s", async (cleanupFails) => {
+    const web = webHarness();
+    const old = await web.run();
+    const oldKeys = [...web.objects.keys()];
+    const started = deferred();
+    const release = deferred();
+    web.matchLibrary.mockImplementation(async () => { started.resolve(); await release.promise; return { assets: [], warnings: [] }; });
+    const remove = web.store.delete;
+    web.store.delete = async (keys) => {
+      const board = await getInspirationVisualBoard({ ownerId, analysisId });
+      expect(board.activeJob!.id).not.toBe(old.activeJob!.id);
+      if (cleanupFails) throw new Error("cleanup failed");
+      await remove(keys);
+    };
+    const refresh = web.run();
+    try {
+      await started.promise;
+      const board = await getInspirationVisualBoard({ ownerId, analysisId });
+      expect(board.activeJob!.id).toBe(old.activeJob!.id);
+      expect(board.webEvidence).toEqual(old.webEvidence);
+      expect(oldKeys.every((key) => web.objects.has(key))).toBe(true);
+      expect(web.deleted).toEqual([]);
+    } finally { release.resolve(); }
+    const next = await refresh;
+    expect(next.activeJob!.id).not.toBe(old.activeJob!.id);
+    if (!cleanupFails) expect(web.deleted.flat().sort()).toEqual(oldKeys.sort());
+  });
+
+  it("preserves old web objects and board after a failed refresh", async () => {
+    const web = webHarness();
+    const old = await web.run();
+    const oldKeys = [...web.objects.keys()];
+    vi.mocked(web.webProvider.search).mockRejectedValue(new Error("provider failed"));
+    await expect(web.run()).rejects.toMatchObject({ code: "INSPIRATION_VISUALS_UNAVAILABLE" });
+    const board = await getInspirationVisualBoard({ ownerId, analysisId });
+    expect(board.activeJob!.id).toBe(old.activeJob!.id);
+    expect(board.webEvidence).toEqual(old.webEvidence);
+    expect([...web.objects.keys()]).toEqual(oldKeys);
+    expect(web.deleted).toEqual([]);
+  });
+
+  it("authorizes only completed owner assets", async () => {
+    const web = webHarness();
+    const board = await web.run();
+    await db.update(inspirationVisualJobs).set({ status: "failed", errorCode: "INSPIRATION_VISUALS_INTERRUPTED" }).where(eq(inspirationVisualJobs.id, board.activeJob!.id));
+    expect(await repository.findOwnedCompletedAsset(ownerId, board.webEvidence[0]!.id)).toBeUndefined();
+    expect(await repository.listVisibleAssets(ownerId, board.activeJob!.id)).toEqual([]);
+  });
+
+  it("rolls back the completed state when asset insertion fails and compensates both objects", async () => {
+    const web = webHarness();
+    const originalImport = vi.mocked(web.importWeb).getMockImplementation()!;
+    vi.mocked(web.importWeb).mockImplementationOnce(async (...args) => {
+      const imported = await originalImport(...args);
+      // Force a real PostgreSQL unique-key failure after the pending -> completed update.
+      imported.assets[1]!.id = imported.assets[0]!.id;
+      return imported;
+    });
+    await expect(web.run()).rejects.toMatchObject({ code: "INSPIRATION_VISUALS_UNAVAILABLE" });
+    const [failed] = await db.select().from(inspirationVisualJobs);
+    expect(failed).toMatchObject({ status: "failed", errorCode: "INSPIRATION_VISUALS_UNAVAILABLE" });
+    expect(await db.select().from(inspirationVisualAssets)).toEqual([]);
+    expect(web.objects.size).toBe(0);
+    expect(web.deleted.flat()).toHaveLength(2);
+  });
+
+  it("classifies in-transaction library invalidation as unavailable when web failed", async () => {
+    const { patternId } = await seedPattern();
+    const web = webHarness();
+    vi.mocked(web.webProvider.search).mockRejectedValue(new Error("web failed"));
+    web.matchLibrary.mockImplementation(async () => {
+      await db.update(patterns).set({ status: "trashed", trashedAt: new Date() }).where(eq(patterns.id, patternId));
+      return { assets: [candidate(patternId)], warnings: [] };
+    });
+    await expect(web.run()).rejects.toMatchObject({ code: "INSPIRATION_VISUALS_UNAVAILABLE" });
+    expect((await getInspirationVisualBoard({ ownerId, analysisId })).refreshJob!.errorCode).toBe("INSPIRATION_VISUALS_UNAVAILABLE");
+  });
+
+  it("allows one pending winner and pending replay without duplicate web work", async () => {
+    const web = webHarness();
+    const started = deferred(), release = deferred();
+    const search = vi.mocked(web.webProvider.search).getMockImplementation()!;
+    vi.mocked(web.webProvider.search).mockImplementation(async (input) => { started.resolve(); await release.promise; return search(input); });
+    const operationId = randomUUID();
+    const winner = web.run(operationId);
+    try {
+      await started.promise;
+      const replay = await web.run(operationId);
+      expect(replay.refreshJob!.status).toBe("pending");
+      await expect(web.run()).rejects.toMatchObject({ code: "INSPIRATION_VISUALS_BUSY" });
+      expect(web.webProvider.search).toHaveBeenCalledTimes(1);
+      expect(web.matchLibrary).toHaveBeenCalledTimes(1);
+    } finally { release.resolve(); }
+    expect((await winner).webEvidence).toHaveLength(2);
+    expect(web.importWeb).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects cross-owner requests before every external branch", async () => {
+    const web = webHarness();
+    await expect(createResearchVisuals({ ownerId: otherOwnerId, analysisId, operationId: randomUUID() }, web)).rejects.toMatchObject({ code: "INSPIRATION_NOT_FOUND" });
+    expect(web.webProvider.search).not.toHaveBeenCalled();
+    expect(web.importWeb).not.toHaveBeenCalled();
+    expect(web.matchLibrary).not.toHaveBeenCalled();
+  });
+
 });
