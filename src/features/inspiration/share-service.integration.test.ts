@@ -2,12 +2,13 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeDatabase, db } from "@/lib/db/client";
-import { inspirationAnalyses, users } from "@/lib/db/schema";
+import { inspirationAnalyses, inspirationVisualAssets, inspirationVisualJobs, patterns, users } from "@/lib/db/schema";
 import { resetDatabase } from "@/test/database";
 import { getServerEnv } from "@/lib/env/server";
 import { createInspirationAnalysis, deleteInspirationAnalysis } from "./analysis-service";
-import { enableInspirationShare, disableInspirationShare, getSharedInspirationAnalysis } from "./share-service";
+import { enableInspirationShare, disableInspirationShare, getSharedInspirationAnalysis, getSharedInspirationDocument } from "./share-service";
 import { inspirationResultFixture, inspirationSourceFixture } from "./test-fixtures";
+import { inspirationSharedDocumentDtoSchema } from "@/features/inspiration-visuals/document-contracts";
 import * as repository from "./analysis-repository";
 
 function deferred() { let resolve!: () => void; const promise = new Promise<void>((done) => { resolve = done; }); return { promise, resolve }; }
@@ -150,4 +151,84 @@ describe("inspiration shares", () => {
     await db.update(inspirationAnalyses).set({ sources: [{ index: 1, private: "secret" }] }).where(eq(inspirationAnalyses.id, row.id));
     await expect(getSharedInspirationAnalysis(shareId(shared.shareUrl))).rejects.toMatchObject({ code: "INTERNAL_ERROR", status: 500 });
   });
+
+  async function seedVisual(analysisId: string, status: "pending" | "completed" | "failed", createdAt: string, role: "hero" | "evidence" | "product" = "hero", actor = ownerId) {
+    const jobId = randomUUID(); const assetId = randomUUID();
+    await db.insert(inspirationVisualJobs).values({
+      id: jobId, ownerId: actor, analysisId, operationId: randomUUID(), kind: "research_visuals", status,
+      createdAt: new Date(createdAt), completedAt: status === "pending" ? null : new Date(createdAt),
+      errorCode: status === "failed" ? "INSPIRATION_VISUALS_UNAVAILABLE" : null,
+      providerRequestId: "private-provider-request", providerTaskId: "private-provider-task",
+      warnings: ["INSPIRATION_LIBRARY_MATCH_UNAVAILABLE"],
+    });
+    const objectKey = `users/${actor}/inspiration/${analysisId}/research/${jobId}/${assetId}.png`;
+    await db.insert(inspirationVisualAssets).values({
+      id: assetId, ownerId: actor, analysisId, jobId, kind: "web_evidence", ordinal: 0,
+      title: "Public asset", altText: "Public image", documentRole: role, sourceIndexes: [100, 1],
+      brand: role === "product" ? "Public brand" : null, productName: role === "product" ? "Public product" : null,
+      priceText: role === "product" ? "¥299" : null,
+      sourcePageUrl: "https://example.test/public-product", sourceSiteName: "Public shop", sourceQuery: "public fashion",
+      objectKey, contentType: "image/png", width: 1200, height: 1600,
+    });
+    return { jobId, assetId, objectKey };
+  }
+
+  it("loads a strict shared document without changing the existing text DTO", async () => {
+    const row = await create(); const shared = await enableInspirationShare({ ownerId, analysisId: row.id });
+    const token = shareId(shared.shareUrl);
+    const text = await getSharedInspirationAnalysis(token);
+    const page = await getSharedInspirationDocument(token);
+    expect(page).toMatchObject({ title: row.title, prompt: row.prompt, completedAt: row.completedAt, document: { hero: null, products: [], sources: row.sources } });
+    expect(page.document.directions.every(({ concepts }) => concepts.length === 0)).toBe(true);
+    expect(inspirationSharedDocumentDtoSchema.parse(page)).toEqual(page);
+    expect(await getSharedInspirationAnalysis(token)).toEqual(text);
+  });
+
+  it("publishes only active completed assets, keeps product sources, and excludes every private field", async () => {
+    const row = await create(); const shared = await enableInspirationShare({ ownerId, analysisId: row.id });
+    const token = shareId(shared.shareUrl);
+    const superseded = await seedVisual(row.id, "completed", "2026-10-30T00:00:00Z");
+    const active = await seedVisual(row.id, "completed", "2026-10-30T01:00:00Z", "product");
+    const pending = await seedVisual(row.id, "pending", "2026-10-30T02:00:00Z");
+    const failed = await seedVisual(row.id, "failed", "2026-10-30T03:00:00Z");
+    const patternId = randomUUID();
+    await db.insert(patterns).values({ id: patternId, ownerId, name: "Private pattern", originalFilename: "private.png", extension: "png", sizeBytes: 4n, status: "ready", previewStatus: "ready" });
+    const libraryId = randomUUID();
+    await db.insert(inspirationVisualAssets).values({ id: libraryId, ownerId, analysisId: row.id, jobId: active.jobId, kind: "library_match", ordinal: 0, patternId, title: "Private match", altText: "Private match", directionIndex: 0 });
+    const other = await createInspirationAnalysis({ ownerId: otherOwnerId, operationId: randomUUID(), prompt: "分析都市轻通勤女装" }, provider);
+    const otherAsset = await seedVisual(other.id, "completed", "2026-10-30T04:00:00Z", "hero", otherOwnerId);
+    const page = await getSharedInspirationDocument(token);
+    expect(page.document.hero).toBeNull();
+    expect(page.document.products).toEqual([expect.objectContaining({
+      id: active.assetId, role: "product", brand: "Public brand", productName: "Public product", priceText: "¥299",
+      sourceIndexes: [1], imageUrl: `/share/inspiration/${token}/assets/${active.assetId}`,
+      sourcePageUrl: "https://example.test/public-product", sourceSiteName: "Public shop",
+    })]);
+    expect(page.document.unassignedLibraryMatches).toEqual([]);
+    expect(page.document.directions.every(({ libraryMatches, concepts }) => libraryMatches.length === 0 && concepts.length === 0)).toBe(true);
+    const json = JSON.stringify(page);
+    for (const forbidden of [ownerId, otherOwnerId, row.id, active.jobId, active.objectKey, superseded.assetId, pending.assetId, failed.assetId, otherAsset.assetId, libraryId, patternId, "objectKey", "contentType", "providerRequestId", "providerTaskId", "errorCode", "warnings", "ownerId", "private-provider", "INSPIRATION_LIBRARY_MATCH_UNAVAILABLE", "/api/"]) expect(json).not.toContain(forbidden);
+    expect(inspirationSharedDocumentDtoSchema.parse(page)).toEqual(page);
+  });
+
+  it.each(["pending", "failed"] as const)("keeps %s visual jobs out of a text-only shared document", async (status) => {
+    const row = await create(); const shared = await enableInspirationShare({ ownerId, analysisId: row.id });
+    const seeded = await seedVisual(row.id, status, "2026-10-30T01:00:00Z");
+    const page = await getSharedInspirationDocument(shareId(shared.shareUrl));
+    expect(page.document.hero).toBeNull();
+    expect(JSON.stringify(page)).not.toContain(seeded.assetId);
+  });
+
+  it("rechecks live shares and maps invalid, revoked, deleted, and non-completed reports to 404", async () => {
+    const row = await create(); const identity = { ownerId, analysisId: row.id };
+    const first = await enableInspirationShare(identity); const oldToken = shareId(first.shareUrl);
+    await disableInspirationShare(identity);
+    const next = await enableInspirationShare(identity); const newToken = shareId(next.shareUrl);
+    for (const token of ["invalid", randomUUID(), row.id, oldToken]) await expect(getSharedInspirationDocument(token)).rejects.toMatchObject({ code: "INSPIRATION_NOT_FOUND", status: 404 });
+    await db.update(inspirationAnalyses).set({ status: "failed", shareId: null, result: null, sources: null, completedAt: null, errorCode: "INSPIRATION_INTERRUPTED" }).where(eq(inspirationAnalyses.id, row.id));
+    await expect(getSharedInspirationDocument(newToken)).rejects.toMatchObject({ code: "INSPIRATION_NOT_FOUND", status: 404 });
+    await deleteInspirationAnalysis(identity);
+    await expect(getSharedInspirationDocument(newToken)).rejects.toMatchObject({ code: "INSPIRATION_NOT_FOUND", status: 404 });
+  });
+
 });
