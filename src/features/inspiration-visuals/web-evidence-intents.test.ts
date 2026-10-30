@@ -1,0 +1,268 @@
+import { describe, expect, it } from "vitest";
+
+import type {
+  InspirationAnalysisResult,
+  InspirationSource,
+  TrendFacet,
+} from "@/features/inspiration/contracts";
+import { inspirationResultFixture } from "@/features/inspiration/test-fixtures";
+
+import {
+  classifyWebEvidenceCandidates,
+  planWebEvidenceIntents,
+  type WebEvidenceCandidate,
+  type WebEvidenceIntent,
+} from "./web-evidence-intents";
+
+const sources: InspirationSource[] = [
+  { index: 7, title: "Signal", url: "https://journal.test/trend?season=fall", siteName: "Journal" },
+  { index: 2, title: "Shirt", url: "https://shop.test/item?sku=shirt", siteName: "Shop" },
+  { index: 4, title: "Dress", url: "https://shop.test/item?sku=dress", siteName: "Shop" },
+];
+
+const facet = (name: string, strength: TrendFacet["strength"], sourceIndexes = [7]): TrendFacet => ({
+  name, strength, sourceIndexes, rationale: "Validated market evidence",
+});
+
+const report = (): InspirationAnalysisResult => ({
+  ...structuredClone(inspirationResultFixture),
+  headline: "Editorial headline",
+  marketSignals: [
+    facet("Early signal", "emerging"),
+    facet("Strong signal", "high", [2, 7, 99, 7]),
+    facet("Second signal", "medium"),
+  ],
+  dimensions: {
+    silhouettes: [facet("Strong signal", "high"), facet("Relaxed shape", "medium")],
+    productTypes: [facet("Shirt", "medium")],
+    styles: [], categories: [], colors: [], materials: [],
+  },
+  referenceLooks: Array.from({ length: 6 }, (_, index) => ({
+    name: `Validated product ${index + 1}`,
+    sourceKind: "product" as const,
+    whyRelevant: "A sourced garment",
+    sourceIndexes: [2],
+  })),
+});
+
+const productIntent: WebEvidenceIntent = {
+  key: "product-1", role: "product", query: "linen shirt",
+  sourceIndexes: [2], sourceHosts: ["shop.test"],
+  productName: "Validated linen shirt", brand: null,
+};
+const evidenceIntent: WebEvidenceIntent = {
+  key: "evidence-1", role: "evidence", query: "linen trend",
+  sourceIndexes: [7], sourceHosts: ["journal.test"],
+  productName: null, brand: null,
+};
+const candidate = (overrides: Partial<WebEvidenceCandidate> = {}): WebEvidenceCandidate => ({
+  query: "linen shirt", title: "Provider invented product ¥999",
+  imageUrl: "https://images.test/shirt.jpg",
+  sourcePageUrl: "https://shop.test/item?sku=shirt",
+  ...overrides,
+});
+
+describe("web evidence intent planning", () => {
+  it("builds the hero from the strongest sourced signal and filters indexes into report order", () => {
+    const result = report();
+    result.marketSignals.unshift(facet("Unsupported strongest", "high", [99]));
+    const planned = planWebEvidenceIntents({ prompt: "Fashion brief", result, sources });
+
+    expect(planned[0]).toEqual({
+      key: "hero-1", role: "hero", query: "Editorial headline Strong signal",
+      sourceIndexes: [7, 2], sourceHosts: ["journal.test", "shop.test"],
+      productName: null, brand: null,
+    });
+    expect(planned.filter(({ role }) => role === "hero")).toHaveLength(1);
+  });
+
+  it("plans three unique sourced facets and four validated products in stable order, at most eight", () => {
+    const input = { prompt: "Fashion brief", result: report(), sources };
+    const planned = planWebEvidenceIntents(input);
+
+    expect(planned.map(({ role }) => role)).toEqual([
+      "hero", "evidence", "evidence", "evidence", "product", "product", "product", "product",
+    ]);
+    expect(planned.filter(({ role }) => role === "evidence").map(({ query }) => query)).toEqual([
+      "Fashion brief Early signal", "Fashion brief Second signal", "Fashion brief Relaxed shape",
+    ]);
+    expect(planned.filter(({ role }) => role === "product").map(({ productName }) => productName)).toEqual([
+      "Validated product 1", "Validated product 2", "Validated product 3", "Validated product 4",
+    ]);
+    expect(planWebEvidenceIntents(input)).toEqual(planned);
+  });
+
+  it("omits unsupported facets and non-product, invalid-source, or duplicate reference looks", () => {
+    const result = report();
+    result.marketSignals = [];
+    result.dimensions = { silhouettes: [], productTypes: [], styles: [], categories: [], colors: [], materials: [] };
+    result.referenceLooks = [
+      { ...result.referenceLooks[0]!, sourceKind: "ranking" },
+      { ...result.referenceLooks[1]!, sourceIndexes: [99] },
+      result.referenceLooks[2]!,
+      { ...result.referenceLooks[2]!, name: "  VALIDATED PRODUCT 3  " },
+    ];
+
+    expect(planWebEvidenceIntents({ prompt: "Fashion brief", result, sources }).map(({ role, productName }) => ({ role, productName }))).toEqual([
+      { role: "product", productName: "Validated product 3" },
+    ]);
+    expect(planWebEvidenceIntents({ prompt: "Fashion brief", result: report(), sources: [] })).toEqual([]);
+  });
+
+  it("uses stable first occurrence for tied hero signals and bounds long prompt queries", () => {
+    const result = report();
+    result.marketSignals = [facet("First high", "high"), facet("Second high", "high")];
+    const planned = planWebEvidenceIntents({ prompt: "x".repeat(1000), result, sources });
+
+    expect(planned[0]?.query).toBe("Editorial headline First high");
+    expect(planned.every(({ query }) => query.length <= 300)).toBe(true);
+    expect(planned.find(({ role }) => role === "evidence")?.query).toContain("Second high");
+  });
+});
+
+describe("web evidence candidate classification", () => {
+  it("matches normalized intent queries and uses the validated product name rather than provider title", () => {
+    const [classified] = classifyWebEvidenceCandidates({
+      intents: [productIntent], sources,
+      candidates: [candidate({ query: "  LINEN   SHIRT  ", priceText: " ¥299 " })],
+    });
+
+    expect(classified).toMatchObject({
+      role: "product", productName: "Validated linen shirt", brand: null,
+      priceText: "¥299", sourceIndexes: [2], sourceSiteName: "Shop", sourceQuery: "linen shirt",
+    });
+  });
+
+  it("lets exact canonical source matches override a merely similar query's source mapping", () => {
+    const [classified] = classifyWebEvidenceCandidates({
+      intents: [evidenceIntent], sources,
+      candidates: [candidate({ query: "linen trend photograph", sourcePageUrl: "https://SHOP.test/item?sku=dress#photo" })],
+    });
+
+    expect(classified).toMatchObject({
+      role: "evidence", sourceIndexes: [4],
+      sourcePageUrl: "https://shop.test/item?sku=dress",
+    });
+  });
+
+  it("maps a query with no exact source match only to valid indexes, in source report order", () => {
+    const [classified] = classifyWebEvidenceCandidates({
+      intents: [{ ...evidenceIntent, sourceIndexes: [2, 99, 7, 2] }], sources,
+      candidates: [candidate({ query: "linen trend", sourcePageUrl: "https://elsewhere.test/editorial" })],
+    });
+
+    expect(classified?.sourceIndexes).toEqual([7, 2]);
+  });
+
+  it.each(["https://elsewhere.test/item", "https://shop.test.evil.test/item", "https://sub.shop.test/item"])(
+    "downgrades a product query on an unmapped host: %s", (sourcePageUrl) => {
+      const [classified] = classifyWebEvidenceCandidates({
+        intents: [productIntent], sources,
+        candidates: [candidate({ sourcePageUrl, priceText: "¥299" })],
+      });
+
+      expect(classified).toMatchObject({ role: "evidence", productName: null, brand: null, priceText: null });
+    },
+  );
+
+  it("does not trust sourceHosts on an intent without corresponding source indexes", () => {
+    const [classified] = classifyWebEvidenceCandidates({
+      intents: [{ ...productIntent, sourceIndexes: [99] }], sources,
+      candidates: [candidate({ sourcePageUrl: "https://shop.test/other" })],
+    });
+
+    expect(classified).toMatchObject({ role: "evidence", productName: null });
+  });
+
+  it("does not promote an evidence intent from a product-looking title or shared source host", () => {
+    const [classified] = classifyWebEvidenceCandidates({
+      intents: [evidenceIntent, productIntent], sources,
+      candidates: [candidate({ query: "linen trend", priceText: "¥999" })],
+    });
+
+    expect(classified).toMatchObject({ role: "evidence", productName: null, brand: null, priceText: null });
+  });
+
+  it("uses canonical page and then normalized host/path evidence when there is no intent query match", () => {
+    const classified = classifyWebEvidenceCandidates({
+      intents: [evidenceIntent], sources,
+      candidates: [
+        candidate({ query: "unknown", sourcePageUrl: "https://journal.test/trend/?season=winter" }),
+        candidate({ query: "unrelated", sourcePageUrl: "https://unmapped.test/page", imageUrl: "https://images.test/other.jpg" }),
+      ],
+    });
+
+    expect(classified.map(({ role, sourceIndexes }) => ({ role, sourceIndexes }))).toEqual([
+      { role: "evidence", sourceIndexes: [7] },
+      { role: "evidence", sourceIndexes: [] },
+    ]);
+  });
+
+  it("deduplicates canonical image/source pairs while preserving meaningful source query parameters", () => {
+    const classified = classifyWebEvidenceCandidates({
+      intents: [productIntent], sources,
+      candidates: [
+        candidate(),
+        candidate({ imageUrl: "https://images.test/shirt.jpg#crop", sourcePageUrl: "https://SHOP.test/item?sku=shirt#photo" }),
+        candidate({ sourcePageUrl: "https://shop.test/item?sku=dress" }),
+      ],
+    });
+
+    expect(classified.map(({ sourcePageUrl }) => sourcePageUrl)).toEqual([
+      "https://shop.test/item?sku=shirt", "https://shop.test/item?sku=dress",
+    ]);
+  });
+
+  it("preserves signed image query encoding and parameter order while dropping fragments", () => {
+    const [classified] = classifyWebEvidenceCandidates({
+      intents: [productIntent], sources,
+      candidates: [candidate({ imageUrl: "https://images.test/shirt.jpg?token=a%20b&expires=5#preview" })],
+    });
+    expect(classified?.imageUrl).toBe("https://images.test/shirt.jpg?token=a%20b&expires=5");
+  });
+
+  it("compares source query parameters canonically without changing the original link", () => {
+    const [classified] = classifyWebEvidenceCandidates({
+      intents: [evidenceIntent],
+      sources: [...sources, { ...sources[1]!, index: 8, url: "https://shop.test/item?season=fall&sku=shirt" }],
+      candidates: [candidate({ query: "linen trend", sourcePageUrl: "https://shop.test/item?sku=shirt&season=fall" })],
+    });
+    expect(classified).toMatchObject({ sourceIndexes: [8], sourcePageUrl: "https://shop.test/item?sku=shirt&season=fall" });
+  });
+
+  it.each([undefined, null, "", " ", "x".repeat(121), "¥9\u0000"])(
+    "does not infer a price from the title when structured price is absent or invalid: %s", (priceText) => {
+      const [classified] = classifyWebEvidenceCandidates({
+        intents: [productIntent], sources,
+        candidates: [candidate({ priceText })],
+      });
+      expect(classified?.priceText).toBeNull();
+    },
+  );
+
+  it("accepts the structured price length boundary without parsing it", () => {
+    const [classified] = classifyWebEvidenceCandidates({
+      intents: [productIntent], sources,
+      candidates: [candidate({ priceText: "x".repeat(120) })],
+    });
+    expect(classified?.priceText).toBe("x".repeat(120));
+  });
+
+  it("preserves intent and provider order plus candidate alternatives for import failures", () => {
+    const hero: WebEvidenceIntent = { ...evidenceIntent, key: "hero-1", role: "hero", query: "hero query" };
+    const classified = classifyWebEvidenceCandidates({
+      intents: [hero, evidenceIntent, productIntent], sources,
+      candidates: [
+        candidate({ imageUrl: "https://images.test/product.jpg" }),
+        candidate({ query: "linen trend", imageUrl: "https://images.test/evidence.jpg" }),
+        ...Array.from({ length: 9 }, (_, index) => candidate({ query: "hero query", imageUrl: `https://images.test/hero-${index}.jpg` })),
+      ],
+    });
+
+    expect(classified).toHaveLength(11);
+    expect(classified.map(({ imageUrl }) => imageUrl)).toEqual([
+      ...Array.from({ length: 9 }, (_, index) => `https://images.test/hero-${index}.jpg`),
+      "https://images.test/evidence.jpg", "https://images.test/product.jpg",
+    ]);
+  });
+});
