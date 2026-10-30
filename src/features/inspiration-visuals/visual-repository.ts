@@ -20,6 +20,7 @@ import { loadPatternPaletteStates } from "@/features/patterns/pattern-palette-re
 import { db } from "@/lib/db/client";
 import {
   assets as storageAssets,
+  inspirationAnalyses,
   inspirationVisualAssets as visualAssets,
   inspirationVisualJobs as visualJobs,
   patterns,
@@ -392,6 +393,52 @@ export async function findOwnedCompletedAsset(ownerId: string, assetId: string) 
       eq(visualJobs.status, "completed"),
     ))
     .where(and(eq(visualAssets.ownerId, ownerId), eq(visualAssets.id, assetId)))
+    .limit(1);
+  return row;
+}
+
+export type VisualResourceIdentity =
+  | { ownerId: string; assetId: string }
+  | { shareId: string; assetId: string };
+
+/** Recheck ownership or the live share and active research job for every byte request. */
+export async function findCompletedVisualResource(input: VisualResourceIdentity) {
+  const activeJobs = alias(visualJobs, "active_resource_jobs");
+  const activeJob = db.select({ id: activeJobs.id }).from(activeJobs)
+    .where(and(
+      eq(activeJobs.ownerId, inspirationAnalyses.ownerId),
+      eq(activeJobs.analysisId, inspirationAnalyses.id),
+      eq(activeJobs.kind, "research_visuals"),
+      eq(activeJobs.status, "completed"),
+    ))
+    .orderBy(desc(activeJobs.createdAt), desc(activeJobs.id))
+    .limit(1);
+
+  const [row] = await db
+    .select({ objectKey: visualAssets.objectKey, contentType: visualAssets.contentType })
+    .from(visualAssets)
+    .innerJoin(visualJobs, and(
+      eq(visualJobs.id, visualAssets.jobId),
+      eq(visualJobs.ownerId, visualAssets.ownerId),
+      eq(visualJobs.analysisId, visualAssets.analysisId),
+      eq(visualJobs.kind, "research_visuals"),
+      eq(visualJobs.status, "completed"),
+    ))
+    .innerJoin(inspirationAnalyses, and(
+      eq(inspirationAnalyses.id, visualJobs.analysisId),
+      eq(inspirationAnalyses.ownerId, visualJobs.ownerId),
+      eq(inspirationAnalyses.status, "completed"),
+    ))
+    .where(and(
+      eq(visualAssets.id, input.assetId),
+      eq(visualAssets.kind, "web_evidence"),
+      isNotNull(visualAssets.objectKey),
+      isNotNull(visualAssets.contentType),
+      eq(visualJobs.id, activeJob),
+      "ownerId" in input
+        ? eq(inspirationAnalyses.ownerId, input.ownerId)
+        : eq(inspirationAnalyses.shareId, input.shareId),
+    ))
     .limit(1);
   return row;
 }
