@@ -25,6 +25,12 @@ function field(value: unknown, key: string): unknown {
   return (value as Record<string, unknown>)[key];
 }
 
+function upgradeProviderUrl(value: string) {
+  const parsed = new URL(value);
+  if (parsed.protocol === "http:") parsed.protocol = "https:";
+  return parsed.href;
+}
+
 export function buildWebAgentRequest(input: WebAgentSearchInput, config: WebAgentConfig) {
   try {
     const validated = webAgentPromptInputSchema.parse(input);
@@ -110,13 +116,14 @@ export async function parseWebAgentStream(
     rawCandidateCount += images.length;
     if (rawCandidateCount > MAX_RAW_CANDIDATES) throw new WebAgentProtocolError();
     for (const image of images) {
-      if (!image.image_info.url.startsWith("https://") || !image.url.startsWith("https://")) continue;
-      const identity = JSON.stringify([image.image_info.url, image.url]);
+      const imageUrl = upgradeProviderUrl(image.image_info.url);
+      const sourcePageUrl = upgradeProviderUrl(image.url);
+      const identity = JSON.stringify([imageUrl, sourcePageUrl]);
       if (seen.has(identity)) continue;
       seen.add(identity);
       candidates.push({
         query: image.query, title: image.title,
-        imageUrl: image.image_info.url, sourcePageUrl: image.url,
+        imageUrl, sourcePageUrl,
       });
     }
   }

@@ -91,22 +91,30 @@ describe("Web Search Agent SSE protocol", () => {
     })])))).resolves.toEqual({ requestId: "request-1", candidates: [expected] });
   });
 
-  it("keeps safe HTTPS results when a provider image batch also contains HTTP results", async () => {
+  it("upgrades HTTP provider image/page pairs before exposing candidates", async () => {
     const safe = candidate({ idx: 2, query: "linen editorial", title: "Linen editorial" });
     await expect(parse(event(chunk([
       candidate({
-        url: "http://journal.test/insecure",
-        image_info: { url: "http://images.test/insecure.jpg", width: 800, height: 600 },
+        url: "http://journal.test/insecure?sku=123#photo",
+        image_info: { url: "http://images.test/insecure.jpg?sig=a%2Fb&x=1#crop", width: 800, height: 600 },
       }),
       safe,
     ])))).resolves.toEqual({
       requestId: "request-1",
-      candidates: [{
-        query: "linen editorial",
-        title: "Linen editorial",
-        sourcePageUrl: "https://journal.test/article",
-        imageUrl: "https://images.test/shirt.jpg?sig=a%2Fb&x=1",
-      }],
+      candidates: [
+        {
+          query: "linen trend",
+          title: "亚麻衬衫",
+          sourcePageUrl: "https://journal.test/insecure?sku=123",
+          imageUrl: "https://images.test/insecure.jpg?sig=a%2Fb&x=1",
+        },
+        {
+          query: "linen editorial",
+          title: "Linen editorial",
+          sourcePageUrl: "https://journal.test/article",
+          imageUrl: "https://images.test/shirt.jpg?sig=a%2Fb&x=1",
+        },
+      ],
     });
   });
 
