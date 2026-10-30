@@ -106,6 +106,29 @@ describe("Web Search Agent HTTP provider", () => {
     expect(body.locked).toBe(false);
   });
 
+  it.each([
+    null, 42, [],
+    { choices: null }, { choices: {} }, { choices: [null] }, { choices: [42] }, { choices: [[]] },
+    { choices: [{ message: null }] }, { choices: [{ message: 42 }] }, { choices: [{ message: [] }] },
+    { choices: [{ message: { additional_kwargs: null } }] },
+    { choices: [{ message: { additional_kwargs: 42 } }] },
+    { choices: [{ message: { additional_kwargs: [] } }] },
+    { choices: [{ message: { content: "Valid first message" } }, { message: 42 }] },
+    {}, { choices: [] }, { choices: [{}] },
+  ])("maps malformed or message-less known envelopes to UNAVAILABLE, never EMPTY (case %#)", async (output) => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(response(sse({ request_id: "request-platform-1", output })));
+    await expectFailure(createWebAgentProvider(config, fetchImpl).search(input()), undefined, 502);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps unknown events surrounding a valid HTML-only message without additional_kwargs to EMPTY", async () => {
+    const unknown = sse({ request_id: "request-platform-1", event: "progress", step: 2 });
+    const html = sse({ request_id: "request-platform-1", output: { choices: [{ message: { content: '<img src="https://images.test/ignored.jpg">' } }] } });
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(response(unknown + html + unknown));
+    await expectFailure(createWebAgentProvider(config, fetchImpl).search(input()), "INSPIRATION_VISUALS_EMPTY", 502);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("returns EMPTY only for a valid stream with no structured images, ignoring HTML", async () => {
     const htmlOnly = { request_id: "request-platform-1", output: { choices: [{ message: {
       content: '<img src="https://images.test/from-html.jpg">', additional_kwargs: {},

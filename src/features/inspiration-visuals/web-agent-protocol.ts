@@ -1,5 +1,5 @@
 import {
-  webAgentChoicesSchema,
+  webAgentOutputSchema,
   webAgentConfigSchema,
   webAgentImagesSchema,
   webAgentPromptInputSchema,
@@ -69,6 +69,7 @@ export async function parseWebAgentStream(
   const candidates: WebAgentSearchResult["candidates"] = [];
   const seen = new Set<string>();
   let requestId: string | undefined;
+  let hasMessage = false;
   let rawCandidateCount = 0;
   let bytes = 0;
   let buffer = "";
@@ -96,10 +97,14 @@ export async function parseWebAgentStream(
       if (requestId !== undefined && requestId !== validatedId) throw new WebAgentProtocolError();
       requestId = validatedId;
     }
-    const choices = field(field(envelope, "output"), "choices");
+    const rawOutput = field(envelope, "output");
+    if (rawOutput === undefined) return;
+    // Validate every present known container, including non-first choices, so
+    // malformed provider data cannot be reclassified as a valid empty search.
+    const { choices } = webAgentOutputSchema.parse(rawOutput);
     if (choices === undefined) return;
-    const first = webAgentChoicesSchema.parse(choices)[0];
-    const extra = field(field(first, "message"), "additional_kwargs");
+    if (choices.some(({ message }) => message !== undefined)) hasMessage = true;
+    const extra = choices[0]?.message?.additional_kwargs;
     if (field(extra, "data_type") !== "image") return;
     const images = webAgentImagesSchema.parse(field(extra, "data_json"));
     rawCandidateCount += images.length;
@@ -142,7 +147,7 @@ export async function parseWebAgentStream(
     buffer += decoder.decode();
     if (buffer !== "") line(buffer);
     dispatch();
-    if (requestId === undefined) throw new WebAgentProtocolError();
+    if (requestId === undefined || !hasMessage) throw new WebAgentProtocolError();
     return { requestId, candidates };
   } catch {
     cancel();

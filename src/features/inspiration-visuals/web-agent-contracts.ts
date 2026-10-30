@@ -74,4 +74,15 @@ export const webAgentImagesSchema = z.array(z.object({
   }).refine(({ width, height }) => width * height <= 40_000_000),
 })).max(64);
 
-export const webAgentChoicesSchema = z.array(z.unknown()).max(8);
+const webAgentMessageSchema = z.object({
+  // Unknown message fields (including content/HTML) are deliberately discarded.
+  additional_kwargs: z.record(z.string(), z.unknown()).optional(),
+});
+
+export const webAgentChoicesSchema = z.array(z.object({
+  message: webAgentMessageSchema.optional(),
+})).max(8);
+
+export const webAgentOutputSchema = z.object({
+  choices: webAgentChoicesSchema.optional(),
+});

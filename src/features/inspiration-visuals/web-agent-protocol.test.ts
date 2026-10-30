@@ -57,6 +57,33 @@ describe("Web Search Agent SSE protocol", () => {
     } }] } }))).resolves.toEqual({ requestId: "request-1", candidates: [] });
   });
 
+  it.each([
+    null, 42, [],
+    { choices: null }, { choices: {} }, { choices: [null] }, { choices: [42] }, { choices: [[]] },
+    { choices: [{ message: null }] }, { choices: [{ message: 42 }] }, { choices: [{ message: [] }] },
+    { choices: [{ message: { additional_kwargs: null } }] },
+    { choices: [{ message: { additional_kwargs: 42 } }] },
+    { choices: [{ message: { additional_kwargs: [] } }] },
+    { choices: [{ message: { content: "Valid first message" } }, { message: 42 }] },
+  ])("rejects malformed present known envelope structures (case %#)", async (output) => {
+    const malformed = event({ request_id: "request-1", output });
+    await expect(parse(malformed)).rejects.toMatchObject({ code: "INSPIRATION_VISUALS_UNAVAILABLE" });
+    // A previous valid image message must not hide a malformed later frame.
+    await expect(parse(event(chunk()) + malformed)).rejects.toMatchObject({ code: "INSPIRATION_VISUALS_UNAVAILABLE" });
+  });
+
+  it.each([{}, { output: {} }, { output: { choices: [] } }, { output: { choices: [{}] } }])(
+    "requires an Agent message before accepting a zero-image stream (case %#)", async (envelope) => {
+      await expect(parse(event({ request_id: "request-1", ...envelope }))).rejects.toMatchObject({ code: "INSPIRATION_VISUALS_UNAVAILABLE" });
+    },
+  );
+
+  it("ignores legitimate unknown events around a valid content-only message", async () => {
+    const unknown = event({ request_id: "request-1", event: "progress", progress: { step: 2 } });
+    const html = event({ request_id: "request-1", output: { choices: [{ message: { content: '<img src="https://images.test/ignored.jpg">' } }] } });
+    await expect(parse(unknown + event({ output: { stage: "searching" } }) + html + unknown)).resolves.toEqual({ requestId: "request-1", candidates: [] });
+  });
+
   it("deduplicates validated image/page pairs and strips fragments without rewriting signed queries", async () => {
     await expect(parse(event(chunk()) + event(chunk([candidate({
       url: "https://JOURNAL.test/article#photo",
