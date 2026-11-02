@@ -502,7 +502,7 @@ git diff --check
 以下门禁当前仍为 **待执行**，不得把本地离线结果写成生产/真实计费通过：
 
 1. 目标 Linux 上完整执行前文 systemd verify、环境文件顺序和无网络探针，确认 web readiness 不依赖 worker 存活；macOS 本地测试不替代该证据。
-2. 另获明确计费授权后执行 `RUN_REAL_INSPIRATION_CONCEPT_TESTS=1 npm run test:inspiration:concept-real`。最多三次 paid create，24 次/阶段有界查询，无自动重新提交；验证三张尺寸正确的 PNG、私有 OSS 导入及 finally 删除。固定失败码包括清理失败；失败后停止，诊断后重新授权，不能循环重跑。测试不输出可定位 smoke 对象的 ID/key，运维应依赖受控 bucket 审计确认清理，不能公开原始 provider/OSS 日志。
+2. 另获明确计费授权后执行 `RUN_REAL_INSPIRATION_CONCEPT_TESTS=1 npm run test:inspiration:concept-real`。最多三次 paid create，60 次/阶段有界查询（最后一次约在 565 秒），总请求阶段预算 24 分钟，无自动重新提交；验证三张尺寸正确的 PNG、私有 OSS 导入及 finally 删除。固定失败码包括清理失败；失败后停止，诊断后重新授权，不能循环重跑。测试不输出可定位 smoke 对象的 ID/key，运维应依赖受控 bucket 审计确认清理，不能公开原始 provider/OSS 日志。
 3. 代码以两个概念开关 false 部署；在隔离且已获批准的候选入口/worker 配置中，由一个内部账户只创建一套。草图提交后重启 worker，确认不重复提交/计费、两张衍生图仍完成。检查三张 durable asset、3:4/3:4/4:3、至多三输入、父草图与首两张参考的顺序、owner/download/share 私有字节响应、撤销和跨租户 404、删除清理、关闭开关后的历史可读、worker 状态、脱敏日志及实际 DashScope workspace 账单。
 4. 保存发布 SHA、执行时间、数量/费用和通过/失败结论，绝不记录提示词、凭据、provider IDs、URL、对象键、Base64 或私人内容。任一门禁未通过，公开 web 保持 `INSPIRATION_CONCEPT_IMAGES_ENABLED=false`、`INSPIRATION_CONCEPT_RELEASE_APPROVED=false`；全部通过后才按前文严格发布顺序启用。
 

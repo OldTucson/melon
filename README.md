@@ -259,6 +259,6 @@ npm run test:e2e:concepts-disabled
 npm run test:inspiration:concept-real
 ```
 
-脚本显式设置 `RUN_REAL_INSPIRATION_CONCEPT_TESTS=1`，最多提交一张草图、一张效果图和一张款式图，不重试付费提交；每阶段最多 24 次有界退避查询，总请求阶段预算 12 分钟。固定本地参考图最多两张，衍生输入为已持久化草图加这两张参考。模型固定 `qwen-image-3.0-pro`，尺寸为 1536×2048、1536×2048、2048×1536，导入后解码验证并在 finally 删除烟测对象。失败仅输出固定错误，不打印提示词、provider ID、URL、凭据、对象键或 Base64；清理失败同样使测试失败。配置在 opt-in 后才读取环境及 `.env.local` 白名单，进程环境优先；凭据存在不代表计费授权。
+脚本显式设置 `RUN_REAL_INSPIRATION_CONCEPT_TESTS=1`，最多提交一张草图、一张效果图和一张款式图，不重试付费提交；每阶段最多 60 次有界退避查询，最后一次查询约在 565 秒，总请求阶段预算 24 分钟。固定本地参考图最多两张，衍生输入为已持久化草图加这两张参考。模型固定 `qwen-image-3.0-pro`，尺寸为 1536×2048、1536×2048、2048×1536，导入后解码验证并在 finally 删除烟测对象。失败仅输出固定错误，不打印提示词、provider ID、URL、凭据、对象键或 Base64；清理失败同样使测试失败。配置在 opt-in 后才读取环境及 `.env.local` 白名单，进程环境优先；凭据存在不代表计费授权。
 
 **待发布门禁：**目标 Linux systemd verify/实际环境探针、上述真实提供方与私有 OSS/账单烟测、一次受控生产套图（草图提交后重启 worker，两个衍生图仍完成）均须另行执行并留存脱敏证据。离线 PASS 不允许打开生产 UI；在这些门禁完成前保持 `INSPIRATION_CONCEPT_IMAGES_ENABLED=false` 和 `INSPIRATION_CONCEPT_RELEASE_APPROVED=false`。
