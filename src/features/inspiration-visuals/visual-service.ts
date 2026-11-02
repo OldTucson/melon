@@ -433,7 +433,7 @@ export async function deleteInspirationWithVisualAssets(
       }
       await store.delete(keys);
     } catch {
-      // Each namespace cleans independently after commit; failures leave orphans.
+      // Each namespace cleans independently; the durable manifest retries failures.
     }
   };
   await remove(deletion.visualKeys, dependencies.store, createVisualObjectStore);

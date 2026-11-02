@@ -234,3 +234,20 @@ describe("web systemd operations contract", () => {
     expect(readme).toContain("npm run prod:check");
   });
 });
+
+// Release safety contract: instructions must not defeat pinned retry inputs.
+describe("reference-aware inspiration retention", () => {
+  it("prohibits age expiration and requires checking broader bucket rules", async () => {
+    for (const file of ["README.md", "docs/operations/web-production.md", "docs/operations/aliyun-oss.md"]) {
+      const text = await readRepositoryFile(file);
+      for (const paragraph of text.split(/\n\s*\n/).filter((part) => /research|研究/.test(part))) {
+        expect(paragraph).not.toMatch(/(?:设置|配置|启用|apply|enable)[^\n]*(?:\d+|三十)\s*(?:天|days?)[^\n]*(?:生命周期|lifecycle|expiration)/i);
+      }
+      expect(text).not.toMatch(/research\/[^\n]*设置\s*30\s*天生命周期|研究范围生命周期[^\n]*兜底|30 天规则未配置/);
+      expect(text).toMatch(/禁止[^\n]*生命周期[^\n]*research/);
+      expect(text).toMatch(/候选[^\n]*生产[^\n]*更广[^\n]*research[^\n]*concept/);
+      expect(text).toMatch(/引用感知[^\n]*清理/);
+      expect(text).toMatch(/持久[^\n]*manifest/);
+    }
+  });
+});

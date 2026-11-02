@@ -55,7 +55,7 @@ describe("scheduled concept cleanup and status", () => {
     const oldKey = orphan(terminal.setId), freshKey = orphan(terminal.setId, now), activeKey = orphan(active.setId);
     await db.update(sets).set({ status: "generating", completedAt: null }).where(eq(sets.id, active.setId));
     const result = await run();
-    expect(result).toEqual({ scannedSets: 2, deletedObjects: 3, deletedSets: 1, skippedActiveSets: 1, deletedResearchObjects: 0, failures: 0 });
+    expect(result).toEqual({ scannedSets: 2, deletedObjects: 3, deletedSets: 1, skippedActiveSets: 1, deletedResearchObjects: 0, failures: 0, scannedReports: 0, deletedReports: 0 });
     expect(objects.has(oldKey)).toBe(false); expect(objects.has(freshKey)).toBe(true); expect(objects.has(activeKey)).toBe(true);
     terminal.assets.forEach(({ objectKey }) => expect(objects.has(objectKey)).toBe(true));
     expect(await db.select().from(sets).where(eq(sets.id, deleted.setId))).toHaveLength(0);

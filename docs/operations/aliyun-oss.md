@@ -202,3 +202,7 @@ OSS_ADAPTER=real
 - 本地 RAM 调用者和 ECS 实例角色能以 `users/*/patterns/*` 下的图案前缀调用 `ListObjectsV2`，但不能列举 Bucket 根前缀或图案树以外的对象；对象读取和删除仍只能访问 `BUCKET/users/*/patterns/*`，写入只允许 `BUCKET/users/*/patterns/*/derived/search/*`。
 - 7 天未完成 multipart 生命周期规则已启用。
 - 应用日志和数据库中没有长期密钥、security token 或签名 URL。
+
+## 灵感研究与概念对象保留
+
+禁止使用生命周期到期规则删除 `research/` 或 `concept-sets/` 已完成对象：保留的概念引用可能长期用于衍生重试，数据库 pin 无法阻止 OSS 自动过期。候选与生产 bucket 均必须核验没有更广的 bucket/前缀规则使 `research/` 或 `concept-sets/` 到期；未核验不得启用。被新任务取代且无引用的研究键只由引用感知应用清理删除；报告删除由无级联外键的持久清理 manifest 记录精确研究范围和集合 IDs，定时清理完成后才移除 manifest。不要用未实现的对象标签规则代替此门禁。

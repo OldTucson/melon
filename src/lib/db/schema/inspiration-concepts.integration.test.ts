@@ -342,6 +342,30 @@ describe("durable concept schema and queue", () => {
     });
     return id;
   }
+  it("commits legacy direct analysis deletion with pinned visuals and captures every set before cascading", async () => {
+    const visualAssetId = await webAsset();
+    const row = await insertSet();
+    await db.insert(references).values({ ownerId, analysisId, setId: row.id, visualAssetId, ordinal: 0 });
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`delete from inspiration_analyses where id = ${analysisId}::uuid`);
+    });
+    expect(await db.select().from(sets)).toHaveLength(0);
+    expect(await db.select().from(inspirationVisualAssets)).toHaveLength(0);
+    const manifests = await db.execute(sql`select owner_id, analysis_id, set_ids from inspiration_report_cleanup_manifests`);
+    expect(manifests).toEqual([expect.objectContaining({ owner_id: ownerId, analysis_id: analysisId, set_ids: [row.id] })]);
+  });
+  it("defers individual pinned visual deletion until commit, then rejects it", async () => {
+    const visualAssetId = await webAsset();
+    const row = await insertSet();
+    await db.insert(references).values({ ownerId, analysisId, setId: row.id, visualAssetId, ordinal: 0 });
+    let statementFinished = false;
+    await constraint(db.transaction(async (tx) => {
+      await tx.delete(inspirationVisualAssets).where(eq(inspirationVisualAssets.id, visualAssetId));
+      statementFinished = true;
+    }), "23503", "inspiration_concept_references_owner_analysis_asset_fk");
+    expect(statementFinished).toBe(true);
+    expect(await db.select().from(inspirationVisualAssets)).toHaveLength(1);
+  });
   it("pins ordered evidence with owner/analysis composite references and restricts deletion", async () => {
     const visualAssetId = await webAsset();
     const foreignAsset = await webAsset(otherOwner, otherAnalysis);
@@ -939,6 +963,15 @@ describe("durable concept schema and queue", () => {
     expect(await db.select().from(heartbeats)).toEqual([]);
     expect(await db.select().from(sets)).toEqual([]);
     expect(await db.select().from(tasks)).toEqual([]);
+  });
+  it("installs a deferred NO ACTION FK and independent durable manifest constraints", async () => {
+    const constraints = await db.execute(sql`select contype, condeferrable, condeferred, confdeltype from pg_constraint where conname = 'inspiration_concept_references_owner_analysis_asset_fk'`);
+    expect(constraints).toEqual([expect.objectContaining({ contype: "f", condeferrable: true, condeferred: true, confdeltype: "a" })]);
+    expect(await db.execute(sql`select conname from pg_constraint where conrelid = 'inspiration_report_cleanup_manifests'::regclass and contype = 'f'`)).toHaveLength(0);
+    await constraint(db.execute(sql`insert into inspiration_report_cleanup_manifests (owner_id, analysis_id, set_ids, lease_token) values (${ownerId}::uuid, ${analysisId}::uuid, '{}'::uuid[], ${randomUUID()}::uuid)`), "23514", "inspiration_report_cleanup_lease_check");
+    await constraint(db.execute(sql`insert into inspiration_report_cleanup_manifests (owner_id, analysis_id, set_ids) values (${ownerId}::uuid, ${analysisId}::uuid, array[null]::uuid[])`), "23514", "inspiration_report_cleanup_scopes_check");
+    const journal = JSON.parse(await readFile("drizzle/meta/_journal.json", "utf8")) as { entries: { tag: string }[] };
+    expect(journal.entries.at(-1)?.tag).toBe("0013_melon_report_cleanup_manifests");
   });
   it("registers an additive generated migration with composite keys and queue constraints", async () => {
     const journal = JSON.parse(

@@ -108,8 +108,9 @@ export async function deleteAnalysisWithObjectKeys(ownerId: string, analysisId: 
         return key.ownerId === ownerId && key.analysisId === analysisId && key.setId === asset.setId && key.outputId === asset.id && key.outputKind === asset.outputKind ? [asset.objectKey] : [];
       } catch { return []; }
     });
-    // Reference -> visual uses RESTRICT: retire sets/references before the
-    // analysis cascade reaches visual assets, within the same transaction.
+    // Persist exact cleanup scopes before retiring sets. The legacy analysis
+    // trigger merges again, preserving this earlier snapshot.
+    await tx.execute(sql`select capture_inspiration_report_cleanup(${ownedAnalysis.ownerId}::uuid, ${ownedAnalysis.id}::uuid)`);
     await tx.delete(sets).where(and(eq(sets.ownerId, ownerId), eq(sets.analysisId, analysisId)));
     const [row] = await tx.delete(analyses).where(and(owned(ownerId, analysisId), ne(analyses.status, "pending"))).returning();
     if (!row) throw new Error("Locked analysis disappeared");

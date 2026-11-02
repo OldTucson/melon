@@ -141,3 +141,26 @@ describe("research cleanup metadata", () => {
     await expect(cleanupStore().researchObjectLastModified(key)).rejects.toThrow("Concept object unavailable");
   });
 });
+
+
+describe("deleted report research listing", () => {
+  const researchPrefix = `users/${scope.ownerId}/inspiration/${scope.analysisId}/research/`;
+  const researchKey = `${researchPrefix}${scope.setId}/${outputId}.png`;
+  it("lists only the exact canonical report research scope with bounded validated pages", async () => {
+    sdk.listV2.mockResolvedValue({ objects: [{ name: researchKey, lastModified: "2026-11-01T00:00:00Z" }], isTruncated: false });
+    await expect(cleanupStore().listObjects(researchPrefix)).resolves.toEqual([{ key: researchKey, lastModified: new Date("2026-11-01T00:00:00Z") }]);
+    expect(sdk.listV2).toHaveBeenCalledWith({ prefix: researchPrefix, "max-keys": 1000 });
+    for (const bad of ["users/", researchPrefix.slice(0, -1), researchPrefix + scope.setId + "/", researchPrefix.replace("research", "concept-sets")]) {
+      await expect(cleanupStore().listObjects(bad)).rejects.toThrow("Concept object unavailable");
+    }
+  });
+  it.each([key, `users/${randomUUID()}/inspiration/${scope.analysisId}/research/${scope.setId}/${outputId}.png`, researchKey + "?token", researchKey.replace(outputId, outputId.toUpperCase())])("rejects malformed and foreign research listings %#", async (bad) => {
+    sdk.listV2.mockResolvedValue({ objects: [{ name: bad, lastModified: "2026-11-01T00:00:00Z" }], isTruncated: false });
+    await expect(cleanupStore().listObjects(researchPrefix)).rejects.toThrow("Concept object unavailable");
+  });
+  it("fails closed after ten research pages instead of returning a partial listing", async () => {
+    sdk.listV2.mockImplementation(async () => ({ objects: [], isTruncated: true, nextContinuationToken: randomUUID() }));
+    await expect(cleanupStore().listObjects(researchPrefix)).rejects.toThrow("Concept object unavailable");
+    expect(sdk.listV2).toHaveBeenCalledTimes(10);
+  });
+});

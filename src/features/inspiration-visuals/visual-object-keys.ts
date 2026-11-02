@@ -40,3 +40,17 @@ export function assertVisualObjectKeyBelongsToResearch(input: ResearchScope & { 
     return parts;
   } catch { throw invalidKey(); }
 }
+
+/** Exact analysis scope, used only after durable report deletion authorization. */
+export function researchAnalysisObjectPrefix(input: Pick<ResearchScope, "ownerId" | "analysisId">): string {
+  const scope = identitySchema.pick({ ownerId: true, analysisId: true }).parse(input);
+  return `users/${scope.ownerId}/inspiration/${scope.analysisId}/research/`;
+}
+export function assertResearchAnalysisObjectPrefix(prefix: string): string {
+  try {
+    const segments = prefix.split("/");
+    const canonical = researchAnalysisObjectPrefix({ ownerId: segments[1]!, analysisId: segments[3]! });
+    if (prefix !== canonical) throw invalidKey();
+    return canonical;
+  } catch { throw invalidKey(); }
+}

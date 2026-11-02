@@ -437,11 +437,15 @@ sudo systemctl start melon-inspiration-concept-worker.service
 
 ### 孤儿对象清理
 
-每日 03:20 加最多 45 分钟随机延迟，`Persistent=true` 会在主机错过时补跑。服务读取 `/etc/melon/web.env`，oneshot 最长 15 分钟；程序在开始新项目前检查 10 分钟预算。只扫描数据库授权的集合前缀，每次至多 25 个集合和 25 个研究对象键，每个集合至多十页/10,000 个对象；异常大前缀失败并保留数据，需单独排查，不使用全 bucket 删除。
+禁止使用生命周期到期规则删除 `research/` 或 `concept-sets/` 已完成对象：保留的概念引用可能长期用于衍生重试，数据库 pin 无法阻止 OSS 自动过期。候选与生产 bucket 均必须核验没有更广的 bucket/前缀规则使 `research/` 或 `concept-sets/` 到期；未核验不得启用。被新任务取代且无引用的研究键只由引用感知应用清理删除；报告删除由无级联外键的持久清理 manifest 记录精确研究范围和集合 IDs，定时清理完成后才移除 manifest。不要用未实现的对象标签规则代替此门禁。
+
+每日 03:20 加最多 45 分钟随机延迟，`Persistent=true` 会在主机错过时补跑。服务读取 `/etc/melon/web.env`，oneshot 最长 15 分钟；程序在开始新项目前检查 10 分钟预算。只扫描数据库授权的集合前缀及持久 manifest 记录的精确报告 research 前缀、concept-set 前缀，每次至多 25 个集合、25 个研究对象键和 25 份报告 manifest；每个前缀至多十页/10,000 个对象；异常大前缀失败并保留数据，需单独排查，不使用全 bucket 删除。
 
 集合必须是删除态或终态且超过 24 小时，终态必须同时满足更新时间和完成时间；对象本身也须超过 24 小时。queued/generating、当前输出、有效任务租约、有效删除租约、图库对象和新写入都受到保护。成功扫描的终态更新时间向后移动，避免批次始终卡在相同的前 25 个集合。失败保留可重试记录；先解决失败原因再补跑，重复失败项可能拖慢积压清理。
 
-研究证据必须被较新的已完成研究任务取代至少 24 小时，所有同键别名均无存活引用关系、不是当前/处理中研究任务，并通过对象元数据年龄检查。tombstone 的引用仍保留，直到该集合完成对象删除并硬清理后才释放。研究删除需逐键 OSS 确认；失败不删除数据库记录。清理持有分析/集合数据库锁防止同时发布或新增引用，可能短暂阻塞同一分析的编辑/重试。
+研究证据必须被较新的已完成研究任务取代至少 24 小时，所有同键别名均无存活引用关系、不是当前/处理中研究任务，并通过对象元数据年龄检查。tombstone 的引用仍保留，直到该集合完成对象删除并硬清理后才释放。研究删除需逐键 OSS 确认；失败不删除数据库记录。
+
+报告删除的 manifest 在事务内创建，analysis/user BEFORE DELETE 触发器在旧版本或用户级级联前补齐精确集合 IDs；manifest 无 FK，级联不删除它。满 24 小时后清理先提交 30 分钟租约，逐前缀校验键与年龄、逐键确认删除并再次列举；所有记录范围为空且 exact token/until 仍有效才移除 manifest。新对象、图库/存活别名继续保护。失败释放原租约，进程退出/DB 故障后租约到期可重领；dry-run 只读取/列举且不领取租约。存活报告的清理仍持有分析/集合数据库锁防止同时发布或新增引用，可能短暂阻塞同一分析的编辑/重试。
 
 ```bash
 # 先只读演练：没有 DB 更新、租约写入、对象删除。
@@ -469,7 +473,7 @@ sudo systemctl stop melon-inspiration-concept-worker.service
 sudo systemctl disable melon-inspiration-concept-worker.service
 ```
 
-需要重启 worker 恢复导入时，保持公开 web 生成开关 false，完整执行上文「Worker 临时开关、无请求验证与撤销」中的专用文件创建（root:root 0600）、`90-` 追加文件与 `99-` 探针安装、Linux verify/reload/有效标志检查；通过后撤掉探针、reload，再启动已批准的真实 worker。worker 没有“仅导入”模式，也可能处理已有 queued 任务；若不批准这些任务继续提交，应登记状态并保持停止。恢复完成后执行该节的停止、移除 drop-in、daemon-reload、删除专用文件及检查命令，确认仅加载共享文件且保持 worker 停止。不要使用 inline `Environment=` 代替这套文件顺序。必要时停止正在执行的 cleanup service（未完成事务回滚，下次可重试），然后切回上一 web release。保留 additive 表、任务记录、引用、已完成 OSS 产物以及已有分享/下载数据；事故期间绝不执行破坏性降级 SQL、全 bucket 清理或删除既有输出。回滚前版本若不显示新概念卡片，数据仍保留供修复后恢复展示。
+需要重启 worker 恢复导入时，保持公开 web 生成开关 false，完整执行上文「Worker 临时开关、无请求验证与撤销」中的专用文件创建（root:root 0600）、`90-` 追加文件与 `99-` 探针安装、Linux verify/reload/有效标志检查；通过后撤掉探针、reload，再启动已批准的真实 worker。worker 没有“仅导入”模式，也可能处理已有 queued 任务；若不批准这些任务继续提交，应登记状态并保持停止。恢复完成后执行该节的停止、移除 drop-in、daemon-reload、删除专用文件及检查命令，确认仅加载共享文件且保持 worker 停止。不要使用 inline `Environment=` 代替这套文件顺序。必要时停止正在执行的 cleanup service（未完成事务回滚，下次可重试），然后切回上一 web release。必须保留 0013 additive manifest 表、analysis/user BEFORE DELETE 触发器及 NO ACTION DEFERRABLE INITIALLY DEFERRED 引用 FK；旧 web 仍能直接删除报告并留下精确 cleanup manifest。必须使用兼容版本的 cleanup binary/timer（独立保留新版本 release 目录并让清理服务指向它），或明确记录暂缓清理并保留 manifests，待下一次兼容发布恢复处理；不能让旧 cleanup binary 被误认为可消费新 manifests。保留 additive 表、任务记录、引用、已完成 OSS 产物以及已有分享/下载数据；事故期间绝不执行破坏性降级 SQL、全 bucket 清理或删除既有输出。回滚前版本若不显示新概念卡片，数据仍保留供修复后恢复展示。
 
 ### 概念套图 Task 11 发布验收记录要求
 

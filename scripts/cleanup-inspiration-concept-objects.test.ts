@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { runConceptCleanupCli } from "./cleanup-inspiration-concept-objects";
-const summary = { scannedSets: 1, deletedObjects: 0, deletedSets: 0, skippedActiveSets: 2, deletedResearchObjects: 0, failures: 0 };
+const summary = { scannedSets: 1, deletedObjects: 0, deletedSets: 0, skippedActiveSets: 2, deletedResearchObjects: 0, failures: 0, scannedReports: 0, deletedReports: 0 };
 describe("concept cleanup CLI", () => {
   it.each([{ args: [] }, { args: ["--dry-run"] }])("validates before importing services and closes DB for %j", async ({ args }) => {
     const calls: string[] = [], output: string[] = [];

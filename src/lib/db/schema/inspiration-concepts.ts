@@ -173,7 +173,8 @@ export const inspirationConceptReferences = pgTable(
         inspirationVisualAssets.analysisId,
         inspirationVisualAssets.id,
       ],
-    }).onDelete("restrict"),
+    // Deferrability is applied in 0013 SQL; Drizzle cannot represent it.
+    }).onDelete("no action"),
     index("inspiration_concept_references_asset_idx").on(table.visualAssetId),
     check(
       "inspiration_concept_references_ordinal_check",
@@ -344,3 +345,24 @@ export type InspirationConceptOutputRow =
   typeof inspirationConceptOutputs.$inferSelect;
 export type InspirationConceptWorkerHeartbeatRow =
   typeof inspirationConceptWorkerHeartbeats.$inferSelect;
+
+/** Durable deletion authority; deliberately has no foreign keys to live rows. */
+export const inspirationReportCleanupManifests = pgTable(
+  "inspiration_report_cleanup_manifests",
+  {
+    ownerId: uuid("owner_id").notNull(),
+    analysisId: uuid("analysis_id").notNull(),
+    setIds: uuid("set_ids").array().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }),
+    leaseToken: uuid("lease_token"),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerId, table.analysisId] }),
+    index("inspiration_report_cleanup_due_idx").on(table.createdAt, table.lastAttemptAt, table.analysisId),
+    check("inspiration_report_cleanup_lease_check", sql`(${table.leaseToken} is null) = (${table.leaseUntil} is null)`),
+    check("inspiration_report_cleanup_scopes_check", sql`array_position(${table.setIds}, null) is null and (cardinality(${table.setIds}) = 0 or array_ndims(${table.setIds}) = 1)`),
+  ],
+);
+export type InspirationReportCleanupManifestRow = typeof inspirationReportCleanupManifests.$inferSelect;

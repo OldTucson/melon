@@ -30,6 +30,7 @@ export const resetDatabase = async (
         TRUNCATE TABLE
           "auth_login_rate_limits",
           "inspiration_concept_worker_heartbeats",
+          "inspiration_report_cleanup_manifests",
           "inspiration_concept_outputs",
           "inspiration_concept_references",
           "inspiration_concept_tasks",

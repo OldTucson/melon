@@ -6,7 +6,7 @@ import type { OssConnectionConfig } from "@/features/storage/contracts";
 import { createDefaultCredentialResolver } from "@/features/storage/oss-adapter";
 import { UPLOAD_REQUEST_TIMEOUT_MS } from "@/features/storage/upload-timing";
 import { OSS_DELETE_BATCH_SIZE, parseOssConnectionConfig } from "@/features/storage/validation";
-import { parseVisualObjectKey } from "@/features/inspiration-visuals/visual-object-keys";
+import { assertResearchAnalysisObjectPrefix, parseVisualObjectKey } from "@/features/inspiration-visuals/visual-object-keys";
 import { assertConceptSetObjectPrefix, parseConceptObjectKey } from "./object-keys";
 
 export interface ConceptObjectStore {
@@ -99,7 +99,9 @@ function createScopedConceptStore(input: OssConnectionConfig, dependencies: {
     deleteResearchObjects: (keys) => deleteValidated(keys, parseVisualObjectKey),
     async listObjects(inputPrefix) {
       try {
-        const prefix = assertConceptSetObjectPrefix(inputPrefix);
+        const research = inputPrefix.endsWith("/research/");
+        const prefix = research ? assertResearchAnalysisObjectPrefix(inputPrefix) : assertConceptSetObjectPrefix(inputPrefix);
+        const parseKey = research ? parseVisualObjectKey : parseConceptObjectKey;
         return await withClient(async (client) => {
           const objects: { key: string; lastModified: Date }[] = [];
           const keys = new Set<string>(), tokens = new Set<string>();
@@ -108,7 +110,7 @@ function createScopedConceptStore(input: OssConnectionConfig, dependencies: {
             const result = await client.listV2({ prefix, "max-keys": 1000, ...(token ? { "continuation-token": token } : {}) });
             if (!Array.isArray(result.objects) || result.objects.length > 1000 || typeof result.isTruncated !== "boolean") throw unavailable();
             for (const object of result.objects) {
-              parseConceptObjectKey(object.name);
+              parseKey(object.name);
               if (!object.name.startsWith(prefix) || keys.has(object.name) || typeof object.lastModified !== "string") throw unavailable();
               const lastModified = new Date(object.lastModified);
               if (!Number.isFinite(lastModified.getTime())) throw unavailable();

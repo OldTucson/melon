@@ -15,7 +15,7 @@ export async function runConceptCleanupCli(args: readonly string[], deps: Depend
   try {
     deps.loadEnv(); await deps.validate(); services = await deps.loadServices();
     const result = await services.run(args.length === 1);
-    output = { dryRun: args.length === 1, scannedSets: count(result.scannedSets), deletedObjects: count(result.deletedObjects), deletedSets: count(result.deletedSets), skippedActiveSets: count(result.skippedActiveSets), deletedResearchObjects: count(result.deletedResearchObjects), failures: count(result.failures) };
+    output = { dryRun: args.length === 1, scannedSets: count(result.scannedSets), deletedObjects: count(result.deletedObjects), deletedSets: count(result.deletedSets), skippedActiveSets: count(result.skippedActiveSets), deletedResearchObjects: count(result.deletedResearchObjects), scannedReports: count(result.scannedReports), deletedReports: count(result.deletedReports), failures: count(result.failures) };
     code = result.failures ? 1 : 0;
   } catch { output = { status: "failed" }; }
   finally {
