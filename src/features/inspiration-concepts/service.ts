@@ -195,7 +195,7 @@ async function create(
     input,
     repository.conceptCreateOperationKey(target),
   );
-  if (existing) return existing;
+  if (existing) return { set: existing, created: false };
   if (analysis.status !== "completed") throw inspirationBusy();
   const result = parseInspirationStored(
     inspirationAnalysisResultSchema,
@@ -221,7 +221,7 @@ async function create(
       );
     }
   }
-  const { set } = await repository.createSetAndSketchTask({
+  const { set, created } = await repository.createSetAndSketchTask({
     ...target,
     briefSnapshot: buildInspirationConceptBrief({
       result,
@@ -230,12 +230,19 @@ async function create(
     }),
     now: new Date(),
   });
-  return setDto({ ...input, setId: set.id });
+  return { set: await setDto({ ...input, setId: set.id }), created };
 }
 
 export async function createConceptSet(
   input: z.input<typeof createSchema>,
 ): Promise<ConceptSetDto> {
+  return (await createConceptSetWithOutcome(input)).set;
+}
+
+/** HTTP status comes from the transaction that won or replayed the operation. */
+export async function createConceptSetWithOutcome(
+  input: z.input<typeof createSchema>,
+): Promise<{ set: ConceptSetDto; created: boolean }> {
   const parsed = parseInspirationInput(createSchema, input);
   return mutation(async () => {
     requireEnabled();
@@ -288,15 +295,17 @@ export async function regenerateConceptSet(
     if (existing) return existing;
     const source = await ownedSet(parsed);
     const references = await repository.listReferenceIdentities(parsed);
-    return create(
-      {
-        ...parsed,
-        directionIndex: source.set.directionIndex,
-        visualJobId: references[0]?.jobId ?? null,
-        referenceAssetIds: references.map(({ id }) => id),
-      },
-      parsed.setId,
-    );
+    return (
+      await create(
+        {
+          ...parsed,
+          directionIndex: source.set.directionIndex,
+          visualJobId: references[0]?.jobId ?? null,
+          referenceAssetIds: references.map(({ id }) => id),
+        },
+        parsed.setId,
+      )
+    ).set;
   });
 }
 export async function deleteConceptSet(

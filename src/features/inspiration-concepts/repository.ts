@@ -321,7 +321,7 @@ async function replaySet(tx: DbTransaction, input: CreateSetInput) {
     )
     .limit(1);
   if (!task) throw new Error("Concept set has no sketch task");
-  return { set, task };
+  return { set, task, created: false };
 }
 /** Check current evidence after acquiring the same lock used by visual refresh completion. */
 async function validateReferences(tx: DbTransaction, input: CreateSetInput) {
@@ -366,7 +366,11 @@ async function validateReferences(tx: DbTransaction, input: CreateSetInput) {
 }
 export async function createSetAndSketchTask(
   input: CreateSetInput,
-): Promise<{ set: InspirationConceptSetRow; task: InspirationConceptTaskRow }> {
+): Promise<{
+  set: InspirationConceptSetRow;
+  task: InspirationConceptTaskRow;
+  created: boolean;
+}> {
   try {
     return await db.transaction(async (tx) => {
       await lockConceptAnalysis(tx, input.analysisId);
@@ -460,7 +464,7 @@ export async function createSetAndSketchTask(
       await storeOperationResult(input.ownerId, tx, input.operationId, {
         setId: set!.id,
       });
-      return { set: set!, task: task! };
+      return { set: set!, task: task!, created: true };
     });
   } catch (error) {
     const name = uniqueConstraint(error);
@@ -1051,4 +1055,42 @@ export async function finishDeletingSet(input: ClaimInput & { setId: string }) {
     await tx.delete(sets).where(eq(sets.id, set.id));
     return true;
   });
+}
+
+/** Resolve an output through its live owned set and analysis, never by object key. */
+export async function findOwnedConceptResource(input: {
+  ownerId: string;
+  assetId: string;
+}) {
+  const [resource] = await db
+    .select({
+      asset: outputs,
+      directionTitle: sql<string>`${sets.briefSnapshot}->'direction'->>'title'`,
+      version: sets.version,
+    })
+    .from(outputs)
+    .innerJoin(
+      sets,
+      and(
+        eq(sets.id, outputs.setId),
+        eq(sets.ownerId, outputs.ownerId),
+        eq(sets.analysisId, outputs.analysisId),
+      ),
+    )
+    .innerJoin(
+      inspirationAnalyses,
+      and(
+        eq(inspirationAnalyses.id, sets.analysisId),
+        eq(inspirationAnalyses.ownerId, sets.ownerId),
+      ),
+    )
+    .where(
+      and(
+        eq(outputs.id, input.assetId),
+        eq(outputs.ownerId, input.ownerId),
+        isNull(sets.deletedAt),
+      ),
+    )
+    .limit(1);
+  return resource;
 }

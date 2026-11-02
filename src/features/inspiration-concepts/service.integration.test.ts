@@ -34,6 +34,7 @@ import { lockConceptAnalysis } from "./repository";
 import { conceptSetDtoSchema } from "./contracts";
 import {
   createConceptSet,
+  createConceptSetWithOutcome,
   listConceptSets,
   retryConceptDerivative,
   regenerateConceptSet,
@@ -1056,5 +1057,27 @@ describe("authenticated concept set lifecycle", () => {
         await visualRepository.listObjectKeysForAnalysis(ownerId, analysisId)
       ).sort(),
     ).toEqual([`private/${selected}.png`, `private/${unselected}.png`].sort());
+  });
+  it("reports first creation and sequential replay without changing DTO callers", async () => {
+    const request = input();
+    const first = await createConceptSetWithOutcome(request);
+    const replay = await createConceptSetWithOutcome(request);
+    expect(first.created).toBe(true);
+    expect(replay).toEqual({ set: first.set, created: false });
+    expect(await createConceptSet(request)).toEqual(first.set);
+  });
+  it("reports exactly one creation under simultaneous identical operations", async () => {
+    const request = input();
+    const outcomes = await Promise.all([
+      createConceptSetWithOutcome(request),
+      createConceptSetWithOutcome(request),
+    ]);
+    expect(outcomes.map(({ created }) => created).sort()).toEqual([
+      false,
+      true,
+    ]);
+    expect(outcomes[0]!.set).toEqual(outcomes[1]!.set);
+    expect(await db.select().from(sets)).toHaveLength(1);
+    expect(await db.select().from(tasks)).toHaveLength(1);
   });
 });
