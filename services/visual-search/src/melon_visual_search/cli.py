@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -134,11 +135,18 @@ def build_storage(settings: Settings) -> FeatureStorage:
 def load_embedding_runtime(
     settings: Settings,
     *,
-    lock_path: Path = MODEL_LOCK_PATH,
+    lock_path: Path | None = None,
     runtime_factory: Callable[..., EmbeddingRuntime] = EmbeddingRuntime.from_lock,
 ) -> EmbeddingRuntime:
     if settings.model_path is None or settings.model_sha256 is None:
         raise CliConfigurationError()
+    if lock_path is None:
+        configured_lock_path = os.environ.get("VISUAL_SEARCH_MODEL_LOCK_PATH")
+        lock_path = (
+            Path(configured_lock_path)
+            if configured_lock_path
+            else MODEL_LOCK_PATH
+        )
     return runtime_factory(
         lock_path,
         artifact_path=settings.model_path,

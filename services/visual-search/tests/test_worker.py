@@ -2166,3 +2166,38 @@ def test_cli_runtime_loader_uses_the_configured_deployment_artifact(
         "artifact_path": model_path,
         "expected_sha256": checksum,
     }
+
+
+def test_cli_runtime_loader_uses_the_deployment_model_lock_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_path = tmp_path / "deployed-model.onnx"
+    lock_path = tmp_path / "deployment-model-lock.json"
+    checksum = "a" * 64
+    settings = Settings(
+        internal_token="x" * 32,
+        model_path=model_path,
+        model_sha256=checksum,
+    )
+    captured: dict[str, object] = {}
+    sentinel = object()
+
+    def runtime_factory(path: Path, **kwargs):
+        captured["lock_path"] = path
+        captured.update(kwargs)
+        return sentinel
+
+    monkeypatch.setenv("VISUAL_SEARCH_MODEL_LOCK_PATH", str(lock_path))
+
+    runtime = cli.load_embedding_runtime(
+        settings,
+        runtime_factory=runtime_factory,
+    )
+
+    assert runtime is sentinel
+    assert captured == {
+        "lock_path": lock_path,
+        "artifact_path": model_path,
+        "expected_sha256": checksum,
+    }

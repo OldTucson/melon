@@ -25,7 +25,6 @@ from starlette.requests import Request
 
 from .auth import require_internal_token
 from .cli import (
-    MODEL_LOCK_PATH,
     CliConfigurationError,
     build_storage,
     load_embedding_runtime,
@@ -212,7 +211,7 @@ def _get_search_service() -> SearchService:
     try:
         repository.require_pgvector_compatible()
         storage = build_storage(settings)
-        runtime = load_embedding_runtime(settings, lock_path=MODEL_LOCK_PATH)
+        runtime = load_embedding_runtime(settings)
         return SearchService(
             repository,
             storage,
