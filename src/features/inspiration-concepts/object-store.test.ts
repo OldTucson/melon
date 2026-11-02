@@ -13,7 +13,7 @@ const credential = { accessKeyId: "id", accessKeySecret: "secret", securityToken
 const sdk = { put: vi.fn(), get: vi.fn(), listV2: vi.fn(), deleteMulti: vi.fn() };
 const createClient = vi.fn<(options: OSS.Options & { retryMax: number }) => typeof sdk>(() => sdk);
 const store = () => createConceptObjectStore(config, { getCredential: async () => credential, createClient });
-beforeEach(() => { vi.resetAllMocks(); sdk.put.mockResolvedValue({}); sdk.deleteMulti.mockResolvedValue({}); sdk.get.mockResolvedValue({ content: Buffer.of(1), res: { headers: { "content-type": "image/png" }, status: 200 } }); });
+beforeEach(() => { vi.resetAllMocks(); sdk.put.mockResolvedValue({}); sdk.deleteMulti.mockImplementation(async (keys: string[], options: OSS.DeleteMultiOptions) => ({ deleted: options.quiet ? [] : keys.map((Key) => ({ Key })), res: { status: 200, headers: { "x-oss-request-id": "request-private" }, size: 100, rt: 1 } })); sdk.get.mockResolvedValue({ content: Buffer.of(1), res: { headers: { "content-type": "image/png" }, status: 200 } }); });
 
 describe("private concept object scope", () => {
   it("builds canonical PNG concept keys and prefixes", () => {
@@ -71,5 +71,36 @@ describe("private concept object scope", () => {
     createClient.mockImplementationOnce(() => { throw new Error(key); });
     const fresh = store(); await expect(fresh.get(key)).rejects.toThrow(/^Concept object unavailable$/);
     await fresh.get(key); expect(createClient).toHaveBeenCalledTimes(3);
+  });
+});
+
+
+describe("verified concept deletion acknowledgement", () => {
+  it("requires verbose acknowledgements for every key across 1000-object batches", async () => {
+    const keys = Array.from({ length: 1001 }, () => conceptOutputObjectKey({ ...scope, outputKind: "flat", outputId: randomUUID() }));
+    await expect(store().delete(keys)).resolves.toBeUndefined();
+    expect(sdk.deleteMulti.mock.calls).toEqual([[keys.slice(0, 1000), { quiet: false }], [[keys[1000]], { quiet: false }]]);
+  });
+  it.each([
+    { deleted: [] },
+    { deleted: [{ Key: key }], errors: [{ Key: prefix + `sketch/${outputId}.png`, Code: "AccessDenied", Message: "provider-private-secret" }] },
+    { deleted: [key] },
+    { deleted: [{ Key: key }, { Key: key }] },
+    { deleted: [{ Key: key }, { Key: key.replace(scope.ownerId, "44444444-4444-4444-8444-444444444444") }] },
+    { deleted: undefined },
+  ])("rejects incomplete or malformed acknowledgements without private details %#", async (response) => {
+    const keys = [key, prefix + `sketch/${outputId}.png`];
+    sdk.deleteMulti.mockResolvedValueOnce({ ...response, res: { status: 200, headers: { "x-oss-request-id": "request-private" }, size: 100, rt: 1 } });
+    const error = await store().delete(keys).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toBe("Error: Concept object unavailable");
+    expect(String(error) + JSON.stringify(error)).not.toMatch(/users\/|provider-private|secret|request-private|AccessDenied/);
+    expect(error).not.toHaveProperty("cause");
+  });
+  it("stops before later batches if an earlier batch was not fully deleted", async () => {
+    const keys = Array.from({ length: 1001 }, () => conceptOutputObjectKey({ ...scope, outputKind: "flat", outputId: randomUUID() }));
+    sdk.deleteMulti.mockResolvedValueOnce({ deleted: keys.slice(0, 999).map((Key) => ({ Key })), res: { status: 200, headers: {}, size: 100, rt: 1 } });
+    await expect(store().delete(keys)).rejects.toThrow(/^Concept object unavailable$/);
+    expect(sdk.deleteMulti).toHaveBeenCalledOnce();
   });
 });

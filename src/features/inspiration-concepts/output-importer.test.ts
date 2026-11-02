@@ -11,7 +11,7 @@ const identity = { ownerId: "11111111-1111-4111-8111-111111111111", analysisId: 
 const input = { ...identity, outputKind: "flat" as const, temporaryImageUrl: "https://provider.example/private-result?TemporarySignature=secret", title: "款式图", altText: "正反面款式图" };
 const config = { region: "oss-cn-hangzhou", bucket: "melon-assets", endpoint: "https://assets.example.test", cname: true };
 function dependencies(bytes: Buffer, contentType = "image/png") {
-  const sdk = { put: vi.fn().mockResolvedValue({}), get: vi.fn(), listV2: vi.fn(), deleteMulti: vi.fn().mockResolvedValue({}) };
+  const sdk = { put: vi.fn().mockResolvedValue({}), get: vi.fn(), listV2: vi.fn(), deleteMulti: vi.fn().mockImplementation(async (keys: string[]) => ({ deleted: keys.map((Key) => ({ Key })), res: { status: 200, headers: {}, size: 100, rt: 1 } })) };
   const store = createConceptObjectStore(config, { getCredential: async () => ({ accessKeyId: "id", accessKeySecret: "secret" }), createClient: () => sdk });
   const request: ImageRequestFactory = (_options, onResponse) => {
     const req = Object.assign(new EventEmitter(), { destroy: () => {}, end: () => queueMicrotask(() => {
@@ -56,14 +56,14 @@ describe("concept output import", () => {
     const deps = dependencies(await png()); const controller = new AbortController();
     deps.sdk.put.mockImplementationOnce(async () => { controller.abort(); return {}; });
     await expect(importConceptOutput({ ...input, signal: controller.signal }, deps)).rejects.toThrow();
-    expect(deps.sdk.deleteMulti).toHaveBeenCalledWith([deps.sdk.put.mock.calls[0]![0]], { quiet: true });
+    expect(deps.sdk.deleteMulti).toHaveBeenCalledWith([deps.sdk.put.mock.calls[0]![0]], { quiet: false });
   });
   it("returns the exact written key for caller compensation after DB publication failure", async () => {
     const deps = dependencies(await png());
     const { asset, writtenKey } = await importConceptOutput(input, deps);
     const publish = async () => { expect(asset.width).toBe(2048); throw new Error("database unavailable"); };
     await expect(publish().catch(async () => { await deps.store.delete([writtenKey]); throw new Error("publication failed"); })).rejects.toThrow("publication failed");
-    expect(deps.sdk.deleteMulti).toHaveBeenCalledWith([writtenKey], { quiet: true });
+    expect(deps.sdk.deleteMulti).toHaveBeenCalledWith([writtenKey], { quiet: false });
   });
 });
 

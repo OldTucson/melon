@@ -15,6 +15,8 @@ export interface ConceptObjectStore {
   listObjectKeys(prefix: string): Promise<string[]>;
 }
 const credentialSchema = z.object({ accessKeyId: z.string().min(1), accessKeySecret: z.string().min(1), securityToken: z.string().min(1).optional() });
+// ali-oss 6.x returns raw XML Deleted entries; its string[] declaration is stale.
+const deleteResultSchema = z.object({ deleted: z.array(z.object({ Key: z.string() })) });
 type Client = Pick<OSS, "put" | "get" | "deleteMulti" | "listV2">;
 const unavailable = () => new Error("Concept object unavailable");
 
@@ -77,7 +79,13 @@ export function createConceptObjectStore(input: OssConnectionConfig, dependencie
         if (!keys.length) return;
         await withClient(async (client) => {
           for (let offset = 0; offset < keys.length; offset += OSS_DELETE_BATCH_SIZE) {
-            await client.deleteMulti(keys.slice(offset, offset + OSS_DELETE_BATCH_SIZE), { quiet: true });
+            const batch = keys.slice(offset, offset + OSS_DELETE_BATCH_SIZE);
+            const result = deleteResultSchema.parse(await client.deleteMulti(batch, { quiet: false }));
+            const remaining = new Set(batch);
+            for (const { Key } of result.deleted) {
+              if (!remaining.delete(Key)) throw unavailable();
+            }
+            if (remaining.size) throw unavailable();
           }
         });
       } catch { throw unavailable(); }
