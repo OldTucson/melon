@@ -29,6 +29,33 @@ describe("frozen concept brief", () => {
     expect(JSON.stringify(brief)).not.toContain("https:");
     expect(buildInspirationConceptBrief({ result, directionIndex: 0, referenceAssetIds: [] })).toEqual(brief);
   });
+  it.each([
+    "mailto:private@example.test",
+    "urn:uuid:00000000-0000-4000-8000-000000000108",
+    "ftp:example.test/private",
+    "custom+design.v1:private/reference",
+    "MAILTO:private@example.test",
+  ])("removes opaque or slashless scheme URI %s", (uri) => {
+    const result = structuredClone(inspirationResultFixture);
+    result.summary = `辅助背景 ${uri} 保留`;
+    result.inspirationPrompts[0]!.direction = `棉麻 ${uri} 改用红色收腰`;
+    const brief = buildInspirationConceptBrief({ result, directionIndex: 0, referenceAssetIds: [] });
+    expect(brief.direction.direction).toBe("棉麻 改用红色收腰");
+    expect(brief.report.summary).toBe("辅助背景 保留");
+  });
+  it.each([
+    ["棉麻 https://example.test/private，改用红色收腰", "棉麻 ，改用红色收腰"],
+    ["棉麻 https://example.test/private。改用红色收腰", "棉麻 。改用红色收腰"],
+    ["棉麻（https://example.test/private）改用红色收腰", "棉麻（）改用红色收腰"],
+    ["棉麻 mailto:private@example.test；改用红色收腰", "棉麻 ；改用红色收腰"],
+    ["棉麻 https://example.test/private?color=red&cut=waist#look，改用红色收腰", "棉麻 ，改用红色收腰"],
+    ["棉麻 [https://example.test/private] 改用红色收腰", "棉麻 [] 改用红色收腰"],
+  ])("preserves direction prose at explicit URI boundaries: %s", (direction, expected) => {
+    const result = structuredClone(inspirationResultFixture);
+    result.inspirationPrompts[0]!.direction = direction;
+    expect(buildInspirationConceptBrief({ result, directionIndex: 0, referenceAssetIds: [] }).direction.direction).toBe(expected);
+    expect(result.inspirationPrompts[0]!.direction).toBe(direction);
+  });
   it("rejects absent directions, invalid reports, too many references and duplicate IDs", () => {
     for (const directionIndex of [-1, 0.5, 3, 5, NaN]) expect(() => buildInspirationConceptBrief({ result: inspirationResultFixture, directionIndex, referenceAssetIds: [] })).toThrow();
     expect(() => buildInspirationConceptBrief({ result: { ...inspirationResultFixture, headline: "" }, directionIndex: 0, referenceAssetIds: [] })).toThrow();

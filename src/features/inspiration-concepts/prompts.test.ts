@@ -63,6 +63,14 @@ describe("stage prompts", () => {
       expect(prompt.isWellFormed()).toBe(true);
     }
   });
+  it("removes opaque URIs while preserving punctuation-adjacent direction prose in every stage", () => {
+    const persisted = { ...brief, direction: { ...brief.direction, direction: "棉麻 https://example.test/private，改用红色收腰 mailto:private@example.test urn:uuid:00000000-0000-4000-8000-000000000108 ftp:example.test/private" } };
+    for (const build of builders) {
+      const prompt = build(persisted);
+      expect(prompt).toContain("设计意图：棉麻 ，改用红色收腰");
+      expect(prompt).not.toMatch(/https:|mailto:|urn:|ftp:|private@example|example\.test/iu);
+    }
+  });
   it("sanitizes persisted text again rather than allowing URLs into prompts", () => {
     expect(buildSketchPrompt({ ...brief, direction: { ...brief.direction, title: "Cafe\u0301 https://example.test/private" } })).toContain("Café");
     expect(buildSketchPrompt({ ...brief, direction: { ...brief.direction, title: "Cafe\u0301 https://example.test/private" } })).not.toContain("https:");

@@ -3,7 +3,10 @@ import { inspirationConceptBriefSchema, type InspirationConceptBrief } from "./c
 
 /** Plain text only: no reference URLs or transport metadata are carried forward. */
 export function sanitizeConceptText(value: string): string {
-  return value.normalize("NFC").replace(/(?:[a-z][a-z\d+.-]*:\/\/|https?:|data:|\/\/)\S+/giu, "")
+  // URI schemes may be opaque (mailto:, urn:) or omit slashes (ftp:).
+  // CJK punctuation, brackets and quotes delimit prose, rather than belonging
+  // to the removed URI. Keep URI query/fragment characters inside the match.
+  return value.normalize("NFC").replace(/(?:[a-z][a-z\d+.-]*:|\/\/)[^\s<>"'`()\[\]{}，。；：！？、（）【】《》“”‘’]+/giu, "")
     .replace(/[\u0000-\u001f\u007f]/gu, " ").replace(/\s+/gu, " ").trim();
 }
 
