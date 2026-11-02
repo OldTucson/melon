@@ -27,8 +27,7 @@ export function InspirationDocument(props: InspirationDocumentProps) {
   const visualCount = (document.hero ? 1 : 0)
     + document.marketSignals.reduce((count, { evidence }) => count + evidence.length, 0)
     + document.products.length
-    + document.directions.reduce((count, { libraryMatches, concepts, conceptSets }) => count + libraryMatches.length + concepts.length + conceptSets.reduce((total, set) => total + ("outputs" in set ? set.outputs.length : set.slots.filter(({ asset }) => asset).length), 0), 0)
-    + document.unassignedLibraryMatches.length;
+    + document.directions.reduce((count, { concepts, conceptSets }) => count + concepts.length + conceptSets.reduce((total, set) => total + ("outputs" in set ? set.outputs.length : set.slots.filter(({ asset }) => asset).length), 0), 0);
   return (
     <article className={styles.document} aria-label={title}>
       <header className={styles.documentHeader}>
@@ -73,7 +72,7 @@ export function InspirationDocument(props: InspirationDocumentProps) {
       <InspirationDirectionSection
         {...(props.mode === "public"
           ? { mode: "public" as const, directions: props.document.directions, sources: props.document.sources }
-          : { mode: "private" as const, directions: props.document.directions, unassignedLibraryMatches: props.document.unassignedLibraryMatches, sources: props.document.sources, loading: initialEnrichment,
+          : { mode: "private" as const, directions: props.document.directions, sources: props.document.sources,
             conceptControls: props.conceptControls, activeVisualJobId: props.activeVisualJobId ?? null,
             referenceAssets: [...(document.hero ? [document.hero] : []), ...document.marketSignals.flatMap(({ evidence }) => evidence), ...document.products] })}
       />

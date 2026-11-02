@@ -501,10 +501,12 @@ describe("inspiration workspace", () => {
     ).toBeEnabled();
   });
 
-  it("keeps active private matches and disables another request while refresh is pending", async () => {
+  it("hides legacy private matches and disables another request while refresh is pending", async () => {
     record = completed;
     visualMocks.get.mockResolvedValue({
       ...visualBoardFixture,
+      webEvidence: [],
+      concepts: [],
       refreshJob: {
         ...visualBoardFixture.activeJob,
         id: "00000000-0000-4000-8000-000000000199",
@@ -514,16 +516,13 @@ describe("inspiration workspace", () => {
     });
     renderWorkspace();
 
-    expect(
-      await screen.findByRole("img", { name: "绿色植物图案" }),
-    ).toBeVisible();
-    expect(screen.getByRole("status")).toHaveTextContent("正在补充视觉素材");
+    await screen.findByRole("heading", { name: "都市轻通勤的柔和层次" });
+    expect(screen.queryByRole("img", { name: "绿色植物图案" })).not.toBeInTheDocument();
+    expect(await screen.findByText("正在补充视觉素材…")).toBeVisible();
+    expect(screen.getByRole("status", { name: "主视觉正在加载" })).toBeVisible();
     expect(screen.getByRole("button", { name: "正在补充…" })).toBeDisabled();
     expect(visualMocks.create).not.toHaveBeenCalled();
-    expect(screen.getByRole("link", { name: /雨后花园/ })).toHaveAttribute(
-      "href",
-      visualBoardFixture.libraryMatches[0]!.libraryHref,
-    );
+    expect(screen.queryByRole("link", { name: /雨后花园/ })).not.toBeInTheDocument();
   });
 
   it("retains document content and branch-specific warnings after a failed partial refresh", async () => {
@@ -539,7 +538,8 @@ describe("inspiration workspace", () => {
       },
     });
     renderWorkspace();
-    await screen.findByRole("img", { name: "绿色植物图案" });
+    await screen.findByRole("img", { name: "米白色轻盈通勤女装叠穿参考" });
+    expect(screen.queryByRole("img", { name: "绿色植物图案" })).not.toBeInTheDocument();
     expect(screen.getByText("网络视觉参考暂时不可用")).toBeVisible();
     expect(screen.getByText("本次视觉补充未完成，已保留现有参考。")).toBeVisible();
     expect(screen.queryByText(/文字报告不受影响/)).not.toBeInTheDocument();

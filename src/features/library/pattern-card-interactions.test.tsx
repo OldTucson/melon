@@ -84,6 +84,21 @@ describe("pattern card interactions", () => {
     expect(screen.getByRole("link", { name: "下载 Leaf" })).toBeInTheDocument();
   });
 
+  it("labels a failed upload instead of reporting a pending preview", () => {
+    renderCard({
+      item: {
+        ...item,
+        status: "failed",
+        previewStatus: "pending",
+        previewAssetId: null,
+        thumbnailAssetId: null,
+      },
+    });
+
+    expect(screen.getByText("上传失败")).toBeInTheDocument();
+    expect(screen.queryByText("正在准备预览")).not.toBeInTheDocument();
+  });
+
   it("opens preview on a real double click without opening a closed inspector", async () => {
     const user = userEvent.setup();
     const props = renderCard();
@@ -213,7 +228,7 @@ describe("pattern card interactions", () => {
     expect(props.onOpenPreview).not.toHaveBeenCalled();
   });
 
-  it("replaces selection from an unmodified pointer checkbox click", () => {
+  it("requests a selection toggle from an unmodified pointer checkbox click", () => {
     const props = renderCard();
 
     fireEvent.click(screen.getByRole("checkbox", { name: "选择 Leaf" }), {
@@ -225,6 +240,7 @@ describe("pattern card interactions", () => {
       ctrlKey: false,
       metaKey: false,
       shiftKey: false,
+      toggle: true,
     });
     expect(props.onInspect).not.toHaveBeenCalled();
   });
@@ -245,6 +261,7 @@ describe("pattern card interactions", () => {
       ctrlKey: false,
       metaKey: false,
       shiftKey: false,
+      toggle: true,
       ...modifier,
     });
     expect(props.onInspect).not.toHaveBeenCalled();
@@ -263,11 +280,12 @@ describe("pattern card interactions", () => {
       ctrlKey: false,
       metaKey: false,
       shiftKey: true,
+      toggle: true,
     });
     expect(props.onInspect).not.toHaveBeenCalled();
   });
 
-  it("uses plain replacement semantics for keyboard checkbox activation", async () => {
+  it("requests a selection toggle for keyboard checkbox activation", async () => {
     const user = userEvent.setup();
     const props = renderCard();
     const checkbox = screen.getByRole("checkbox", { name: "选择 Leaf" });
@@ -280,6 +298,7 @@ describe("pattern card interactions", () => {
       ctrlKey: false,
       metaKey: false,
       shiftKey: false,
+      toggle: true,
     });
     expect(props.onInspect).not.toHaveBeenCalled();
   });

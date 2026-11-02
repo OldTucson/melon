@@ -38,10 +38,13 @@ const inspectGestureThresholdMs = 400;
 
 export function FormatPlaceholder({
   extension,
+  status,
   previewStatus,
-}: Pick<PatternItem, "extension" | "previewStatus">) {
-  const status =
-    previewStatus === "unsupported"
+}: Pick<PatternItem, "extension" | "status" | "previewStatus">) {
+  const label =
+    status === "failed"
+      ? "上传失败"
+      : previewStatus === "unsupported"
       ? "暂不支持预览"
       : previewStatus === "failed"
         ? "预览生成失败"
@@ -52,7 +55,7 @@ export function FormatPlaceholder({
     <div className="format-placeholder" data-format={extension.toLowerCase()}>
       <FileImage aria-hidden="true" />
       <strong>{extension.toUpperCase()}</strong>
-      <span>{status}</span>
+      <span>{label}</span>
     </div>
   );
 }
@@ -131,6 +134,7 @@ export function PatternCard({
             ctrlKey: event.ctrlKey,
             metaKey: event.metaKey,
             shiftKey: event.shiftKey,
+            toggle: true,
           });
         }}
         onDoubleClick={(event) => event.stopPropagation()}
@@ -181,6 +185,7 @@ export function PatternCard({
         ) : (
           <FormatPlaceholder
             extension={item.extension}
+            status={item.status}
             previewStatus={item.previewStatus}
           />
         )}

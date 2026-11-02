@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { InspirationAnalysisResult, InspirationSource } from "@/features/inspiration/contracts";
 import { normalizedUuidSchema } from "@/features/storage/identifiers";
 import {
-  generatedConceptAssetDtoSchema, libraryMatchAssetDtoSchema, webEvidenceAssetDtoSchema,
+  generatedConceptAssetDtoSchema, webEvidenceAssetDtoSchema,
   type GeneratedConceptAssetDto, type LibraryMatchAssetDto, type WebEvidenceAssetDto,
 } from "./contracts";
 import {
@@ -53,14 +53,15 @@ export function composeInspirationDocument(input: CompositionInput): Inspiration
     return { ...value, sourceIndexes: sources.filter(({ index }) => requested.has(index)).map(({ index }) => index).slice(0, 20) };
   };
   const web = z.array(webEvidenceAssetDtoSchema).max(8).parse((input.webEvidence ?? []).map(withSources));
-  const matches = z.array(libraryMatchAssetDtoSchema).max(20).parse(input.libraryMatches ?? []);
+  // Keep accepting legacy DTOs, but research documents no longer include private library matches.
+  const matches: LibraryMatchAssetDto[] = [];
   const concepts = z.array(generatedConceptAssetDtoSchema).max(15).parse(input.concepts ?? []);
-  const assets = [...web, ...matches, ...concepts];
+  const assets = [...web, ...concepts];
   const conceptSets = z.array(conceptSetDtoSchema).parse(input.conceptSets ?? []);
   validateSets(conceptSets, result.inspirationPrompts.length, assets.map(({ id }) => id));
   if (new Set(assets.map(({ id }) => id)).size !== assets.length) throw new Error("Duplicate document asset");
   if (web.filter(({ role }) => role === "hero").length > 1) throw new Error("Multiple document heroes");
-  if ([...matches, ...concepts].some(({ directionIndex }) => directionIndex !== null && directionIndex >= result.inspirationPrompts.length)) {
+  if (concepts.some(({ directionIndex }) => directionIndex !== null && directionIndex >= result.inspirationPrompts.length)) {
     throw new Error("Document asset has no matching direction");
   }
 

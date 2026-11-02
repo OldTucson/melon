@@ -159,26 +159,6 @@ async function cleanupInspirationVisualWorkspace() {
   }
 }
 
-async function interceptInspirationImages(
-  page: Parameters<typeof loginAs>[0],
-) {
-  await page.route("**/api/assets/*/view", async (route) => {
-    const ordinal = Number(route.request().url().match(/82(\d)\/view$/)?.[1] ?? 0);
-    const palettes = [
-      ["#EEE8DA", "#7A8B83", "#303632"],
-      ["#D9D2C3", "#69766F", "#24302A"],
-      ["#E7E3DC", "#89928D", "#38413C"],
-      ["#F0E7D6", "#73847A", "#2D3933"],
-    ];
-    const [light, mid, dark] = palettes[ordinal % palettes.length]!;
-    await route.fulfill({
-      status: 200,
-      contentType: "image/svg+xml",
-      body: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600"><rect width="800" height="600" fill="${light}"/><path d="M0 410 230 180l155 150 130-130 285 250v150H0Z" fill="${mid}"/><circle cx="610" cy="145" r="105" fill="${dark}" opacity=".92"/><path d="M-40 80 280 400M80 20l320 320M420 500l260-260" stroke="${dark}" stroke-width="22" opacity=".18"/></svg>`,
-    });
-  });
-}
-
 const viewports = [
   { width: 1512, height: 982 },
   { width: 1280, height: 800 },
@@ -287,9 +267,10 @@ test("workspace adapts without overflow and preserves navigation controls", asyn
   page,
 }) => {
   await page.setViewportSize(viewports[0]);
-  await page.goto("/login");
+  await page.goto("/login", { waitUntil: "networkidle" });
   await page.evaluate(() => localStorage.removeItem("melon:sidebar-mode"));
   await loginAs(page, E2E_USERS.designer);
+  await page.waitForLoadState("networkidle");
 
   const workspace = page.locator(".workspace");
   await expect(workspace).toHaveAttribute("data-sidebar", "expanded");
@@ -302,14 +283,14 @@ test("workspace adapts without overflow and preserves navigation controls", asyn
 
   await page.getByRole("button", { name: "折叠主导航" }).click();
   await expect(workspace).toHaveAttribute("data-sidebar", "collapsed");
-  await page.reload();
+  await page.reload({ waitUntil: "networkidle" });
   await expect(workspace).toHaveAttribute("data-sidebar", "collapsed");
   await page.getByRole("button", { name: "展开主导航" }).click();
   await expect(workspace).toHaveAttribute("data-sidebar", "expanded");
 
   for (const viewport of viewports) {
     await page.setViewportSize(viewport);
-    await page.goto("/library");
+    await page.goto("/library", { waitUntil: "networkidle" });
     await expect(page.getByRole("main")).toBeVisible();
     await expect(
       page.getByRole("region", { name: "全部图案" }),
@@ -326,7 +307,7 @@ test("workspace adapts without overflow and preserves navigation controls", asyn
   await expect(navigationTrigger).toBeFocused();
 
   await page.setViewportSize(viewports[0]);
-  await page.goto("/settings");
+  await page.goto("/settings", { waitUntil: "networkidle" });
   await page
     .locator(".theme-options label")
     .filter({ hasText: "夜间" })
@@ -340,7 +321,8 @@ test("workspace adapts without overflow and preserves navigation controls", asyn
   await expect(page.getByRole("radio", { name: "浅色" })).toBeChecked();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 
-  await page.goto("/library");
+  await page.waitForLoadState("networkidle");
+  await page.goto("/library", { waitUntil: "networkidle" });
   await page.locator("body").click({ position: { x: 1, y: 1 } });
   await page.keyboard.press("Tab");
   await expect(page.getByRole("button", { name: "折叠主导航" })).toBeFocused();
@@ -357,14 +339,11 @@ test.describe("inspiration visual workspace", () => {
   test.beforeEach(seedInspirationVisualWorkspace);
   test.afterEach(cleanupInspirationVisualWorkspace);
 
-  test("stays usable across target sizes and disabled image search", async ({
+  test("stays usable across target sizes without exposing private library matches", async ({
     page,
   }) => {
-    await interceptInspirationImages(page);
     await loginAs(page, E2E_USERS.designer);
-    const libraryMatches = page
-      .getByRole("region", { name: "素材库色彩匹配" })
-      .getByRole("link");
+    const privateLibraryLinks = page.locator('a[href^="/library?selected="]');
 
     for (const viewport of viewports.slice(0, 2)) {
       await page.setViewportSize(viewport);
@@ -374,26 +353,21 @@ test.describe("inspiration visual workspace", () => {
           name: "都市轻通勤与柔和自然配色趋势研究",
         }),
       ).toBeVisible();
-      await expect(libraryMatches).toHaveCount(8);
+      await expect(privateLibraryLinks).toHaveCount(0);
       await expectNoPageOverflow(page);
     }
 
     for (const viewport of viewports.slice(2)) {
       await page.setViewportSize(viewport);
       await page.goto("/inspiration");
-      await expect(libraryMatches).toHaveCount(8);
+      await expect(privateLibraryLinks).toHaveCount(0);
       await expectNoPageOverflow(page);
     }
     await page.setViewportSize(viewports[1]);
     await page.goto("/inspiration");
 
-    await expect(libraryMatches).toHaveCount(8);
-    for (const link of await libraryMatches.all()) {
-      await expect(link).toHaveAttribute(
-        "href",
-        /^\/library\?selected=88888888-8888-4888-8888-88888888881\d$/,
-      );
-    }
+    await expect(privateLibraryLinks).toHaveCount(0);
+    await expect(page.getByText(/素材库色彩匹配/)).toHaveCount(0);
 
     const historyTrigger = page.getByRole("button", { name: "历史" });
     await historyTrigger.click();
@@ -425,11 +399,12 @@ test.describe("inspiration visual workspace", () => {
     await expect(
       page.getByRole("heading", { name: "都市轻通勤的柔和层次" }),
     ).toBeVisible();
-    await expect(page.getByText("素材库色彩匹配暂未开启")).toBeVisible();
+    await expect(page.getByText("暂未获得视觉素材，可重试补充。")).toBeVisible();
+    await expect(page.getByText("网络视觉参考暂未开启")).toBeVisible();
     await expect(
       page.getByRole("button", { name: "重试视觉素材" }),
     ).toHaveCount(0);
     await expect(newResearchTrigger).toBeEnabled();
-    await expect(libraryMatches).toHaveCount(8);
+    await expect(privateLibraryLinks).toHaveCount(0);
   });
 });

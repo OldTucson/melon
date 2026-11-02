@@ -6,6 +6,7 @@ import { AppError } from "@/lib/http/app-error";
 import type { ServerEnv } from "@/lib/env/server";
 import * as repository from "./visual-repository";
 import type { ImportedWebEvidenceAsset } from "./web-evidence-importer";
+import { matchLibraryPatterns } from "./library-matcher";
 import { createResearchVisuals } from "./visual-service";
 
 const setup = vi.hoisted(() => ({ owned: vi.fn(), env: vi.fn() }));
@@ -44,7 +45,6 @@ function dependencies() {
     imported,
     webProvider: { search: vi.fn(async () => ({ requestId: "request", candidates: [{ query: "query", title: "Product", imageUrl: "https://images.test/a.jpg", sourcePageUrl: inspirationSourceFixture.url }] })) },
     importWeb: vi.fn(async () => ({ assets: [imported], warnings: [], writtenKeys: [imported.objectKey] })),
-    matchLibrary: vi.fn(async () => ({ assets: [], warnings: [] })),
     store: { put: vi.fn(), get: vi.fn(), delete: vi.fn(async () => {}) },
   };
 }
@@ -59,6 +59,7 @@ beforeEach(() => {
   vi.mocked(repository.listObjectKeysForAnalysis).mockResolvedValue([]);
   vi.mocked(repository.listObjectKeysForJob).mockResolvedValue([]);
   vi.mocked(repository.listVisibleAssets).mockResolvedValue([]);
+  vi.mocked(matchLibraryPatterns).mockResolvedValue({ assets: [], warnings: [] });
   vi.mocked(repository.completeResearchJob).mockImplementation(async (_owner, _id, assets, warnings) => {
     const completed = { ...job("completed"), warnings: [...warnings] };
     vi.mocked(repository.findLatestCompletedResearchJob).mockResolvedValue(completed);
@@ -93,12 +94,14 @@ describe("visual orchestration compensation", () => {
     expect(deps.store.delete).toHaveBeenCalledWith([deps.imported.objectKey]);
   });
 
-  it("keeps a successful web branch when matching fails", async () => {
+  it("does not query library matching when composing successful web results", async () => {
     const deps = dependencies();
-    deps.matchLibrary.mockRejectedValue(new Error("matcher failed"));
+    vi.mocked(matchLibraryPatterns).mockRejectedValue(new Error("matcher failed"));
     const board = await run(deps);
     expect(board.webEvidence).toHaveLength(1);
-    expect(board.activeJob!.warnings).toEqual(["INSPIRATION_LIBRARY_MATCH_UNAVAILABLE"]);
+    expect(board.libraryMatches).toEqual([]);
+    expect(board.activeJob!.warnings).toEqual([]);
+    expect(matchLibraryPatterns).not.toHaveBeenCalled();
   });
 
   it.each(["INSPIRATION_VISUALS_EMPTY", "INSPIRATION_VISUALS_UNAVAILABLE"] as const)("classifies provider %s with empty library", async (code) => {
@@ -108,13 +111,13 @@ describe("visual orchestration compensation", () => {
     expect(repository.completeResearchJob).not.toHaveBeenCalled();
   });
 
-  it("does not invoke either disabled branch", async () => {
+  it("reports only the disabled web branch", async () => {
     const deps = dependencies();
     setup.env.mockReturnValue({ IMAGE_SEARCH_ENABLED: false, INSPIRATION_WEB_VISUALS_ENABLED: false });
     await expect(run(deps)).rejects.toMatchObject({ code: "INSPIRATION_VISUALS_EMPTY" });
-    expect(repository.failPendingJob).toHaveBeenCalledWith(ownerId, jobId, "INSPIRATION_VISUALS_EMPTY", expect.any(Date), ["INSPIRATION_WEB_VISUALS_DISABLED", "INSPIRATION_LIBRARY_MATCH_DISABLED"]);
+    expect(repository.failPendingJob).toHaveBeenCalledWith(ownerId, jobId, "INSPIRATION_VISUALS_EMPTY", expect.any(Date), ["INSPIRATION_WEB_VISUALS_DISABLED"]);
     expect(deps.webProvider.search).not.toHaveBeenCalled();
-    expect(deps.matchLibrary).not.toHaveBeenCalled();
+    expect(matchLibraryPatterns).not.toHaveBeenCalled();
   });
 
   it("shares one signal and compensates abort after import", async () => {
@@ -123,7 +126,7 @@ describe("visual orchestration compensation", () => {
     deps.importWeb.mockImplementation(async () => { controller.abort(); return { assets: [deps.imported], warnings: [], writtenKeys: [deps.imported.objectKey] }; });
     await expect(run(deps, controller.signal)).rejects.toMatchObject({ code: "INSPIRATION_VISUALS_UNAVAILABLE" });
     expect(deps.webProvider.search).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }));
-    expect(deps.matchLibrary).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }));
+    expect(matchLibraryPatterns).not.toHaveBeenCalled();
     expect(deps.store.delete).toHaveBeenCalledWith([deps.imported.objectKey]);
     expect(repository.completeResearchJob).not.toHaveBeenCalled();
   });
@@ -134,7 +137,7 @@ describe("visual orchestration compensation", () => {
     await run(deps);
     expect(deps.webProvider.search).not.toHaveBeenCalled();
     expect(deps.importWeb).not.toHaveBeenCalled();
-    expect(deps.matchLibrary).not.toHaveBeenCalled();
+    expect(matchLibraryPatterns).not.toHaveBeenCalled();
   });
 
   it("cleans superseded keys after commit and ignores cleanup failures", async () => {

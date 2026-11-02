@@ -60,10 +60,10 @@ describe("editorial document composition", () => {
     expect(document.dimensions[5]!.items).toEqual([]);
   });
 
-  it("attaches private library matches and concepts only to their declared directions", () => {
+  it("drops private library matches while preserving directional concepts", () => {
     const document = composeInspirationDocument({ ...input, libraryMatches: [libraryMatchAssetFixture, { ...libraryMatchAssetFixture, id: evidence(1).id, directionIndex: 1 }], concepts: [generatedConceptAssetFixture] });
-    expect(document.directions.map(({ libraryMatches }) => libraryMatches.map(({ id }) => id))).toEqual([[], [evidence(1).id], []]);
-    expect(document.unassignedLibraryMatches).toEqual([libraryMatchAssetFixture]);
+    expect(document.directions.map(({ libraryMatches }) => libraryMatches)).toEqual([[], [], []]);
+    expect(document.unassignedLibraryMatches).toEqual([]);
     expect(document.directions.map(({ concepts }) => concepts.map(({ id }) => id))).toEqual([[generatedConceptAssetFixture.id], [], []]);
     expect(composeInspirationDocument(input).directions.map(({ concepts }) => concepts)).toEqual([[], [], []]);
     expect(() => composeInspirationDocument({ ...input, concepts: [{ ...generatedConceptAssetFixture, directionIndex: 4 }] })).toThrow();
@@ -112,7 +112,9 @@ describe("editorial document composition", () => {
     expect(document.directions[0]!.concepts[0]!).toMatchObject({ imageUrl: `/share/inspiration/${shareId}/assets/${generatedConceptAssetFixture.id}` });
     expect(JSON.stringify(document)).not.toMatch(/patternId|savedPatternId|libraryHref|\/api\//);
     expect(publicInspirationDocumentDtoSchema.parse(document)).toEqual(document);
-    expect(publicInspirationDocumentDtoSchema.safeParse(composeInspirationDocument({ ...input, libraryMatches: [libraryMatchAssetFixture] })).success).toBe(false);
+    const legacyLibraryDocument = composeInspirationDocument({ ...input, libraryMatches: [libraryMatchAssetFixture] });
+    expect(legacyLibraryDocument.unassignedLibraryMatches).toEqual([]);
+    expect(publicInspirationDocumentDtoSchema.safeParse(legacyLibraryDocument).success).toBe(true);
   });
 
   it("never uses a citation absent from this report to choose an evidence signal", () => {
@@ -138,7 +140,8 @@ describe("editorial document composition", () => {
     };
     const document = composeInspirationDocument(content);
     expect(document.products.map(({ ordinal }) => ordinal)).toEqual([1, 9]);
-    expect(document.unassignedLibraryMatches.map(({ ordinal }) => ordinal)).toEqual([2, 8]);
+    expect(document.unassignedLibraryMatches).toEqual([]);
+    expect(document.directions.every(({ libraryMatches }) => libraryMatches.length === 0)).toBe(true);
     expect(document.directions[0]!.concepts.map(({ ordinal }) => ordinal)).toEqual([3, 7]);
     const refreshing = { ...content, refreshJob: { status: "pending" }, warnings: ["INSPIRATION_WEB_VISUALS_UNAVAILABLE"] };
     expect(composeInspirationDocument(refreshing)).toEqual(document);
