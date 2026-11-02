@@ -186,3 +186,16 @@ describe("caller cancellation", () => {
     expect(t.responses[0]!.destroyed).toBe(true);
   });
 });
+
+it("honors internal byte and pixel limits without changing the default boundary", async () => {
+  const { crc32 } = await import("node:zlib");
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=", "base64");
+  png.writeUInt32BE(crc32(png.subarray(37, 52)), 52);
+  const padding = Buffer.alloc(8 * 1024 * 1024 + 12); padding.writeUInt32BE(8 * 1024 * 1024); padding.write("tEXt", 4); padding.writeUInt32BE(crc32(padding.subarray(4, -4)), padding.length - 4);
+  const bytes = Buffer.concat([png.subarray(0, 33), padding, png.subarray(33)]);
+  const reply = { body: bytes, headers: { "content-type": "image/png", "content-length": String(bytes.length) } };
+  await expect(fetchRemoteImage("https://example.com", transport([reply]))).rejects.toThrow();
+  await expect(fetchRemoteImage("https://example.com", transport([reply]), { maxBytes: 16 * 1024 * 1024, maxPixels: 40_000_000 })).resolves.toMatchObject({ width: 1, contentType: "image/png" });
+  const small = transport();
+  await expect(fetchRemoteImage("https://example.com", small, { maxBytes: 1 })).rejects.toThrow();
+});

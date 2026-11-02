@@ -30,7 +30,7 @@ function formatBrief(brief: InspirationConceptBrief) {
 function references(brief: InspirationConceptBrief, derivative: boolean) {
   const lines = derivative ? ["图1是已完成的主设计草图，保持主设计草图的廓形、配色、面料与结构细节一致。"] : [];
   if (!brief.referenceAssetIds.length) lines.push("无外部参考图。");
-  brief.referenceAssetIds.forEach((_, index) => {
+  (derivative ? brief.referenceAssetIds.slice(0, 2) : brief.referenceAssetIds).forEach((_, index) => {
     lines.push(`图${index + (derivative ? 2 : 1)}是外部参考${index + 1}，仅辅助理解设计语言，不得覆盖所选方向${derivative ? "及主设计草图" : ""}。`);
   });
   return lines.join("\n");

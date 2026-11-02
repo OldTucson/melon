@@ -76,3 +76,14 @@ describe("stage prompts", () => {
     expect(buildSketchPrompt({ ...brief, direction: { ...brief.direction, title: "Cafe\u0301 https://example.test/private" } })).not.toContain("https:");
   });
 });
+
+it("limits derivative references to the two attachments after the master sketch", () => {
+  const brief = structuredClone(conceptBriefFixture);
+  brief.referenceAssetIds = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"];
+  expect(buildSketchPrompt(brief)).toContain("图3是外部参考3");
+  for (const prompt of [buildEffectPrompt(brief), buildFlatPrompt(brief)]) {
+    expect(prompt).toContain("图3是外部参考2");
+    expect(prompt).not.toContain("图4");
+    expect(prompt).not.toContain("外部参考3");
+  }
+});

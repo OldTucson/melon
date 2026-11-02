@@ -142,3 +142,11 @@ describe("structural image boundary (not a codec decoder)", () => {
     expect(sniffImage(contiguous, "image/png")).toMatchObject({ width: 1, height: 1 });
   });
 });
+
+it("allows bounded internal byte/pixel overrides while retaining existing defaults", () => {
+  const padded = Buffer.concat([png.subarray(0, 33), pngChunk("tEXt", Buffer.alloc(8 * 1024 * 1024)), png.subarray(33)]);
+  expect(() => sniffImage(padded, "image/png")).toThrow();
+  expect(sniffImage(padded, "image/png", { maxBytes: 16 * 1024 * 1024, maxPixels: 40_000_000 })).toMatchObject({ width: 1 });
+  expect(() => sniffImage(jpeg(false, 2000, 2000), "image/jpeg", { maxPixels: 3_999_999 })).toThrow();
+  expect(() => sniffImage(gif, "image/gif", { maxBytes: 1 })).toThrow();
+});

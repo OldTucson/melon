@@ -9,12 +9,18 @@ export type ImageMetadata = {
   height: number;
 };
 type Dimensions = { width: number; height: number };
+export type ImageLimits = { maxBytes?: number; maxPixels?: number };
+export function resolveImageLimits(limits: ImageLimits = {}): Required<ImageLimits> {
+  const resolved = { maxBytes: limits.maxBytes ?? 8 * 1024 * 1024, maxPixels: limits.maxPixels ?? 40_000_000 };
+  check(Number.isSafeInteger(resolved.maxBytes) && resolved.maxBytes > 0 && Number.isSafeInteger(resolved.maxPixels) && resolved.maxPixels > 0);
+  return resolved;
+}
 
 function check(condition: unknown): asserts condition {
   if (!condition) throw new Error("Invalid remote image bytes");
 }
-function dimensions(width: number, height: number): Dimensions {
-  check(width > 0 && height > 0 && width <= 32768 && height <= 32768 && width * height <= 40_000_000);
+function dimensions(width: number, height: number, limits: Required<ImageLimits>): Dimensions {
+  check(width > 0 && height > 0 && width <= 32768 && height <= 32768 && width * height <= limits.maxPixels);
   return { width, height };
 }
 function asciiToken(bytes: Buffer, start: number, end: number): string {
@@ -25,7 +31,7 @@ function asciiToken(bytes: Buffer, start: number, end: number): string {
   return token.toString("latin1");
 }
 
-function pngSize(bytes: Buffer): Dimensions {
+function pngSize(bytes: Buffer, limits: Required<ImageLimits>): Dimensions {
   check(bytes.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex")));
   let offset = 8;
   let size: Dimensions | undefined;
@@ -45,7 +51,7 @@ function pngSize(bytes: Buffer): Dimensions {
     if (seenData && type !== "IDAT") dataEnded = true;
     if (type === "IHDR") {
       check(!size && length === 13);
-      size = dimensions(bytes.readUInt32BE(start), bytes.readUInt32BE(start + 4));
+      size = dimensions(bytes.readUInt32BE(start), bytes.readUInt32BE(start + 4), limits);
       const depth = bytes[start + 8]!;
       const color = bytes[start + 9]!;
       const depths: Record<number, number[]> = { 0: [1,2,4,8,16], 2: [8,16], 3: [1,2,4,8], 4: [8,16], 6: [8,16] };
@@ -70,7 +76,7 @@ function pngSize(bytes: Buffer): Dimensions {
   throw new Error("Invalid remote image bytes");
 }
 
-function jpegSize(bytes: Buffer): Dimensions {
+function jpegSize(bytes: Buffer, limits: Required<ImageLimits>): Dimensions {
   check(bytes.length >= 4 && bytes.readUInt16BE(0) === 0xffd8);
   let offset = 2;
   let size: Dimensions | undefined;
@@ -93,7 +99,7 @@ function jpegSize(bytes: Buffer): Dimensions {
       check(!size && length >= 11 && bytes[offset + 2] === 8);
       const components = bytes[offset + 7]!;
       check(components >= 1 && components <= 4 && length === 8 + 3 * components);
-      size = dimensions(bytes.readUInt16BE(offset + 5), bytes.readUInt16BE(offset + 3));
+      size = dimensions(bytes.readUInt16BE(offset + 5), bytes.readUInt16BE(offset + 3), limits);
     } else if (marker === 0xda) {
       check(size && length >= 6);
       const components = bytes[offset + 2]!;
@@ -118,9 +124,9 @@ function jpegSize(bytes: Buffer): Dimensions {
   throw new Error("Invalid remote image bytes");
 }
 
-function gifSize(bytes: Buffer): Dimensions {
+function gifSize(bytes: Buffer, limits: Required<ImageLimits>): Dimensions {
   check(bytes.length >= 13 && /^(GIF87a|GIF89a)$/.test(asciiToken(bytes, 0, 6)));
-  const size = dimensions(bytes.readUInt16LE(6), bytes.readUInt16LE(8));
+  const size = dimensions(bytes.readUInt16LE(6), bytes.readUInt16LE(8), limits);
   let offset = 13;
   if (bytes[10]! & 0x80) offset += 3 * (2 ** ((bytes[10]! & 7) + 1));
   let frames = 0;
@@ -153,10 +159,10 @@ function gifSize(bytes: Buffer): Dimensions {
     }
     check(marker === 0x2c && offset + 9 <= bytes.length);
     const left = bytes.readUInt16LE(offset), top = bytes.readUInt16LE(offset + 2);
-    const frame = dimensions(bytes.readUInt16LE(offset + 4), bytes.readUInt16LE(offset + 6));
+    const frame = dimensions(bytes.readUInt16LE(offset + 4), bytes.readUInt16LE(offset + 6), limits);
     check(left + frame.width <= size.width && top + frame.height <= size.height);
     decodedPixels += size.width * size.height;
-    check(decodedPixels <= 40_000_000);
+    check(decodedPixels <= limits.maxPixels);
     const packed = bytes[offset + 8]!;
     offset += 9;
     if (packed & 0x80) offset += 3 * (2 ** ((packed & 7) + 1));
@@ -168,7 +174,7 @@ function gifSize(bytes: Buffer): Dimensions {
   throw new Error("Invalid remote image bytes");
 }
 
-function webpSize(bytes: Buffer): Dimensions {
+function webpSize(bytes: Buffer, limits: Required<ImageLimits>): Dimensions {
   check(bytes.length >= 20 && asciiToken(bytes, 0, 4) === "RIFF" && asciiToken(bytes, 8, 12) === "WEBP");
   check(bytes.readUInt32LE(4) + 8 === bytes.length);
   let offset = 12;
@@ -187,15 +193,15 @@ function webpSize(bytes: Buffer): Dimensions {
     if (type === "VP8X") {
       check(offset === 12 && length === 10 && (bytes[start]! & 0xc3) === 0 && bytes.readUIntBE(start + 1, 3) === 0);
       flags = bytes[start]!;
-      canvas = dimensions(1 + bytes.readUIntLE(start + 4, 3), 1 + bytes.readUIntLE(start + 7, 3));
+      canvas = dimensions(1 + bytes.readUIntLE(start + 4, 3), 1 + bytes.readUIntLE(start + 7, 3), limits);
     } else if (type === "VP8 ") {
       check(!size && length > 10 && (bytes[start]! & 1) === 0 && bytes.subarray(start + 3, start + 6).equals(Buffer.from([0x9d,1,0x2a])));
-      size = dimensions(bytes.readUInt16LE(start + 6) & 0x3fff, bytes.readUInt16LE(start + 8) & 0x3fff);
+      size = dimensions(bytes.readUInt16LE(start + 6) & 0x3fff, bytes.readUInt16LE(start + 8) & 0x3fff, limits);
     } else if (type === "VP8L") {
       check(!size && length > 5 && bytes[start] === 0x2f && (bytes[start + 4]! & 0xe0) === 0);
       const packed = bytes.readUInt32LE(start + 1);
       losslessAlpha = (packed & 0x10000000) !== 0;
-      size = dimensions(1 + (packed & 0x3fff), 1 + ((packed >>> 14) & 0x3fff));
+      size = dimensions(1 + (packed & 0x3fff), 1 + ((packed >>> 14) & 0x3fff), limits);
     } else {
       check(canvas && ["ALPH", "ICCP", "EXIF", "XMP "].includes(type) && length > 0);
       if (type === "ALPH" || type === "ICCP") check(!size);
@@ -215,15 +221,16 @@ function webpSize(bytes: Buffer): Dimensions {
 }
 
 /** Validates complete container framing and dimensions, not compressed codec entropy. */
-export function sniffImage(bytes: Buffer, mime: string): ImageMetadata {
-  check(bytes.length > 0 && bytes.length <= 8 * 1024 * 1024);
+export function sniffImage(bytes: Buffer, mime: string, inputLimits: ImageLimits = {}): ImageMetadata {
+  const limits = resolveImageLimits(inputLimits);
+  check(bytes.length > 0 && bytes.length <= limits.maxBytes);
   // No parameters or multiple media types: an image response has one exact type.
   const contentType = mime.trim().toLowerCase();
   switch (contentType) {
-    case "image/png": return { ...pngSize(bytes), contentType, extension: "png" };
-    case "image/jpeg": return { ...jpegSize(bytes), contentType, extension: "jpg" };
-    case "image/gif": return { ...gifSize(bytes), contentType, extension: "gif" };
-    case "image/webp": return { ...webpSize(bytes), contentType, extension: "webp" };
+    case "image/png": return { ...pngSize(bytes, limits), contentType, extension: "png" };
+    case "image/jpeg": return { ...jpegSize(bytes, limits), contentType, extension: "jpg" };
+    case "image/gif": return { ...gifSize(bytes, limits), contentType, extension: "gif" };
+    case "image/webp": return { ...webpSize(bytes, limits), contentType, extension: "webp" };
     default: throw new Error("Invalid remote image type");
   }
 }

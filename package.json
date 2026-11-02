@@ -68,6 +68,7 @@
     "react-image-crop": "^11.1.2",
     "recharts": "^3.10.1",
     "server-only": "^0.0.1",
+    "sharp": "^0.35.5",
     "tailwind-merge": "^3.7.0",
     "tsx": "^4.23.15",
     "zod": "^4.6.7",

@@ -5,14 +5,13 @@ import type { ClientRequest, IncomingMessage } from "node:http";
 import { request as httpsRequest, type RequestOptions } from "node:https";
 import { isIP, type LookupFunction } from "node:net";
 
-import { sniffImage, type ImageMetadata } from "./image-sniffer";
+import { sniffImage, resolveImageLimits, type ImageLimits, type ImageMetadata } from "./image-sniffer";
 import { resolvePublicAddress, validateRemoteUrl, type AddressResolver } from "./remote-address";
 
 export type ImageRequestFactory = (options: RequestOptions, onResponse: (response: IncomingMessage) => void) => ClientRequest;
 export type RemoteImageDependencies = { resolve?: AddressResolver; request?: ImageRequestFactory; signal?: AbortSignal };
 export type RemoteImage = ImageMetadata & { bytes: Buffer };
 
-const MAX_BODY = 8 * 1024 * 1024;
 const MAX_HEADERS = 16 * 1024;
 const TOTAL_MS = 15_000;
 const IDLE_MS = 5_000;
@@ -35,7 +34,7 @@ function readResponseHeaders(response: IncomingMessage): void {
   if (bytes > MAX_HEADERS) throw failure();
 }
 
-function requestImage(url: URL, pinned: LookupAddress, request: ImageRequestFactory, signal: AbortSignal): Promise<ResponseResult> {
+function requestImage(url: URL, pinned: LookupAddress, request: ImageRequestFactory, signal: AbortSignal, limits: Required<ImageLimits>): Promise<ResponseResult> {
   return new Promise((resolve, reject) => {
     let req: ClientRequest | undefined;
     let response: IncomingMessage | undefined;
@@ -95,14 +94,14 @@ function requestImage(url: URL, pinned: LookupAddress, request: ImageRequestFact
           const transfer = incoming.headers["transfer-encoding"];
           if (status !== 200 || typeof contentType !== "string" || !/^image\/(png|jpeg|webp|gif)$/i.test(contentType)) throw failure();
           if ((encoding && encoding !== "identity") || (transfer && transfer !== "chunked") || (length !== undefined && transfer)) throw failure();
-          if (length !== undefined && (!/^(0|[1-9]\d*)$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > MAX_BODY)) throw failure();
+          if (length !== undefined && (!/^(0|[1-9]\d*)$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > limits.maxBytes)) throw failure();
           const chunks: Buffer[] = [];
           let received = 0;
           incoming.on("data", (chunk: Buffer) => {
             if (settled) return;
             if (!Buffer.isBuffer(chunk)) { finish(failure()); return; }
             received += chunk.length;
-            if (received > MAX_BODY || (length !== undefined && received > Number(length))) { finish(failure()); return; }
+            if (received > limits.maxBytes || (length !== undefined && received > Number(length))) { finish(failure()); return; }
             chunks.push(chunk);
             touch();
           });
@@ -121,7 +120,8 @@ function requestImage(url: URL, pinned: LookupAddress, request: ImageRequestFact
 }
 
 /** The authoritative remote URL, DNS, transport, and image-container boundary. */
-export async function fetchRemoteImage(value: string, dependencies: RemoteImageDependencies = {}): Promise<RemoteImage> {
+export async function fetchRemoteImage(value: string, dependencies: RemoteImageDependencies = {}, inputLimits: ImageLimits = {}): Promise<RemoteImage> {
+  const limits = resolveImageLimits(inputLimits);
   if (dependencies.signal?.aborted) throw new Error("Remote image cancelled");
   const controller = new AbortController();
   const deadline = Date.now() + TOTAL_MS;
@@ -135,13 +135,13 @@ export async function fetchRemoteImage(value: string, dependencies: RemoteImageD
     for (let redirects = 0; ; redirects++) {
       const pinned = await Promise.race([resolvePublicAddress(url.hostname, dependencies.resolve), expired]);
       if (controller.signal.aborted || Date.now() >= deadline) throw failure();
-      const result = await Promise.race([requestImage(url, pinned, dependencies.request ?? httpsRequest, controller.signal), expired]);
+      const result = await Promise.race([requestImage(url, pinned, dependencies.request ?? httpsRequest, controller.signal, limits), expired]);
       if ("redirect" in result) {
         if (redirects >= 3 || /[\s\u0000-\u001f\u007f\\#]/.test(result.redirect)) throw failure();
         url = validateRemoteUrl(new URL(result.redirect, url).href);
         continue;
       }
-      const metadata = sniffImage(result.bytes, result.contentType);
+      const metadata = sniffImage(result.bytes, result.contentType, limits);
       if (Date.now() >= deadline) throw failure();
       return { bytes: result.bytes, ...metadata };
     }
