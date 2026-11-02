@@ -1,5 +1,7 @@
 import "server-only";
+import { assets as libraryAssets } from "@/lib/db/schema/assets";
 import { randomUUID } from "node:crypto";
+import { parseConceptObjectKey } from "./object-keys";
 import {
   and,
   asc,
@@ -1117,4 +1119,130 @@ export async function findSharedConceptOutput(input: { shareId: string; assetId:
     .where(and(eq(outputs.id, input.assetId), eq(inspirationAnalyses.shareId, input.shareId), eq(inspirationAnalyses.status, "completed"), isNull(sets.deletedAt)))
     .limit(1);
   return resource;
+}
+
+/** Operational projection; deliberately never selects identity, prompt or provider fields. */
+export async function getConceptWorkerStatus(input: { now: Date; staleAfterMs: number; workerId?: string }) {
+  if (!Number.isFinite(input.now.getTime()) || !Number.isFinite(input.staleAfterMs) || input.staleAfterMs <= 0) throw Error("Invalid status request");
+  return db.transaction(async (tx) => {
+    const [heartbeat] = await tx.select({ updatedAt: heartbeats.updatedAt }).from(heartbeats)
+      .where(input.workerId ? eq(heartbeats.workerId, input.workerId) : undefined)
+      .orderBy(desc(heartbeats.updatedAt)).limit(1);
+    const counts = { queued: 0, submitting: 0, submitted: 0, failed: 0 };
+    const grouped = await tx.select({ status: tasks.status, count: sql<number>`count(*)::int` }).from(tasks)
+      .innerJoin(sets, eq(sets.id, tasks.setId)).where(isNull(sets.deletedAt)).groupBy(tasks.status);
+    for (const row of grouped) if (row.status in counts) counts[row.status as keyof typeof counts] = row.count;
+    const [oldest] = await tx.select({ createdAt: tasks.createdAt }).from(tasks).innerJoin(sets, eq(sets.id, tasks.setId))
+      .where(and(eq(tasks.status, "queued"), isNull(sets.deletedAt))).orderBy(asc(tasks.createdAt)).limit(1);
+    const heartbeatAgeMs = heartbeat ? Math.max(0, input.now.getTime() - heartbeat.updatedAt.getTime()) : null;
+    const healthy = heartbeatAgeMs !== null && heartbeatAgeMs <= input.staleAfterMs && heartbeat!.updatedAt <= input.now;
+    return { healthy, status: !heartbeat ? "missing" as const : healthy ? "healthy" as const : "stale" as const,
+      heartbeatAgeMs, counts, oldestQueueAgeMs: oldest ? Math.max(0, input.now.getTime() - oldest.createdAt.getTime()) : null };
+  }, { isolationLevel: "repeatable read", accessMode: "read only" });
+}
+
+const cleanupSetEligible = (cutoff: Date) => or(
+  and(eq(sets.status, "deleting"), lt(sets.deletedAt, cutoff)),
+  and(inArray(sets.status, ["partial", "completed", "failed"]), lt(sets.updatedAt, cutoff), lt(sets.completedAt, cutoff)),
+);
+export async function listConceptCleanupCandidates(cutoff: Date) {
+  const candidates = await db.select({ id: sets.id, ownerId: sets.ownerId, analysisId: sets.analysisId }).from(sets)
+    .where(cleanupSetEligible(cutoff)).orderBy(asc(sets.updatedAt), asc(sets.id)).limit(25);
+  const [active] = await db.select({ count: sql<number>`count(*)::int` }).from(sets)
+    .where(and(inArray(sets.status, ["queued", "generating"]), isNull(sets.deletedAt), lt(sets.updatedAt, cutoff)));
+  return { candidates, skippedActiveSets: active?.count ?? 0 };
+}
+
+type CleanupSetIdentity = { id: string; ownerId: string; analysisId: string };
+/** Keep the same analysis/set locks used by retries and publication across scoped I/O.
+ * Listing is never authority: eligibility and references are re-read under these locks. */
+export async function withConceptCleanupSet<T>(input: CleanupSetIdentity & { cutoff: Date; now: Date; dryRun: boolean },
+  clean: (set: InspirationConceptSetRow, protectedKeys: Set<string>) => Promise<{ result: T; allGone: boolean }>) {
+  const started = Date.now();
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`set local lock_timeout = '5s'`);
+    await lockConceptAnalysis(tx, input.analysisId);
+    const [set] = await tx.select().from(sets).where(and(eq(sets.id, input.id), eq(sets.ownerId, input.ownerId), eq(sets.analysisId, input.analysisId), cleanupSetEligible(input.cutoff)))
+      .for("update", { skipLocked: true });
+    if (!set || (set.deletionLeaseUntil && set.deletionLeaseUntil >= input.now)) return;
+    const [active] = await tx.select({ id: tasks.id }).from(tasks).where(and(eq(tasks.setId, set.id),
+      or(gt(tasks.leaseUntil, input.now), set.status === "deleting" ? undefined : inArray(tasks.status, [...activeTaskStatuses])))).limit(1);
+    if (active) return;
+    const ownedOutputs = await tx.select({ key: outputs.objectKey }).from(outputs).where(eq(outputs.setId, set.id)).limit(4);
+    if (ownedOutputs.length > 3) throw Error("Cleanup reference limit");
+    for (const { key } of ownedOutputs) {
+      const scope = parseConceptObjectKey(key);
+      if (scope.ownerId !== set.ownerId || scope.analysisId !== set.analysisId || scope.setId !== set.id) throw Error("Invalid cleanup output scope");
+    }
+    const objectPrefix = `users/${set.ownerId}/inspiration/${set.analysisId}/concept-sets/${set.id}/%`;
+    const current = await tx.select({ key: outputs.objectKey }).from(outputs).where(and(
+      sql`${outputs.objectKey} like ${objectPrefix}`,
+      set.status === "deleting" ? sql`${outputs.setId} <> ${set.id}` : undefined)).limit(10_001);
+    if (current.length > 10_000) throw Error("Cleanup reference limit");
+    const library = await tx.select({ key: libraryAssets.objectKey }).from(libraryAssets)
+      .where(sql`${libraryAssets.objectKey} like ${objectPrefix}`).limit(10_001);
+    if (library.length > 10_000) throw Error("Cleanup reference limit");
+    const protectedKeys = new Set([...current, ...library].map(({ key }) => key));
+    const token = { owner: `cleanup-${randomUUID()}`, until: new Date(input.now.getTime() + 30 * 60_000) };
+    if (!input.dryRun && set.status === "deleting") await tx.update(sets)
+      .set({ deletionLeaseOwner: token.owner, deletionLeaseUntil: token.until }).where(eq(sets.id, set.id));
+    const cleaned = await clean(set, protectedKeys);
+    let deletedSet = false;
+    if (!input.dryRun && set.status === "deleting" && cleaned.allGone) {
+      const removed = await tx.delete(sets).where(and(eq(sets.id, set.id), eq(sets.ownerId, input.ownerId), eq(sets.analysisId, input.analysisId), eq(sets.status, "deleting"),
+        eq(sets.deletionLeaseOwner, token.owner), eq(sets.deletionLeaseUntil, token.until), gt(sets.deletionLeaseUntil, new Date(input.now.getTime() + Date.now() - started))))
+        .returning({ id: sets.id });
+      deletedSet = removed.length === 1;
+      if (!deletedSet) throw Error("Cleanup claim expired");
+    } else if (!input.dryRun) {
+      // Rotate successfully scanned terminals so bounded daily batches cannot starve later sets.
+      await tx.update(sets).set(set.status === "deleting" ? { deletionLeaseOwner: null, deletionLeaseUntil: null, updatedAt: input.now } : { updatedAt: input.now }).where(eq(sets.id, set.id));
+    }
+    return { result: cleaned.result, deletedSet };
+  });
+}
+
+/** Superseded means a newer completed research job exists; never infer it from storage. */
+export async function listResearchCleanupCandidates(cutoff: Date) {
+  return db.selectDistinct({ key: inspirationVisualAssets.objectKey, ownerId: inspirationVisualAssets.ownerId, analysisId: inspirationVisualAssets.analysisId })
+    .from(inspirationVisualAssets).innerJoin(inspirationVisualJobs, eq(inspirationVisualJobs.id, inspirationVisualAssets.jobId))
+    .where(and(eq(inspirationVisualAssets.kind, "web_evidence"), lt(inspirationVisualAssets.createdAt, cutoff), eq(inspirationVisualJobs.status, "completed"),
+      sql`exists (select 1 from inspiration_visual_jobs newer where newer.owner_id = ${inspirationVisualAssets.ownerId} and newer.analysis_id = ${inspirationVisualAssets.analysisId} and newer.kind = 'research_visuals' and newer.status = 'completed' and newer.completed_at < ${cutoff.toISOString()}::timestamptz and (newer.created_at, newer.id) > (${inspirationVisualJobs.createdAt}, ${inspirationVisualJobs.id}))`,
+      sql`not exists (select 1 from inspiration_visual_assets alias join inspiration_concept_references ref on ref.visual_asset_id = alias.id where alias.object_key = ${inspirationVisualAssets.objectKey})`,
+      sql`not exists (select 1 from ${libraryAssets} where ${libraryAssets.objectKey} = ${inspirationVisualAssets.objectKey})`,
+      sql`not exists (select 1 from ${outputs} where ${outputs.objectKey} = ${inspirationVisualAssets.objectKey})`,
+      // Filter protected aliases before LIMIT so they cannot starve the bounded batch.
+      sql`not exists (
+        select 1 from inspiration_visual_assets alias join inspiration_visual_jobs aj on aj.id = alias.job_id
+        where alias.object_key = ${inspirationVisualAssets.objectKey} and (
+          alias.kind <> 'web_evidence' or alias.owner_id <> ${inspirationVisualAssets.ownerId} or alias.analysis_id <> ${inspirationVisualAssets.analysisId}
+          or alias.created_at >= ${cutoff.toISOString()}::timestamptz or aj.status <> 'completed' or aj.kind <> 'research_visuals'
+          or aj.completed_at >= ${cutoff.toISOString()}::timestamptz
+          or not exists (select 1 from inspiration_visual_jobs newer where newer.owner_id = aj.owner_id and newer.analysis_id = aj.analysis_id
+            and newer.kind = 'research_visuals' and newer.status = 'completed' and newer.completed_at < ${cutoff.toISOString()}::timestamptz
+            and (newer.created_at, newer.id) > (aj.created_at, aj.id))
+        ))`))
+    .orderBy(asc(inspirationVisualAssets.objectKey)).limit(25);
+}
+
+export async function withResearchCleanupKey(input: { key: string; ownerId: string; analysisId: string; cutoff: Date; dryRun: boolean },
+  clean: () => Promise<boolean>) {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`set local lock_timeout = '5s'`);
+    await lockConceptAnalysis(tx, input.analysisId);
+    const aliases = await tx.select().from(inspirationVisualAssets).where(eq(inspirationVisualAssets.objectKey, input.key)).limit(1001).for("update");
+    if (!aliases.length || aliases.length > 1000 || aliases.some((row) => row.ownerId !== input.ownerId || row.analysisId !== input.analysisId || row.kind !== "web_evidence" || row.createdAt >= input.cutoff)) return false;
+    const [latest] = await tx.select().from(inspirationVisualJobs).where(and(eq(inspirationVisualJobs.ownerId, input.ownerId), eq(inspirationVisualJobs.analysisId, input.analysisId), eq(inspirationVisualJobs.kind, "research_visuals"), eq(inspirationVisualJobs.status, "completed")))
+      .orderBy(desc(inspirationVisualJobs.createdAt), desc(inspirationVisualJobs.id)).limit(1);
+    if (!latest?.completedAt || latest.completedAt >= input.cutoff || aliases.some((row) => row.jobId === latest.id)) return false;
+    const aliasJobs = await tx.select({ status: inspirationVisualJobs.status, kind: inspirationVisualJobs.kind, completedAt: inspirationVisualJobs.completedAt }).from(inspirationVisualJobs).where(inArray(inspirationVisualJobs.id, aliases.map(({ jobId }) => jobId)));
+    if (aliasJobs.some((job) => job.status !== "completed" || job.kind !== "research_visuals" || !job.completedAt || job.completedAt >= input.cutoff)) return false;
+    const [pinned] = await tx.select({ id: references.visualAssetId }).from(references).where(inArray(references.visualAssetId, aliases.map(({ id }) => id))).limit(1);
+    const [library] = await tx.select({ id: libraryAssets.id }).from(libraryAssets).where(eq(libraryAssets.objectKey, input.key)).limit(1);
+    const [output] = await tx.select({ id: outputs.id }).from(outputs).where(eq(outputs.objectKey, input.key)).limit(1);
+    if (pinned || library || output) return false;
+    const removed = await clean();
+    if (removed && !input.dryRun) await tx.delete(inspirationVisualAssets).where(inArray(inspirationVisualAssets.id, aliases.map(({ id }) => id)));
+    return removed && !input.dryRun;
+  });
 }

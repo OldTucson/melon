@@ -222,3 +222,16 @@ OSS 为独立外部门禁：bucket 必须私有。服务端角色只获得目标
 Task 11 删除清理采用删除前对象快照与 best-effort 删除：并发导入可能在快照后、分析删除前落入新对象，或清理时 OSS 失败，从而留下孤儿；不要宣称原子对象删除或保证重试。部署后的研究范围生命周期是这类竞态/孤儿的外部兜底；30 天规则未配置和验证即不允许启用。监控只能记录稳定错误码、任务耗时、导入数量、失败数量、内存和 OSS 增长汇总，不记录 query/需求文本、远程 URL（含 query string）、provider body、对象 key、owner ID、凭据或授权头。
 
 回滚首先将 `INSPIRATION_WEB_VISUALS_ENABLED=false` 并按部署方式重启/滚动更新，使新视觉导入与刷新停止；保留已完成文字及既有授权访问，不清空数据、不撤销已保存图库。必要时切回蓝色旧版本，保持私邀入口且概念生成继续禁用，验证文字历史与分享撤销仍正常。回滚不等于删除对象，也不能取消已经在途的工作；继续监控稳定码/数量与研究范围生命周期，修复并重过全部门禁后再启用。
+
+## 灵感概念套图运维
+
+概念生成默认关闭：`INSPIRATION_CONCEPT_IMAGES_ENABLED=false`。迁移先于 web/worker 启动，生产启用还要求 `INSPIRATION_CONCEPT_RELEASE_APPROVED=true`、`qwen-image-3.0-pro`、同一 workspace 的 HTTPS 原生/OpenAI 地址、真实私有 OSS 以及显式 `INSPIRATION_CONCEPT_WORKER_ID`。概念 worker 状态独立于主站 readiness。
+
+```bash
+npm run prod:check
+npm run inspiration:concept-status
+npm run inspiration:concept-cleanup -- --dry-run
+npm run inspiration:concept-cleanup
+```
+
+状态命令仅返回心跳年龄、健康状态、队列计数和最老排队年龄；超过 90 秒或缺失心跳返回非零。清理命令仅接受无参数或 `--dry-run`，保留至少 24 小时，默认每批最多 25 个集合和 25 个研究对象键；dry-run 不修改数据库或对象。生产使用 `/etc/melon/web.env` 与每日 systemd timer。完整安装、灰度验收、费用核对和非破坏回滚步骤见[概念套图上线与运行](docs/operations/web-production.md#概念套图上线与运行)。既有阶段“生成禁用”要求在该独立门禁完成前继续生效。

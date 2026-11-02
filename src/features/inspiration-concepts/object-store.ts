@@ -6,6 +6,7 @@ import type { OssConnectionConfig } from "@/features/storage/contracts";
 import { createDefaultCredentialResolver } from "@/features/storage/oss-adapter";
 import { UPLOAD_REQUEST_TIMEOUT_MS } from "@/features/storage/upload-timing";
 import { OSS_DELETE_BATCH_SIZE, parseOssConnectionConfig } from "@/features/storage/validation";
+import { parseVisualObjectKey } from "@/features/inspiration-visuals/visual-object-keys";
 import { assertConceptSetObjectPrefix, parseConceptObjectKey } from "./object-keys";
 
 export interface ConceptObjectStore {
@@ -14,17 +15,23 @@ export interface ConceptObjectStore {
   delete(keys: readonly string[]): Promise<void>;
   listObjectKeys(prefix: string): Promise<string[]>;
 }
+export interface ConceptCleanupStore {
+  listObjects(prefix: string): Promise<{ key: string; lastModified: Date }[]>;
+  delete(keys: readonly string[]): Promise<void>;
+  researchObjectLastModified(key: string): Promise<Date | null>;
+  deleteResearchObjects(keys: readonly string[]): Promise<void>;
+}
 const credentialSchema = z.object({ accessKeyId: z.string().min(1), accessKeySecret: z.string().min(1), securityToken: z.string().min(1).optional() });
 // ali-oss 6.x returns raw XML Deleted entries; its string[] declaration is stale.
 const deleteResultSchema = z.object({ deleted: z.array(z.object({ Key: z.string() })) });
-type Client = Pick<OSS, "put" | "get" | "deleteMulti" | "listV2">;
+type Client = Pick<OSS, "put" | "get" | "deleteMulti" | "listV2"> & Partial<Pick<OSS, "head">>;
 const unavailable = () => new Error("Concept object unavailable");
 
-/** Dedicated private concept namespace; never accepts pattern/research keys. */
-export function createConceptObjectStore(input: OssConnectionConfig, dependencies: {
+/** Shared private client; each operation validates its own strict namespace. */
+function createScopedConceptStore(input: OssConnectionConfig, dependencies: {
   getCredential?: () => Promise<unknown>;
   createClient?: (options: OSS.Options & { retryMax: number }) => Client;
-} = {}): ConceptObjectStore {
+} = {}): ConceptObjectStore & ConceptCleanupStore {
   let config: OssConnectionConfig;
   try { config = parseOssConnectionConfig(input); } catch { throw unavailable(); }
   const resolve = dependencies.getCredential ?? createDefaultCredentialResolver();
@@ -54,7 +61,68 @@ export function createConceptObjectStore(input: OssConnectionConfig, dependencie
       throw unavailable();
     }
   };
+  const deleteValidated = async (keys: readonly string[], validate: (key: string) => unknown) => {
+    try {
+      keys.forEach(validate);
+      if (!keys.length) return;
+      await withClient(async (client) => {
+        for (let offset = 0; offset < keys.length; offset += OSS_DELETE_BATCH_SIZE) {
+          const batch = keys.slice(offset, offset + OSS_DELETE_BATCH_SIZE);
+          const result = deleteResultSchema.parse(await client.deleteMulti(batch, { quiet: false }));
+          const remaining = new Set(batch);
+          for (const { Key } of result.deleted) if (!remaining.delete(Key)) throw unavailable();
+          if (remaining.size) throw unavailable();
+        }
+      });
+    } catch { throw unavailable(); }
+  };
   return {
+    async researchObjectLastModified(key) {
+      try {
+        parseVisualObjectKey(key);
+        return await withClient(async (client) => {
+          try {
+            if (!client.head) throw unavailable();
+            const result = await client.head(key);
+            const header = Object.entries(result.res.headers).find(([name]) => name.toLowerCase() === "last-modified")?.[1];
+            if (typeof header !== "string") throw unavailable();
+            const date = new Date(header);
+            if (!Number.isFinite(date.getTime())) throw unavailable();
+            return date;
+          } catch (error) {
+            if (error && typeof error === "object" && "code" in error && error.code === "NoSuchKey") return null;
+            throw unavailable();
+          }
+        });
+      } catch { throw unavailable(); }
+    },
+    deleteResearchObjects: (keys) => deleteValidated(keys, parseVisualObjectKey),
+    async listObjects(inputPrefix) {
+      try {
+        const prefix = assertConceptSetObjectPrefix(inputPrefix);
+        return await withClient(async (client) => {
+          const objects: { key: string; lastModified: Date }[] = [];
+          const keys = new Set<string>(), tokens = new Set<string>();
+          let token: string | undefined;
+          for (let page = 0; page < 10; page++) {
+            const result = await client.listV2({ prefix, "max-keys": 1000, ...(token ? { "continuation-token": token } : {}) });
+            if (!Array.isArray(result.objects) || result.objects.length > 1000 || typeof result.isTruncated !== "boolean") throw unavailable();
+            for (const object of result.objects) {
+              parseConceptObjectKey(object.name);
+              if (!object.name.startsWith(prefix) || keys.has(object.name) || typeof object.lastModified !== "string") throw unavailable();
+              const lastModified = new Date(object.lastModified);
+              if (!Number.isFinite(lastModified.getTime())) throw unavailable();
+              keys.add(object.name); objects.push({ key: object.name, lastModified });
+            }
+            if (!result.isTruncated) return objects;
+            const next = result.nextContinuationToken;
+            if (typeof next !== "string" || !next.length || tokens.has(next)) throw unavailable();
+            tokens.add(next); token = next;
+          }
+          throw unavailable();
+        });
+      } catch { throw unavailable(); }
+    },
     async put({ key, bytes, contentType }) {
       try {
         parseConceptObjectKey(key);
@@ -73,23 +141,7 @@ export function createConceptObjectStore(input: OssConnectionConfig, dependencie
         });
       } catch { throw unavailable(); }
     },
-    async delete(keys) {
-      try {
-        keys.forEach(parseConceptObjectKey);
-        if (!keys.length) return;
-        await withClient(async (client) => {
-          for (let offset = 0; offset < keys.length; offset += OSS_DELETE_BATCH_SIZE) {
-            const batch = keys.slice(offset, offset + OSS_DELETE_BATCH_SIZE);
-            const result = deleteResultSchema.parse(await client.deleteMulti(batch, { quiet: false }));
-            const remaining = new Set(batch);
-            for (const { Key } of result.deleted) {
-              if (!remaining.delete(Key)) throw unavailable();
-            }
-            if (remaining.size) throw unavailable();
-          }
-        });
-      } catch { throw unavailable(); }
-    },
+    delete: (keys) => deleteValidated(keys, parseConceptObjectKey),
     async listObjectKeys(inputPrefix) {
       try {
         const prefix = assertConceptSetObjectPrefix(inputPrefix);
@@ -114,4 +166,11 @@ export function createConceptObjectStore(input: OssConnectionConfig, dependencie
       } catch { throw unavailable(); }
     },
   };
+}
+
+export function createConceptObjectStore(...args: Parameters<typeof createScopedConceptStore>): ConceptObjectStore {
+  return createScopedConceptStore(...args);
+}
+export function createConceptCleanupStore(...args: Parameters<typeof createScopedConceptStore>): ConceptCleanupStore {
+  return createScopedConceptStore(...args);
 }

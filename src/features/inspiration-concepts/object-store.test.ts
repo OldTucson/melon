@@ -3,15 +3,16 @@ import { randomUUID } from "node:crypto";
 import type OSS from "ali-oss";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { conceptOutputObjectKey, conceptSetObjectPrefix, parseConceptObjectKey } from "./object-keys";
-import { createConceptObjectStore } from "./object-store";
+import { createConceptObjectStore, createConceptCleanupStore } from "./object-store";
 const scope = { ownerId: "11111111-1111-4111-8111-111111111111", analysisId: "22222222-2222-4222-8222-222222222222", setId: "33333333-3333-4333-8333-333333333333" };
 const outputId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const prefix = `users/${scope.ownerId}/inspiration/${scope.analysisId}/concept-sets/${scope.setId}/`;
 const key = prefix + `flat/${outputId}.png`;
 const config = { region: "oss-cn-hangzhou", bucket: "melon-assets", endpoint: "https://assets.example.test", cname: true };
 const credential = { accessKeyId: "id", accessKeySecret: "secret", securityToken: "token" };
-const sdk = { put: vi.fn(), get: vi.fn(), listV2: vi.fn(), deleteMulti: vi.fn() };
+const sdk = { head: vi.fn(), put: vi.fn(), get: vi.fn(), listV2: vi.fn(), deleteMulti: vi.fn() };
 const createClient = vi.fn<(options: OSS.Options & { retryMax: number }) => typeof sdk>(() => sdk);
+const cleanupStore = () => createConceptCleanupStore(config, { getCredential: async () => credential, createClient });
 const store = () => createConceptObjectStore(config, { getCredential: async () => credential, createClient });
 beforeEach(() => { vi.resetAllMocks(); sdk.put.mockResolvedValue({}); sdk.deleteMulti.mockImplementation(async (keys: string[], options: OSS.DeleteMultiOptions) => ({ deleted: options.quiet ? [] : keys.map((Key) => ({ Key })), res: { status: 200, headers: { "x-oss-request-id": "request-private" }, size: 100, rt: 1 } })); sdk.get.mockResolvedValue({ content: Buffer.of(1), res: { headers: { "content-type": "image/png" }, status: 200 } }); });
 
@@ -102,5 +103,41 @@ describe("verified concept deletion acknowledgement", () => {
     sdk.deleteMulti.mockResolvedValueOnce({ deleted: keys.slice(0, 999).map((Key) => ({ Key })), res: { status: 200, headers: {}, size: 100, rt: 1 } });
     await expect(store().delete(keys)).rejects.toThrow(/^Concept object unavailable$/);
     expect(sdk.deleteMulti).toHaveBeenCalledOnce();
+  });
+});
+
+describe("age-gated cleanup storage", () => {
+  it("returns validated timestamps and bounds listings", async () => {
+    sdk.listV2.mockResolvedValue({ objects: [{ name: key, lastModified: "2026-11-01T00:00:00Z" }], isTruncated: false });
+    await expect(cleanupStore().listObjects(prefix)).resolves.toEqual([{ key, lastModified: new Date("2026-11-01T00:00:00Z") }]);
+    for (const lastModified of [undefined, "invalid", ""]) {
+      sdk.listV2.mockResolvedValue({ objects: [{ name: key, lastModified }], isTruncated: false });
+      await expect(cleanupStore().listObjects(prefix)).rejects.toThrow("Concept object unavailable");
+    }
+    sdk.listV2.mockImplementation(async () => ({ objects: [], isTruncated: true, nextContinuationToken: randomUUID() }));
+    await expect(cleanupStore().listObjects(prefix)).rejects.toThrow("Concept object unavailable");
+    expect(sdk.listV2.mock.calls.length).toBeLessThan(20);
+  });
+  it("checks research scope and every deletion acknowledgement", async () => {
+    const researchKey = `users/${scope.ownerId}/inspiration/${scope.analysisId}/research/${scope.setId}/${outputId}.png`;
+    await cleanupStore().deleteResearchObjects([researchKey]);
+    await expect(cleanupStore().deleteResearchObjects([key])).rejects.toThrow();
+    sdk.deleteMulti.mockResolvedValueOnce({ deleted: [] });
+    await expect(cleanupStore().deleteResearchObjects([researchKey])).rejects.toThrow("Concept object unavailable");
+  });
+});
+
+describe("research cleanup metadata", () => {
+  const researchKey = `users/${scope.ownerId}/inspiration/${scope.analysisId}/research/${scope.setId}/${outputId}.png`;
+  it("uses last-modified metadata and treats only NoSuchKey as already absent", async () => {
+    sdk.head.mockResolvedValueOnce({ res: { headers: { "Last-Modified": "Sun, 01 Nov 2026 00:00:00 GMT" } } });
+    await expect(cleanupStore().researchObjectLastModified(researchKey)).resolves.toEqual(new Date("2026-11-01T00:00:00Z"));
+    sdk.head.mockRejectedValueOnce({ code: "NoSuchKey" });
+    await expect(cleanupStore().researchObjectLastModified(researchKey)).resolves.toBeNull();
+    sdk.head.mockRejectedValueOnce({ code: "AccessDenied", message: "private" });
+    await expect(cleanupStore().researchObjectLastModified(researchKey)).rejects.toThrow("Concept object unavailable");
+    sdk.head.mockResolvedValueOnce({ res: { headers: {} } });
+    await expect(cleanupStore().researchObjectLastModified(researchKey)).rejects.toThrow("Concept object unavailable");
+    await expect(cleanupStore().researchObjectLastModified(key)).rejects.toThrow("Concept object unavailable");
   });
 });

@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Melon inspiration concept orphan cleanup
+
+[Timer]
+OnCalendar=*-*-* 03:20:00
+RandomizedDelaySec=45min
+Persistent=true
+Unit=melon-inspiration-concept-cleanup.service
+
+[Install]
+WantedBy=timers.target

@@ -30,7 +30,9 @@
     "preview:cleanup": "node --conditions=react-server --import tsx scripts/cleanup-manual-previews.ts",
     "auth:cleanup": "node --conditions=react-server --import tsx scripts/cleanup-auth-rate-limits.ts",
     "prod:check": "node --conditions=react-server --import tsx scripts/check-production.ts",
-    "image-search:backfill": "node --conditions=react-server --import tsx scripts/backfill-image-search.ts"
+    "image-search:backfill": "node --conditions=react-server --import tsx scripts/backfill-image-search.ts",
+    "inspiration:concept-cleanup": "node --conditions=react-server --import tsx scripts/cleanup-inspiration-concept-objects.ts",
+    "inspiration:concept-status": "node --conditions=react-server --import tsx scripts/check-inspiration-concept-worker.ts"
   },
   "dependencies": {
     "@alicloud/credentials": "^2.4.7",

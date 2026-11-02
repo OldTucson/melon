@@ -51,11 +51,17 @@ export function formatServerEnvValidationError(error: unknown) {
 }
 
 async function main() {
-  nextEnv.loadEnvConfig(process.cwd());
+  nextEnv.loadEnvConfig(process.cwd(), undefined, { info() {}, error() {} });
 
   try {
     const { getServerEnv } = await import("@/lib/env/server");
-    const errors = validateProductionReadiness(getServerEnv());
+    const env = getServerEnv();
+    if (env.INSPIRATION_CONCEPT_IMAGES_ENABLED && !process.env.INSPIRATION_CONCEPT_WORKER_ID?.trim()) {
+      console.error("Production preflight: FAIL\n- INSPIRATION_CONCEPT_WORKER_ID_REQUIRED");
+      process.exitCode = 1;
+      return;
+    }
+    const errors = validateProductionReadiness(env);
     if (errors.length > 0) {
       console.error(formatProductionReadinessErrors(errors));
       process.exitCode = 1;
