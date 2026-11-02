@@ -190,13 +190,13 @@ async function create(
     input.ownerId,
     input.analysisId,
   );
-  if (analysis.status !== "completed") throw inspirationBusy();
   const target = { ...input, regeneratedFromSetId };
   const existing = await replay(
     input,
     repository.conceptCreateOperationKey(target),
   );
   if (existing) return existing;
+  if (analysis.status !== "completed") throw inspirationBusy();
   const result = parseInspirationStored(
     inspirationAnalysisResultSchema,
     analysis.result,
@@ -263,13 +263,13 @@ export async function retryConceptDerivative(
       parsed.ownerId,
       parsed.analysisId,
     );
-    if (analysis.status !== "completed") throw inspirationBusy();
     const existing = await replay(
       parsed,
       repository.conceptRetryOperationKey(parsed),
     );
     if (existing) return existing;
     await ownedSet(parsed);
+    if (analysis.status !== "completed") throw inspirationBusy();
     await repository.createDerivativeRetry({ ...parsed, now: new Date() });
     return setDto(parsed);
   });

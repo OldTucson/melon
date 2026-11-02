@@ -96,6 +96,21 @@ describe("authenticated concept set lifecycle", () => {
   afterEach(() => vi.restoreAllMocks());
   afterAll(closeDatabase);
 
+  async function pendingAnalysis() {
+    const id = randomUUID();
+    await db.insert(inspirationAnalyses).values({
+      id,
+      ownerId,
+      operationId: randomUUID(),
+      prompt: "Pending report",
+      title: "Pending report",
+      status: "pending",
+      searchModel: "qwen-plus",
+      structureModel: "qwen3.8-flash",
+    });
+    return id;
+  }
+
   async function research(
     overrides: Partial<typeof inspirationVisualJobs.$inferInsert> = {},
   ) {
@@ -419,6 +434,56 @@ describe("authenticated concept set lifecycle", () => {
       createConceptSet({ ...empty, visualJobId: null }),
     ).rejects.toMatchObject({ code: "OPERATION_ID_REUSED", status: 409 });
   });
+  it("rejects create operation reuse against another owned pending analysis before checking completion", async () => {
+    const request = input();
+    await createConceptSet(request);
+    const pendingId = await pendingAnalysis();
+    await expect(
+      createConceptSet({ ...request, analysisId: pendingId }),
+    ).rejects.toMatchObject({ code: "OPERATION_ID_REUSED", status: 409 });
+    expect(await db.select().from(sets)).toHaveLength(1);
+    expect(await db.select().from(tasks)).toHaveLength(1);
+  });
+  it.each(["nonexistent", "wrong-analysis"])(
+    "rejects retry operation reuse against a %s set under an owned pending analysis before checking completion",
+    async (target) => {
+      const source = await createConceptSet(input());
+      await finish(source.id, ["sketch"]);
+      const request = {
+        ...identity(),
+        setId: source.id,
+        outputKind: "effect" as const,
+        operationId: randomUUID(),
+      };
+      await retryConceptDerivative(request);
+      const pendingId = await pendingAnalysis();
+      await expect(
+        retryConceptDerivative({
+          ...request,
+          analysisId: pendingId,
+          setId: target === "nonexistent" ? randomUUID() : source.id,
+        }),
+      ).rejects.toMatchObject({ code: "OPERATION_ID_REUSED", status: 409 });
+      expect(await db.select().from(tasks)).toHaveLength(2);
+    },
+  );
+  it.each(["nonexistent", "wrong-analysis"])(
+    "returns safe not-found for a new retry against a %s set under an owned pending analysis",
+    async (target) => {
+      const source = await createConceptSet(input());
+      const pendingId = await pendingAnalysis();
+      await expect(
+        retryConceptDerivative({
+          ownerId,
+          analysisId: pendingId,
+          setId: target === "nonexistent" ? randomUUID() : source.id,
+          outputKind: "effect",
+          operationId: randomUUID(),
+        }),
+      ).rejects.toMatchObject({ code: "INSPIRATION_NOT_FOUND", status: 404 });
+      expect(await db.select().from(tasks)).toHaveLength(1);
+    },
+  );
   it("serializes concurrent identical operations into one set and task", async () => {
     const request = input();
     const results = await Promise.all(
