@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from dataclasses import replace
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -7,6 +8,7 @@ from uuid import UUID, uuid4
 import numpy as np
 import pytest
 
+import melon_visual_search.search as search_module
 from melon_visual_search.image_io import decode_image
 from melon_visual_search.local_features import (
     extract_local_features,
@@ -157,6 +159,47 @@ def _service(
         index_version=INDEX_VERSION,
         feature_cache_size=feature_cache_size,
     )
+
+
+def test_service_loads_configs_from_deployed_model_lock_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service_root = tmp_path / "release" / "services" / "visual-search"
+    config_root = service_root / "config"
+    config_root.mkdir(parents=True)
+    source_config_root = Path(__file__).parents[1] / "config"
+    for filename in ("scoring-v1.json", "palette-scoring-v1.json"):
+        shutil.copyfile(source_config_root / filename, config_root / filename)
+
+    installed_module = (
+        service_root
+        / ".venv"
+        / "lib"
+        / "python3.12"
+        / "site-packages"
+        / "melon_visual_search"
+        / "search.py"
+    )
+    monkeypatch.setattr(search_module, "__file__", str(installed_module))
+    monkeypatch.setenv(
+        "VISUAL_SEARCH_MODEL_LOCK_PATH",
+        str(service_root / "model-lock.json"),
+    )
+
+    service = SearchService(
+        FakeRepository([]),
+        FakeStorage({}),
+        FakeEmbedder(),
+        index_version=INDEX_VERSION,
+    )
+    ranked = service.rank_evidence(
+        SearchEvidenceResult(width=128, height=96, items=())
+    )
+
+    assert ranked.width == 128
+    assert ranked.height == 96
+    assert ranked.items == ()
 
 
 @pytest.fixture(scope="module")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import threading
 from collections import OrderedDict
 from collections.abc import Sequence
@@ -40,6 +41,13 @@ from .scoring import (
 MAX_RERANK_CANDIDATES = 50
 MAX_SEARCH_RESULTS = 30
 DEFAULT_FEATURE_CACHE_SIZE = 128
+
+
+def _default_config_root() -> Path:
+    configured_lock_path = os.environ.get("VISUAL_SEARCH_MODEL_LOCK_PATH")
+    if configured_lock_path:
+        return Path(configured_lock_path).parent / "config"
+    return Path(__file__).resolve().parents[2] / "config"
 
 
 class NoIndexError(RuntimeError):
@@ -157,15 +165,14 @@ class SearchService:
         self._storage = storage
         self._embedder = embedder
         self._index_version = index_version
+        config_root = _default_config_root()
         self._scoring = scoring_config or load_scoring_config(
-            Path(__file__).resolve().parents[2] / "config" / "scoring-v1.json"
+            config_root / "scoring-v1.json"
         )
         self._palette_scoring = (
             palette_scoring_config
             or load_palette_scoring_config(
-                Path(__file__).resolve().parents[2]
-                / "config"
-                / "palette-scoring-v1.json"
+                config_root / "palette-scoring-v1.json"
             )
         )
         self._feature_cache_size = feature_cache_size
