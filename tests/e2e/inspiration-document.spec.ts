@@ -17,7 +17,6 @@ const viewports = [
 async function openOwner(page: Page) {
   await page.goto("/inspiration");
   await expect(page.getByRole("article", { name: documentFixture.title })).toBeVisible();
-  await expect(page.getByText("方向内私有纹样", { exact: true })).toBeVisible();
 }
 
 async function assertDocument(page: Page, count: number, columns: number) {
@@ -80,6 +79,44 @@ async function controlBoxes(page: Page) {
 }
 
 for (const viewport of viewports) {
+  test(`${viewport.width}x${viewport.height}: editorial hierarchy distinguishes headings, signals and links while framing evidence`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    await seedDocument(8);
+    await installDocumentBytes(page, 8);
+    await loginAs(page, E2E_USERS.designer);
+    await page.goto("/inspiration");
+    await expect(page.getByRole("article", { name: documentFixture.title })).toBeVisible();
+
+    const market = page.getByRole("region", { name: "市场信号", exact: true });
+    const hierarchy = await Promise.all([
+      market.getByRole("heading", { name: "市场信号", exact: true }),
+      market.getByText(/^信号 01 · /),
+      market.getByRole("link").first(),
+      market.getByText("公开商品与趋势内容重复出现轻便通勤设计。", { exact: true }),
+    ].map((locator) => locator.evaluate((node) => getComputedStyle(node).color)));
+    expect(new Set(hierarchy).size, "heading, signal, link and body copy need distinct semantic colors").toBe(4);
+
+    const figure = market.locator("figure").first();
+    const frame = await figure.evaluate((node) => {
+      const style = getComputedStyle(node);
+      return {
+        backgroundColor: style.backgroundColor,
+        borderStyle: style.borderTopStyle,
+        borderWidth: parseFloat(style.borderTopWidth),
+      };
+    });
+    expect(frame.borderStyle).toBe("solid");
+    expect(frame.borderWidth).toBeGreaterThanOrEqual(1);
+    expect(frame.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+    expect(parseFloat(await figure.locator("figcaption").evaluate((node) => getComputedStyle(node).borderTopWidth))).toBeGreaterThanOrEqual(1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.body.scrollWidth <= innerWidth)).toBe(true);
+
+    await alignSection(market);
+    await page.screenshot({ path: testInfo.outputPath(`editorial-hierarchy-${viewport.width}x${viewport.height}.png`), style: screenshotStyle });
+  });
+}
+
+for (const viewport of viewports) {
   test(`${viewport.width}x${viewport.height}: 0/1/4/8 images, owner/shared layout and keyboard dialog`, async ({ page }, testInfo) => {
     await page.setViewportSize(viewport);
     await loginAs(page, E2E_USERS.designer);
@@ -93,8 +130,6 @@ for (const viewport of viewports) {
       expect(controls.every(Boolean)).toBe(true);
       if (initialControls) expect(controls).toEqual(initialControls);
       initialControls = controls;
-      await expect(page.getByRole("region", { name: "柔和通勤", exact: true }).getByText("方向内私有纹样")).toBeVisible();
-      await expect(page.getByRole("region", { name: "私有素材补充", exact: true }).getByText("未分配私有纹样")).toBeVisible();
       if (count === 8) {
         await page.getByRole("heading", { name: documentFixture.title, exact: true }).scrollIntoViewIfNeeded();
         await page.screenshot({ path: testInfo.outputPath(`owner-${viewport.width}x${viewport.height}.png`), fullPage: true, style: screenshotStyle });

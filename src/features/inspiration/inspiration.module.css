@@ -821,6 +821,12 @@
 }
 
 .document {
+  --document-heading: color-mix(in srgb, var(--success) 58%, var(--text-primary));
+  --document-signal: color-mix(in srgb, var(--warning) 78%, var(--text-primary));
+  --document-link: color-mix(in srgb, #2f6f89 75%, var(--text-primary));
+  --document-frame: color-mix(in srgb, var(--border-strong) 72%, transparent);
+  --document-mat: color-mix(in srgb, var(--surface-panel) 94%, var(--surface-hover));
+
   width: 100%;
   max-width: 960px;
   margin-inline: auto;
@@ -836,6 +842,11 @@
 
 .documentHeader {
   padding: 12px 0 20px;
+}
+
+.documentHeader .sectionKicker,
+.documentHeader .recordTitle {
+  color: var(--document-heading);
 }
 
 .documentIntro {
@@ -867,14 +878,27 @@
 }
 
 .documentSection h3 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
   margin: 0 0 24px;
+  color: var(--document-heading);
   font-size: 21px;
   font-weight: 600;
   line-height: 1.4;
 }
 
+.documentSection h3::before {
+  width: 20px;
+  height: 2px;
+  flex: 0 0 20px;
+  background: var(--document-heading);
+  content: "";
+}
+
 .documentSection h4 {
   margin: 8px 0 12px;
+  color: var(--document-heading);
   font-size: 20px;
   font-weight: 500;
   line-height: 1.5;
@@ -888,6 +912,11 @@
 .evidenceFigure {
   min-width: 0;
   margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--document-frame);
+  border-radius: 6px;
+  background: var(--document-mat);
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--text-primary) 7%, transparent);
 }
 
 .evidencePreview {
@@ -931,7 +960,8 @@
   display: flex;
   align-items: flex-start;
   flex-direction: column;
-  padding-block: 12px 16px;
+  padding: 13px 16px 16px;
+  border-top: 1px solid var(--document-frame);
   font-size: 12px;
   line-height: 1.6;
   gap: 4px;
@@ -957,8 +987,15 @@
   display: inline-flex;
   align-items: center;
   min-height: 44px;
-  color: var(--text-primary);
+  color: var(--document-link);
+  font-weight: 550;
+  text-decoration-color: color-mix(in srgb, var(--document-link) 58%, transparent);
   text-underline-offset: 4px;
+}
+
+.evidenceCaption a:hover,
+.document .sourceLinks a:hover {
+  text-decoration-color: currentColor;
 }
 
 .evidenceCaption svg {
@@ -997,6 +1034,16 @@
 .signalEvidence {
   display: grid;
   gap: 24px;
+}
+
+.marketSignal .sectionKicker,
+.editorialDirection > .sectionKicker,
+.facetTitle .signal {
+  color: var(--document-signal);
+}
+
+.facetTitle strong {
+  color: var(--document-heading);
 }
 
 .productGrid {
@@ -1048,6 +1095,7 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 20px;
+  min-height: 60px;
   padding: 12px 0 20px;
   font-size: 12px;
   line-height: 1.6;
@@ -1125,12 +1173,17 @@
 .conceptFigure {
   min-width: 0;
   margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--document-frame);
+  border-radius: 6px;
+  background: var(--document-mat);
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--text-primary) 7%, transparent);
 }
 .conceptMedia {
   position: relative;
   min-height: 160px;
   overflow: hidden;
-  border-radius: 6px;
+  border-radius: 0;
   background: var(--surface-hover);
 }
 .conceptMedia > button,
@@ -1154,7 +1207,8 @@
   text-align: center;
 }
 .conceptCaption {
-  padding-top: 10px;
+  padding: 11px 14px 13px;
+  border-top: 1px solid var(--document-frame);
   font-size: 12px;
 }
 .conceptCaption > div:first-child {
