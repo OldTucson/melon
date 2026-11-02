@@ -163,6 +163,37 @@ describe("direction concept results", () => {
     expect(actions.onDelete).toHaveBeenCalledWith(conceptSetFixture.id);
   });
 
+  it("closes an open regeneration confirmation when availability changes and never submits its stale button", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <InspirationConceptSection sets={[conceptSetFixture]} {...actions} />,
+    );
+    const trigger = screen.getByRole("button", { name: "方案操作" });
+    await user.click(trigger);
+    await user.click(
+      screen.getByRole("menuitem", { name: "重新生成草图（新方案）" }),
+    );
+    const confirm = screen.getByRole("button", { name: "确认生成新方案" });
+    expect(confirm).toBeEnabled();
+    rerender(
+      <InspirationConceptSection
+        sets={[conceptSetFixture]}
+        {...actions}
+        available={false}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+    await waitFor(() => expect(trigger).toHaveFocus());
+    fireEvent.click(confirm);
+    expect(actions.onRegenerate).not.toHaveBeenCalled();
+    rerender(
+      <InspirationConceptSection sets={[conceptSetFixture]} {...actions} />,
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it("previews with download, media failure fallback, trapped focus and Escape return", async () => {
     const user = userEvent.setup();
     render(

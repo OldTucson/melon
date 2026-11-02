@@ -166,13 +166,17 @@ export function InspirationConceptDrawer(props: Props) {
               event.preventDefault();
               if (trigger.current && !trigger.current.disabled)
                 trigger.current.focus();
-              else
-                trigger.current
+              else {
+                const results = trigger.current
                   ?.closest("section")
-                  ?.querySelector<HTMLElement>(
-                    '[role="tab"][aria-selected="true"]',
-                  )
-                  ?.focus();
+                  ?.querySelector<HTMLElement>("[data-concept-results]");
+                const selectedTab = !props.pending
+                  ? results?.querySelector<HTMLElement>(
+                      '[role="tab"][aria-selected="true"]',
+                    )
+                  : null;
+                (selectedTab ?? results)?.focus();
+              }
             }}
           >
             <div className={styles.dialogHeader}>

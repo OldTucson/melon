@@ -171,6 +171,88 @@ afterEach(() => {
 });
 
 describe("analysis concept orchestration with real report components", () => {
+  it("keeps focus on stable results after Escape during the first pending create, then focuses its returned tab", async () => {
+    const user = userEvent.setup();
+    let finish!: () => void;
+    postReply = () =>
+      new Promise<Response>((resolve) => {
+        finish = () => {
+          sets = [queued];
+          resolve(json(queued, 201));
+        };
+      });
+    mount();
+    const direction = screen.getByRole("region", { name: "柔和通勤" });
+    const trigger = within(direction).getByRole("button", {
+      name: "生成整套成图",
+    });
+    trigger.focus();
+    expect(trigger).toHaveFocus();
+    await user.keyboard("{Enter}");
+    const submit = within(screen.getByRole("dialog")).getByRole("button", {
+      name: "生成整套成图",
+    });
+    await user.click(submit);
+    await waitFor(() => expect(submit).toBeDisabled());
+    await user.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+    const results = within(direction).getByRole("region", { name: "成图结果" });
+    expect(results).toHaveFocus();
+    expect(trigger).toBeDisabled();
+    await act(async () => finish());
+    await waitFor(() =>
+      expect(
+        within(results).getByRole("tab", { name: "方案 01" }),
+      ).toHaveFocus(),
+    );
+  });
+
+  it("keeps focus on stable results during delayed regeneration and transfers it to the new version", async () => {
+    sets = [done];
+    const user = userEvent.setup();
+    let finish!: () => void;
+    const next = {
+      ...queued,
+      id: "00000000-0000-4000-8000-000000000032",
+      version: 2,
+    };
+    postReply = () =>
+      new Promise<Response>((resolve) => {
+        finish = () => {
+          sets = [next, done];
+          resolve(json(next));
+        };
+      });
+    mount();
+    const trigger = await screen.findByRole("button", { name: "方案操作" });
+    trigger.focus();
+    expect(trigger).toHaveFocus();
+    await user.keyboard("{Enter}");
+    await user.click(
+      screen.getByRole("menuitem", { name: "重新生成草图（新方案）" }),
+    );
+    const dialog = screen.getByRole("dialog", { name: "重新生成草图？" });
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    await user.click(
+      within(dialog).getByRole("button", { name: "确认生成新方案" }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+    const results = screen.getAllByRole("region", { name: "成图结果" })[0]!;
+    expect(results).toHaveFocus();
+    expect(trigger).toBeDisabled();
+    await act(async () => finish());
+    await waitFor(() =>
+      expect(
+        within(results).getByRole("tab", { name: "方案 02" }),
+      ).toHaveFocus(),
+    );
+    expect(within(results).getByRole("tab", { name: "方案 01" })).toBeVisible();
+  });
+
   it("creates once, inserts into owned cache, invalidates visuals and keeps the report visible", async () => {
     const user = userEvent.setup();
     const { client } = mount();
@@ -371,6 +453,9 @@ describe("analysis concept orchestration with real report components", () => {
     );
     expect(requests.find(({ init }) => init?.method === "POST")!.url).toBe(
       `${root}/${done.id}/regenerate`,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "方案 02" })).toHaveFocus(),
     );
     await user.click(screen.getByRole("tab", { name: "方案 01" }));
     expect(screen.getByRole("img", { name: "完成款式图" })).toBeVisible();

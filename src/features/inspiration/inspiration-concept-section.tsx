@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import * as Tabs from "@radix-ui/react-tabs";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
@@ -45,11 +45,21 @@ type Props = PrivateProps | { mode: "public"; sets: PublicConceptSetDto[] };
 
 function ConceptSetActions({
   set,
+  resultsRef,
   ...props
-}: PrivateProps & { set: ConceptSetDto }) {
+}: PrivateProps & {
+  set: ConceptSetDto;
+  resultsRef: RefObject<HTMLElement | null>;
+}) {
   const [confirm, setConfirm] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
-  const blocked = props.pending || !!conceptCreationDisabledReason(props.sets);
+  const submitted = useRef(false);
+  const blocked =
+    !props.available ||
+    props.pending ||
+    !!conceptCreationDisabledReason(props.sets);
+  // Dismiss the old confirmation, including if availability is later restored.
+  if (confirm && !props.available) setConfirm(false);
   if (!props.onDelete && !props.onRegenerate) return null;
   return (
     <>
@@ -93,14 +103,41 @@ function ConceptSetActions({
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
-      <Dialog.Root open={confirm} onOpenChange={setConfirm}>
+      <Dialog.Root
+        open={confirm && !!props.available}
+        onOpenChange={setConfirm}
+      >
         <Dialog.Portal>
           <Dialog.Overlay className={styles.overlay} />
           <Dialog.Content
             className={styles.dialog}
             onCloseAutoFocus={(event) => {
               event.preventDefault();
-              trigger.current?.focus();
+              if (submitted.current) {
+                const results = resultsRef.current;
+                const selectedTab = results?.querySelector<HTMLElement>(
+                  '[role="tab"][aria-selected="true"]',
+                );
+                // Immediate responses can already have replaced the active panel.
+                (selectedTab && selectedTab.dataset.conceptSet !== set.id
+                  ? selectedTab
+                  : results
+                )?.focus();
+                submitted.current = false;
+              } else if (
+                trigger.current?.isConnected &&
+                !trigger.current.disabled
+              )
+                trigger.current.focus();
+              else {
+                const results = resultsRef.current;
+                const selectedTab = !props.pending
+                  ? results?.querySelector<HTMLElement>(
+                      '[role="tab"][aria-selected="true"]',
+                    )
+                  : null;
+                (selectedTab ?? results)?.focus();
+              }
             }}
           >
             <Dialog.Title>重新生成草图？</Dialog.Title>
@@ -116,6 +153,8 @@ function ConceptSetActions({
                 className={styles.primaryButton}
                 disabled={blocked}
                 onClick={() => {
+                  if (!props.available || blocked) return;
+                  submitted.current = true;
                   props.onRegenerate?.(set.id);
                   setConfirm(false);
                 }}
@@ -133,132 +172,169 @@ function ConceptSetActions({
 
 export function InspirationConceptSection(props: Props) {
   const ordered = [...props.sets].sort((a, b) => b.version - a.version);
+  const resultsRef = useRef<HTMLElement>(null);
+  const newest = ordered[0]?.id ?? "";
+  const previousNewest = useRef(newest);
+  const pending = props.mode !== "public" && !!props.pending;
   const [selection, setSelection] = useState<{
     id: string;
     newest: string;
   } | null>(null);
-  if (!ordered.length) return null;
-  const newest = ordered[0]!.id;
+  useEffect(() => {
+    if (pending) return;
+    const results = resultsRef.current;
+    // A closed pending dialog leaves focus here (or on the previous tab).
+    // Transfer it only within this results region, without stealing outside focus.
+    if (
+      newest !== previousNewest.current &&
+      results?.contains(document.activeElement)
+    ) {
+      results
+        .querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+        ?.focus();
+    }
+    previousNewest.current = newest;
+  }, [newest, pending]);
   const selectedId =
     selection?.newest === newest &&
     ordered.some(({ id }) => id === selection.id)
       ? selection.id
       : newest;
   return (
-    <Tabs.Root
-      className={styles.conceptSection}
-      value={selectedId}
-      onValueChange={(id) => setSelection({ id, newest })}
+    <section
+      ref={resultsRef}
+      aria-label="成图结果"
+      tabIndex={-1}
+      data-concept-results=""
     >
-      <Tabs.List className={styles.conceptTabs} aria-label="成图方案" loop>
-        {ordered.map((set) => (
-          <Tabs.Trigger
-            key={set.id}
-            className={styles.conceptTab}
-            value={set.id}
-          >
-            方案 {String(set.version).padStart(2, "0")}
-          </Tabs.Trigger>
-        ))}
-      </Tabs.List>
-      {ordered.map((set) => (
-        <Tabs.Content
-          key={set.id}
-          value={set.id}
-          className={styles.conceptPanel}
+      {ordered.length > 0 && (
+        <Tabs.Root
+          className={styles.conceptSection}
+          value={selectedId}
+          onValueChange={(id) => setSelection({ id, newest })}
         >
-          {props.mode !== "public" && (
-            <div className={styles.conceptSetActions}>
-              <ConceptSetActions {...props} set={set as ConceptSetDto} />
-            </div>
-          )}
-          <div className={styles.conceptSlots}>
-            {(props.mode === "public"
-              ? (set as PublicConceptSetDto).outputs.map((asset) => ({
-                  kind: asset.kind,
-                  asset,
-                  task: null,
-                }))
-              : (set as ConceptSetDto).slots
-            ).map(({ kind, asset, task }) => {
-              const active =
-                task?.status === "queued" || task?.status === "generating";
-              const status =
-                active && asset
-                  ? "正在重新生成"
-                  : task?.status === "queued"
-                    ? "排队中"
-                    : task?.status === "generating"
-                      ? "生成中"
-                      : task?.status === "failed"
-                        ? asset
-                          ? "重新生成失败，已保留当前图片"
-                          : "生成失败"
-                        : asset
-                          ? ""
-                          : "等待草图完成";
-              const retryKind: "effect" | "flat" | null =
-                kind === "sketch" ? null : kind;
-              const privateSet =
-                props.mode !== "public" ? (set as ConceptSetDto) : null;
-              const hasSketch = !!privateSet?.slots[0].asset;
-              return (
-                <figure
-                  key={kind}
-                  className={styles.conceptFigure}
-                  aria-label={labels[kind as ConceptOutputKind]}
-                >
-                  <div
-                    className={styles.conceptMedia}
-                    data-concept-media=""
-                    style={{ aspectRatio: kind === "flat" ? "4 / 3" : "3 / 4" }}
-                  >
-                    {asset ? (
-                      <InspirationConceptOutputDialog
-                        asset={asset}
-                        mode={props.mode}
+          <Tabs.List className={styles.conceptTabs} aria-label="成图方案" loop>
+            {ordered.map((set) => (
+              <Tabs.Trigger
+                key={set.id}
+                className={styles.conceptTab}
+                value={set.id}
+                data-concept-set={set.id}
+              >
+                方案 {String(set.version).padStart(2, "0")}
+              </Tabs.Trigger>
+            ))}
+          </Tabs.List>
+          {ordered.map((set) => (
+            <Tabs.Content
+              key={set.id}
+              value={set.id}
+              className={styles.conceptPanel}
+            >
+              {props.mode !== "public" && (
+                <div className={styles.conceptSetActions}>
+                  <ConceptSetActions
+                    {...props}
+                    set={set as ConceptSetDto}
+                    resultsRef={resultsRef}
+                  />
+                </div>
+              )}
+              <div className={styles.conceptSlots}>
+                {(props.mode === "public"
+                  ? (set as PublicConceptSetDto).outputs.map((asset) => ({
+                      kind: asset.kind,
+                      asset,
+                      task: null,
+                    }))
+                  : (set as ConceptSetDto).slots
+                ).map(({ kind, asset, task }) => {
+                  const active =
+                    task?.status === "queued" || task?.status === "generating";
+                  const status =
+                    active && asset
+                      ? "正在重新生成"
+                      : task?.status === "queued"
+                        ? "排队中"
+                        : task?.status === "generating"
+                          ? "生成中"
+                          : task?.status === "failed"
+                            ? asset
+                              ? "重新生成失败，已保留当前图片"
+                              : "生成失败"
+                            : asset
+                              ? ""
+                              : "等待草图完成";
+                  const retryKind: "effect" | "flat" | null =
+                    kind === "sketch" ? null : kind;
+                  const privateSet =
+                    props.mode !== "public" ? (set as ConceptSetDto) : null;
+                  const hasSketch = !!privateSet?.slots[0].asset;
+                  return (
+                    <figure
+                      key={kind}
+                      className={styles.conceptFigure}
+                      aria-label={labels[kind as ConceptOutputKind]}
+                    >
+                      <div
+                        className={styles.conceptMedia}
+                        data-concept-media=""
+                        style={{
+                          aspectRatio: kind === "flat" ? "4 / 3" : "3 / 4",
+                        }}
                       >
-                        <EvidenceImage asset={asset} />
-                      </InspirationConceptOutputDialog>
-                    ) : (
-                      <span
-                        className={styles.conceptPlaceholder}
-                        role={active ? "status" : undefined}
-                      >
-                        {status}
-                      </span>
-                    )}
-                  </div>
-                  <figcaption className={styles.conceptCaption}>
-                    <div>
-                      <strong>{labels[kind]}</strong>
-                      {asset && <span>AI 生成</span>}
-                    </div>
-                    <div className={styles.conceptSlotStatus}>
-                      {asset && status && <span role="status">{status}</span>}
-                      {props.mode !== "public" &&
-                        props.available &&
-                        props.onRetry &&
-                        retryKind &&
-                        hasSketch && (
-                          <button
-                            className={styles.iconButton}
-                            aria-label={`${asset ? "重新生成" : "重试"}${labels[kind]}`}
-                            title={`${asset ? "重新生成" : "重试"}${labels[kind]}`}
-                            disabled={props.pending || active}
-                            onClick={() => props.onRetry?.(set.id, retryKind)}
+                        {asset ? (
+                          <InspirationConceptOutputDialog
+                            asset={asset}
+                            mode={props.mode}
                           >
-                            <RefreshCw aria-hidden="true" />
-                          </button>
+                            <EvidenceImage asset={asset} />
+                          </InspirationConceptOutputDialog>
+                        ) : (
+                          <span
+                            className={styles.conceptPlaceholder}
+                            role={active ? "status" : undefined}
+                          >
+                            {status}
+                          </span>
                         )}
-                    </div>
-                  </figcaption>
-                </figure>
-              );
-            })}
-          </div>
-        </Tabs.Content>
-      ))}
-    </Tabs.Root>
+                      </div>
+                      <figcaption className={styles.conceptCaption}>
+                        <div>
+                          <strong>{labels[kind]}</strong>
+                          {asset && <span>AI 生成</span>}
+                        </div>
+                        <div className={styles.conceptSlotStatus}>
+                          {asset && status && (
+                            <span role="status">{status}</span>
+                          )}
+                          {props.mode !== "public" &&
+                            props.available &&
+                            props.onRetry &&
+                            retryKind &&
+                            hasSketch && (
+                              <button
+                                className={styles.iconButton}
+                                aria-label={`${asset ? "重新生成" : "重试"}${labels[kind]}`}
+                                title={`${asset ? "重新生成" : "重试"}${labels[kind]}`}
+                                disabled={props.pending || active}
+                                onClick={() =>
+                                  props.onRetry?.(set.id, retryKind)
+                                }
+                              >
+                                <RefreshCw aria-hidden="true" />
+                              </button>
+                            )}
+                        </div>
+                      </figcaption>
+                    </figure>
+                  );
+                })}
+              </div>
+            </Tabs.Content>
+          ))}
+        </Tabs.Root>
+      )}
+    </section>
   );
 }
