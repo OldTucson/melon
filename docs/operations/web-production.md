@@ -353,7 +353,9 @@ OSS_ADAPTER=real
 6. 验证真实私有 OSS、owner/share 权限、撤销分享、下载 MIME/文件名、刷新/重开后显示、worker 在提交后重启能导入且不重复计费，以及账户账单的实际 workspace/region。保存脱敏验收记录。验收测试属于单独授权的真实 smoke 门禁，本运维安装不会自动调用 provider。
 7. 门禁全部通过后，将生产 `INSPIRATION_CONCEPT_RELEASE_APPROVED=true`，保留其余核对过的配置，再将 `INSPIRATION_CONCEPT_IMAGES_ENABLED=true`，执行 `prod:check` 并重启 web/worker；先保持私邀范围，观察队列、账单和内存再扩大开放。
 
-步骤 4–6 可使用隔离候选主机；若同机验证，必须保持公开 web 的 env 文件开关 false。worker 启动要求生成开关 true，可用 root 所有的 worker drop-in `Environment=INSPIRATION_CONCEPT_IMAGES_ENABLED=true` 和 `Environment=INSPIRATION_CONCEPT_RELEASE_APPROVED=true`，只对已批准的受控阶段启用。候选 web 使用独立环境文件与仅回环端口。不要为了启动 worker 提前打开公开 web；最终将配置统一后删除临时 drop-in。release approval 表示该受控运行已获准，不能替代真实验收结果。
+步骤 4–6 可使用隔离候选主机；若同机验证，公开 web 的 `/etc/melon/web.env` 中两个概念开关仍保持 false，worker 按下一节加载经批准的临时专用环境文件。候选 web 使用独立环境文件与仅回环端口。release approval 表示该受控运行已获准，不能替代真实验收结果。
+
+按 [systemd 环境文件规则](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#EnvironmentFile=)，`EnvironmentFile=` 的值覆盖 `Environment=`，多个环境文件中后读的值覆盖先读的值。因此不能用 inline `Environment=true` 覆盖共享文件的 false。基础 worker unit 保持只加载共享文件；仅在明确安装下面的 drop-in 后追加专用文件，不在基础 unit 中隐式加载可选覆盖文件。
 
 ```bash
 sudo install -o root -g root -m 0644 deploy/systemd/melon-inspiration-concept-worker.service /etc/systemd/system/
@@ -361,12 +363,62 @@ sudo install -o root -g root -m 0644 deploy/systemd/melon-inspiration-concept-cl
 sudo install -o root -g root -m 0644 deploy/systemd/melon-inspiration-concept-cleanup.timer /etc/systemd/system/
 sudo systemd-analyze verify /etc/systemd/system/melon-inspiration-concept-worker.service /etc/systemd/system/melon-inspiration-concept-cleanup.service /etc/systemd/system/melon-inspiration-concept-cleanup.timer
 sudo systemctl daemon-reload
-# 仅在迁移与受控运行配置批准后启动 worker。
-sudo systemctl enable --now melon-inspiration-concept-worker.service
+# worker 在下节验证完成后另行启动；此处不触发 provider 工作。
 sudo systemctl enable --now melon-inspiration-concept-cleanup.timer
 sudo systemctl status melon-inspiration-concept-worker.service melon-inspiration-concept-cleanup.timer
 sudo systemctl list-timers melon-inspiration-concept-cleanup.timer
 ```
+
+### Worker 临时开关、无请求验证与撤销
+
+仅在受控运行或恢复已批准、迁移完成、共享文件其余配置有效后执行。共享文件仍提供数据库、凭据、模型、workspace 和显式 worker ID；临时文件只覆盖两个概念开关，不复制密钥。确认 `INSPIRATION_ENABLED=true` 等 worker 启动前提已满足。不要把整个 `optional/` 目录批量安装到所有服务。
+
+以下命令从已审查的 release 根目录执行。先停止 worker；随后 `90-concept-worker-flags.conf` **追加** `/etc/melon/concept-worker-flags.env` 到原有 `/etc/melon/web.env` 之后，不清空 `EnvironmentFile=` 列表，不使用可选文件的 `-` 前缀。文件缺失时启动失败，避免悄悄回退到错误配置。环境文件为 root:root 0600，由 systemd 降权前读取。
+
+```bash
+sudo systemctl stop melon-inspiration-concept-worker.service
+sudo install -o root -g root -m 0600 deploy/systemd/optional/concept-worker-flags.env /etc/melon/concept-worker-flags.env
+sudo install -d -o root -g root -m 0755 /etc/systemd/system/melon-inspiration-concept-worker.service.d
+sudo install -o root -g root -m 0644 deploy/systemd/optional/90-concept-worker-flags.conf /etc/systemd/system/melon-inspiration-concept-worker.service.d/90-concept-worker-flags.conf
+sudo install -o root -g root -m 0644 deploy/systemd/optional/99-concept-worker-flags-check.conf /etc/systemd/system/melon-inspiration-concept-worker.service.d/99-concept-worker-flags-check.conf
+sudo stat -c '%U %G %a %n' /etc/melon/concept-worker-flags.env /etc/systemd/system/melon-inspiration-concept-worker.service.d/90-concept-worker-flags.conf /etc/systemd/system/melon-inspiration-concept-worker.service.d/99-concept-worker-flags-check.conf
+sudo systemd-analyze verify /etc/systemd/system/melon-inspiration-concept-worker.service
+sudo systemctl daemon-reload
+sudo systemctl show melon-inspiration-concept-worker.service -p EnvironmentFiles -p DropInPaths -p Type -p Restart -p ExecStart -p ExecStartPre -p ExecStartPost
+```
+
+必须核对 `EnvironmentFiles` 按共享文件、专用文件的顺序排列；drop-in 按文件名顺序合并，`90-` 追加环境文件，`99-` 只替换验证进程。若存在其他 drop-in 修改这些设置，先解决冲突。此时 Type 必须是 `oneshot`、Restart 是 `no`，唯一 ExecStart 必须是 `/usr/bin/node /opt/melon/current/scripts/check-inspiration-concept-worker-flags.mjs`，ExecStartPre/ExecStartPost 必须为空；否则不要 start。此脚本不加载 dotenv/应用模块、不连接数据库或 provider，直接读取 systemd 实际注入的环境，只输出两个布尔值。不要使用 `printenv`、`systemctl show -p Environment` 或打印 `/proc/.../environ` 来检查生产环境。
+
+```bash
+# 此时启动的是实际 worker unit 下的纯环境探针，不是生成 worker。
+sudo systemctl start melon-inspiration-concept-worker.service
+sudo systemctl show melon-inspiration-concept-worker.service -p Result -p ExecMainStatus
+sudo journalctl -u melon-inspiration-concept-worker.service --since '5 minutes ago' --grep '^{"conceptImagesEnabled":' --output=cat --no-pager
+```
+
+要求 start 退出 0、Result=success、ExecMainStatus=0，最新探针输出恰为 `{"conceptImagesEnabled":true,"releaseApproved":true}`。验证失败时保持 probe 和公开 web 禁用状态，排查文件顺序、权限与冲突，不能启动真实 worker。该目标 Linux 的有效环境检查和 `systemd-analyze verify` 都是门禁；本地配置契约测试不能替代它们。
+
+验证成功后，仅撤掉 `99-` 探针，reload 并检查恢复为 `Type=simple`、`Restart=on-failure` 和 `scripts/run-inspiration-concept-worker.ts`，再在受控运行批准范围内启动真实 worker：
+
+```bash
+sudo rm -- /etc/systemd/system/melon-inspiration-concept-worker.service.d/99-concept-worker-flags-check.conf
+sudo systemctl daemon-reload
+sudo systemctl show melon-inspiration-concept-worker.service -p EnvironmentFiles -p Type -p Restart -p ExecStart
+sudo systemctl enable --now melon-inspiration-concept-worker.service
+```
+
+受控阶段结束、最终共享配置已统一，或回滚恢复完成后，先停止 worker，再按下列顺序撤销覆盖。明确删除本次安装的两个 drop-in，不删除其他运维配置；先移除引用并 reload，再删除环境文件：
+
+```bash
+sudo systemctl stop melon-inspiration-concept-worker.service
+sudo rm -f -- /etc/systemd/system/melon-inspiration-concept-worker.service.d/99-concept-worker-flags-check.conf /etc/systemd/system/melon-inspiration-concept-worker.service.d/90-concept-worker-flags.conf
+sudo systemctl daemon-reload
+sudo rm -- /etc/melon/concept-worker-flags.env
+sudo systemd-analyze verify /etc/systemd/system/melon-inspiration-concept-worker.service
+sudo systemctl show melon-inspiration-concept-worker.service -p EnvironmentFiles -p DropInPaths -p Type -p Restart -p ExecStart
+```
+
+确认仅剩共享环境文件，探针/专用文件不再被引用。正常发布且共享开关已通过全部门禁设为 true 时才重新 start worker；回滚时共享生成开关为 false，保持 worker 停止。`daemon-reload` 不改变已经运行的进程环境，因此停止/重启步骤不可省略。
 
 ### 心跳、队列和失败诊断
 
@@ -417,4 +469,4 @@ sudo systemctl stop melon-inspiration-concept-worker.service
 sudo systemctl disable melon-inspiration-concept-worker.service
 ```
 
-需要重启 worker 以排空时，用仅作用于 worker 的已批准 drop-in 保持生成配置有效，公开 web 仍关闭；恢复完成后移除 drop-in、daemon-reload。必要时停止正在执行的 cleanup service（未完成事务回滚，下次可重试），然后切回上一 web release。保留 additive 表、任务记录、引用、已完成 OSS 产物以及已有分享/下载数据；事故期间绝不执行破坏性降级 SQL、全 bucket 清理或删除既有输出。回滚前版本若不显示新概念卡片，数据仍保留供修复后恢复展示。
+需要重启 worker 恢复导入时，保持公开 web 生成开关 false，完整执行上文「Worker 临时开关、无请求验证与撤销」中的专用文件创建（root:root 0600）、`90-` 追加文件与 `99-` 探针安装、Linux verify/reload/有效标志检查；通过后撤掉探针、reload，再启动已批准的真实 worker。worker 没有“仅导入”模式，也可能处理已有 queued 任务；若不批准这些任务继续提交，应登记状态并保持停止。恢复完成后执行该节的停止、移除 drop-in、daemon-reload、删除专用文件及检查命令，确认仅加载共享文件且保持 worker 停止。不要使用 inline `Environment=` 代替这套文件顺序。必要时停止正在执行的 cleanup service（未完成事务回滚，下次可重试），然后切回上一 web release。保留 additive 表、任务记录、引用、已完成 OSS 产物以及已有分享/下载数据；事故期间绝不执行破坏性降级 SQL、全 bucket 清理或删除既有输出。回滚前版本若不显示新概念卡片，数据仍保留供修复后恢复展示。
