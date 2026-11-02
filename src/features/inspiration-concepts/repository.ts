@@ -26,6 +26,12 @@ import {
 } from "@/lib/db/schema/inspiration-visuals";
 import { db, type DbTransaction } from "@/lib/db/client";
 import {
+  claimOperation,
+  createOperationKey,
+  storeOperationResult,
+} from "@/lib/db/operation";
+import { inspirationAnalyses } from "@/lib/db/schema/inspiration-analyses";
+import {
   inspirationConceptSets as sets,
   inspirationConceptReferences as references,
   inspirationConceptTasks as tasks,
@@ -33,10 +39,17 @@ import {
   inspirationConceptWorkerHeartbeats as heartbeats,
   type InspirationConceptSetRow,
   type InspirationConceptTaskRow,
+  type InspirationConceptOutputRow,
 } from "@/lib/db/schema/inspiration-concepts";
 
 export class ConceptRepositoryError extends Error {
-  constructor(public readonly code: ConceptErrorCode) {
+  constructor(
+    public readonly code:
+      | ConceptErrorCode
+      | "OPERATION_ID_REUSED"
+      | "INSPIRATION_NOT_FOUND"
+      | "INSPIRATION_BUSY",
+  ) {
     super(code);
     this.name = "ConceptRepositoryError";
   }
@@ -61,6 +74,42 @@ export interface CreateSetInput {
   referenceAssetIds: readonly string[];
   visualJobId: string | null;
   now: Date;
+  regeneratedFromSetId?: string;
+}
+export function conceptCreateOperationKey(
+  input: Omit<CreateSetInput, "briefSnapshot" | "now">,
+) {
+  return input.regeneratedFromSetId
+    ? conceptRegenerateOperationKey({
+        analysisId: input.analysisId,
+        setId: input.regeneratedFromSetId,
+      })
+    : createOperationKey("inspiration-concept.create", {
+        analysisId: input.analysisId,
+        directionIndex: input.directionIndex,
+        visualJobId: input.visualJobId,
+        referenceAssetIds: input.referenceAssetIds,
+      });
+}
+export function conceptRegenerateOperationKey(input: {
+  analysisId: string;
+  setId: string;
+}) {
+  return createOperationKey("inspiration-concept.regenerate", {
+    analysisId: input.analysisId,
+    setId: input.setId,
+  });
+}
+export function conceptRetryOperationKey(input: {
+  analysisId: string;
+  setId: string;
+  outputKind: Exclude<ConceptOutputKind, "sketch">;
+}) {
+  return createOperationKey("inspiration-concept.retry", {
+    analysisId: input.analysisId,
+    setId: input.setId,
+    outputKind: input.outputKind,
+  });
 }
 export interface ClaimInput {
   workerId: string;
@@ -142,10 +191,110 @@ export async function findSetByOperation(input: {
     .limit(1);
   return row;
 }
-async function replaySet(
+export interface ConceptSetDetails {
+  set: InspirationConceptSetRow;
+  tasks: InspirationConceptTaskRow[];
+  outputs: InspirationConceptOutputRow[];
+}
+/** A consistent read prevents worker publication from mixing old tasks/new assets. */
+export async function listSetDetailsForAnalysis(input: {
+  ownerId: string;
+  analysisId: string;
+  setId?: string;
+  includeDeleted?: boolean;
+}): Promise<ConceptSetDetails[]> {
+  return db.transaction(
+    async (tx) => {
+      const rows = await tx
+        .select()
+        .from(sets)
+        .where(
+          and(
+            eq(sets.ownerId, input.ownerId),
+            eq(sets.analysisId, input.analysisId),
+            input.setId ? eq(sets.id, input.setId) : undefined,
+            input.includeDeleted ? undefined : isNull(sets.deletedAt),
+          ),
+        )
+        .orderBy(asc(sets.directionIndex), desc(sets.version));
+      if (!rows.length) return [];
+      const ids = rows.map(({ id }) => id);
+      const taskRows = await tx
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.ownerId, input.ownerId), inArray(tasks.setId, ids)))
+        .orderBy(desc(tasks.attempt));
+      const outputRows = await tx
+        .select()
+        .from(outputs)
+        .where(
+          and(eq(outputs.ownerId, input.ownerId), inArray(outputs.setId, ids)),
+        );
+      return rows.map((set) => ({
+        set,
+        tasks: taskRows.filter(({ setId }) => setId === set.id),
+        outputs: outputRows.filter(({ setId }) => setId === set.id),
+      }));
+    },
+    { isolationLevel: "repeatable read", accessMode: "read only" },
+  );
+}
+export async function listReferenceIdentities(input: {
+  ownerId: string;
+  analysisId: string;
+  setId: string;
+}) {
+  return db
+    .select({
+      id: references.visualAssetId,
+      jobId: inspirationVisualAssets.jobId,
+    })
+    .from(references)
+    .innerJoin(
+      inspirationVisualAssets,
+      and(
+        eq(inspirationVisualAssets.id, references.visualAssetId),
+        eq(inspirationVisualAssets.ownerId, references.ownerId),
+        eq(inspirationVisualAssets.analysisId, references.analysisId),
+      ),
+    )
+    .where(
+      and(
+        eq(references.ownerId, input.ownerId),
+        eq(references.analysisId, input.analysisId),
+        eq(references.setId, input.setId),
+      ),
+    )
+    .orderBy(asc(references.ordinal));
+}
+async function requireCompletedAnalysis(
   tx: DbTransaction,
-  input: { ownerId: string; operationId: string },
+  input: { ownerId: string; analysisId: string },
 ) {
+  const [analysis] = await tx
+    .select({ status: inspirationAnalyses.status })
+    .from(inspirationAnalyses)
+    .where(
+      and(
+        eq(inspirationAnalyses.id, input.analysisId),
+        eq(inspirationAnalyses.ownerId, input.ownerId),
+      ),
+    )
+    .for("share");
+  if (!analysis) throw new ConceptRepositoryError("INSPIRATION_NOT_FOUND");
+  if (analysis.status !== "completed")
+    throw new ConceptRepositoryError("INSPIRATION_BUSY");
+}
+async function replaySet(tx: DbTransaction, input: CreateSetInput) {
+  const operation = await claimOperation(
+    input.ownerId,
+    tx,
+    input.operationId,
+    conceptCreateOperationKey(input),
+  );
+  if (operation.state === "mismatch")
+    throw new ConceptRepositoryError("OPERATION_ID_REUSED");
+  if (operation.state === "claimed") return;
   const [set] = await tx
     .select()
     .from(sets)
@@ -153,10 +302,13 @@ async function replaySet(
       and(
         eq(sets.ownerId, input.ownerId),
         eq(sets.operationId, input.operationId),
+        eq(sets.analysisId, input.analysisId),
+        eq(sets.id, String(operation.result.setId)),
+        isNull(sets.deletedAt),
       ),
     )
     .limit(1);
-  if (!set) return;
+  if (!set) throw new ConceptRepositoryError("INSPIRATION_NOT_FOUND");
   const [task] = await tx
     .select()
     .from(tasks)
@@ -218,8 +370,23 @@ export async function createSetAndSketchTask(
   try {
     return await db.transaction(async (tx) => {
       await lockConceptAnalysis(tx, input.analysisId);
+      await requireCompletedAnalysis(tx, input);
       const replay = await replaySet(tx, input);
       if (replay) return replay;
+      if (input.regeneratedFromSetId) {
+        const [source] = await tx
+          .select({ id: sets.id })
+          .from(sets)
+          .where(
+            and(
+              eq(sets.ownerId, input.ownerId),
+              eq(sets.analysisId, input.analysisId),
+              eq(sets.id, input.regeneratedFromSetId),
+              isNull(sets.deletedAt),
+            ),
+          );
+        if (!source) throw new ConceptRepositoryError("INSPIRATION_NOT_FOUND");
+      }
       await validateReferences(tx, input);
       const retained = await tx
         .select()
@@ -266,17 +433,15 @@ export async function createSetAndSketchTask(
         })
         .returning();
       if (input.referenceAssetIds.length)
-        await tx
-          .insert(references)
-          .values(
-            input.referenceAssetIds.map((visualAssetId, ordinal) => ({
-              ownerId: input.ownerId,
-              analysisId: input.analysisId,
-              setId: set!.id,
-              visualAssetId,
-              ordinal,
-            })),
-          );
+        await tx.insert(references).values(
+          input.referenceAssetIds.map((visualAssetId, ordinal) => ({
+            ownerId: input.ownerId,
+            analysisId: input.analysisId,
+            setId: set!.id,
+            visualAssetId,
+            ordinal,
+          })),
+        );
       const [task] = await tx
         .insert(tasks)
         .values({
@@ -292,6 +457,9 @@ export async function createSetAndSketchTask(
           updatedAt: input.now,
         })
         .returning();
+      await storeOperationResult(input.ownerId, tx, input.operationId, {
+        setId: set!.id,
+      });
       return { set: set!, task: task! };
     });
   } catch (error) {
@@ -318,6 +486,7 @@ export async function createSetAndSketchTask(
 
 export async function createDerivativeRetry(input: {
   ownerId: string;
+  analysisId?: string;
   setId: string;
   operationId: string;
   outputKind: Exclude<ConceptOutputKind, "sketch">;
@@ -331,9 +500,14 @@ export async function createDerivativeRetry(input: {
         .select({ analysisId: sets.analysisId })
         .from(sets)
         .where(and(eq(sets.id, input.setId), eq(sets.ownerId, input.ownerId)));
-      if (!identity)
-        throw new ConceptRepositoryError("INSPIRATION_CONCEPT_UNAVAILABLE");
+      if (!identity) throw new ConceptRepositoryError("INSPIRATION_NOT_FOUND");
+      if (input.analysisId && identity.analysisId !== input.analysisId)
+        throw new ConceptRepositoryError("INSPIRATION_NOT_FOUND");
       await lockConceptAnalysis(tx, identity.analysisId);
+      await requireCompletedAnalysis(tx, {
+        ownerId: input.ownerId,
+        analysisId: identity.analysisId,
+      });
       const [set] = await tx
         .select()
         .from(sets)
@@ -345,8 +519,15 @@ export async function createDerivativeRetry(input: {
           ),
         )
         .for("update");
-      if (!set)
-        throw new ConceptRepositoryError("INSPIRATION_CONCEPT_UNAVAILABLE");
+      if (!set) throw new ConceptRepositoryError("INSPIRATION_NOT_FOUND");
+      const operation = await claimOperation(
+        input.ownerId,
+        tx,
+        input.operationId,
+        conceptRetryOperationKey({ ...input, analysisId: set.analysisId }),
+      );
+      if (operation.state === "mismatch")
+        throw new ConceptRepositoryError("OPERATION_ID_REUSED");
       const [replay] = await tx
         .select()
         .from(tasks)
@@ -361,9 +542,11 @@ export async function createDerivativeRetry(input: {
           replay.setId !== input.setId ||
           replay.outputKind !== input.outputKind
         )
-          throw busy();
+          throw new ConceptRepositoryError("OPERATION_ID_REUSED");
         return replay;
       }
+      if (operation.state === "replay")
+        throw new ConceptRepositoryError("INSPIRATION_NOT_FOUND");
       const [sketch] = await tx
         .select({ id: outputs.id })
         .from(outputs)
@@ -400,12 +583,65 @@ export async function createDerivativeRetry(input: {
         })
         .returning();
       await deriveSet(tx, set.id, input.now);
+      await storeOperationResult(input.ownerId, tx, input.operationId, {
+        taskId: task!.id,
+        setId: set.id,
+      });
       return task!;
     });
   } catch (error) {
     if (uniqueConstraint(error)) throw busy();
     throw error;
   }
+}
+
+/** Tombstone first; submitted/claimed work and all external cleanup belong to workers. */
+export async function softDeleteSet(input: {
+  ownerId: string;
+  analysisId: string;
+  setId: string;
+  now: Date;
+}) {
+  return db.transaction(async (tx) => {
+    await lockConceptAnalysis(tx, input.analysisId);
+    const [set] = await tx
+      .select()
+      .from(sets)
+      .where(
+        and(
+          eq(sets.ownerId, input.ownerId),
+          eq(sets.analysisId, input.analysisId),
+          eq(sets.id, input.setId),
+        ),
+      )
+      .for("update");
+    if (!set) throw new ConceptRepositoryError("INSPIRATION_NOT_FOUND");
+    if (set.deletedAt) return set;
+    const [deleted] = await tx
+      .update(sets)
+      .set({ status: "deleting", deletedAt: input.now, updatedAt: input.now })
+      .where(eq(sets.id, set.id))
+      .returning();
+    await tx
+      .update(tasks)
+      .set({
+        status: "failed",
+        errorCode: "INSPIRATION_CONCEPT_UNAVAILABLE",
+        completedAt: input.now,
+        updatedAt: input.now,
+        ...clearLease,
+      })
+      .where(
+        and(
+          eq(tasks.setId, set.id),
+          eq(tasks.ownerId, input.ownerId),
+          eq(tasks.status, "queued"),
+          isNull(tasks.leaseOwner),
+          isNull(tasks.leaseUntil),
+        ),
+      );
+    return deleted!;
+  });
 }
 
 export async function claimNextTask(input: ClaimInput) {

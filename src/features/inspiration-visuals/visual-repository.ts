@@ -11,6 +11,7 @@ import {
   lt,
   ne,
   notInArray,
+  notExists,
   or,
 } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
@@ -18,6 +19,7 @@ import { alias } from "drizzle-orm/pg-core";
 import { getActiveVisualSearchIndexVersion } from "@/features/image-search/index-service";
 import { loadPatternPaletteStates } from "@/features/patterns/pattern-palette-repository";
 import { db } from "@/lib/db/client";
+import { inspirationConceptReferences } from "@/lib/db/schema/inspiration-concepts";
 import {
   assets as storageAssets,
   inspirationAnalyses,
@@ -449,16 +451,43 @@ export async function listObjectKeysForJob(ownerId: string, jobId: string) {
   return rows.map(({ objectKey }) => objectKey!);
 }
 
-/** Only committed research objects can be superseded by a research refresh. */
-export async function listObjectKeysForAnalysis(ownerId: string, analysisId: string) {
-  const rows = await db.select({ objectKey: visualAssets.objectKey }).from(visualAssets)
-    .innerJoin(visualJobs, and(
-      eq(visualJobs.id, visualAssets.jobId),
-      eq(visualJobs.ownerId, visualAssets.ownerId),
-      eq(visualJobs.analysisId, visualAssets.analysisId),
-      eq(visualJobs.kind, "research_visuals"),
-      eq(visualJobs.status, "completed"),
-    ))
-    .where(and(eq(visualAssets.ownerId, ownerId), eq(visualAssets.analysisId, analysisId), eq(visualAssets.kind, "web_evidence"), isNotNull(visualAssets.objectKey)));
+/** References remain pinned through tombstoning until the cleanup worker removes the set. */
+export async function listObjectKeysForAnalysis(
+  ownerId: string,
+  analysisId: string,
+) {
+  const rows = await db
+    .select({ objectKey: visualAssets.objectKey })
+    .from(visualAssets)
+    .innerJoin(
+      visualJobs,
+      and(
+        eq(visualJobs.id, visualAssets.jobId),
+        eq(visualJobs.ownerId, visualAssets.ownerId),
+        eq(visualJobs.analysisId, visualAssets.analysisId),
+        eq(visualJobs.kind, "research_visuals"),
+        eq(visualJobs.status, "completed"),
+      ),
+    )
+    .where(
+      and(
+        eq(visualAssets.ownerId, ownerId),
+        eq(visualAssets.analysisId, analysisId),
+        eq(visualAssets.kind, "web_evidence"),
+        isNotNull(visualAssets.objectKey),
+        notExists(
+          db
+            .select({ id: inspirationConceptReferences.visualAssetId })
+            .from(inspirationConceptReferences)
+            .where(
+              and(
+                eq(inspirationConceptReferences.ownerId, ownerId),
+                eq(inspirationConceptReferences.analysisId, analysisId),
+                eq(inspirationConceptReferences.visualAssetId, visualAssets.id),
+              ),
+            ),
+        ),
+      ),
+    );
   return rows.map(({ objectKey }) => objectKey!);
 }
