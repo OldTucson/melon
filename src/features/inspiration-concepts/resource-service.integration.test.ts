@@ -1,6 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import * as apiSession from "@/features/auth/api-session";
 import {
   inspirationResultFixture,
   inspirationSourceFixture,
@@ -15,6 +24,8 @@ import {
 import { resetDatabase } from "@/test/database";
 import { conceptBriefFixture } from "./test-fixtures";
 import { conceptOutputObjectKey } from "./object-keys";
+import * as objectStore from "./object-store";
+import * as repository from "./repository";
 import {
   authorizeOwnedConceptResource,
   conceptResourceResponse,
@@ -132,6 +143,94 @@ describe("private owned concept resources", () => {
       });
   });
   afterAll(closeDatabase);
+  afterEach(() => vi.restoreAllMocks());
+
+  async function download() {
+    vi.spyOn(apiSession, "requireApiUser").mockResolvedValue({
+      id: ownerId,
+      email: "designer@example.test",
+      displayName: "Designer",
+      role: "user",
+      mustChangePassword: false,
+      themePreference: "system",
+      sessionVersion: 1,
+    });
+    vi.spyOn(objectStore, "createConceptObjectStore").mockReturnValue({
+      get,
+      put: async () => {},
+      delete: async () => {},
+      listObjectKeys: async () => [],
+    });
+    const { GET } = await import(
+      "@/app/api/inspiration-concept-assets/[assetId]/download/route"
+    );
+    return GET(
+      new Request(
+        `http://internal/api/inspiration-concept-assets/${assetId}/download`,
+      ),
+      {
+        params: Promise.resolve({ assetId }),
+      },
+    );
+  }
+
+  it("downloads a boundary supplementary character without splitting its surrogate pair", async () => {
+    const brief = structuredClone(conceptBriefFixture);
+    brief.direction.title = `${"a".repeat(79)}😀after-boundary`;
+    await db
+      .update(sets)
+      .set({ briefSnapshot: brief })
+      .where(eq(sets.id, setId));
+
+    const response = await download();
+
+    expect(response.status).toBe(200);
+    const disposition = response.headers.get("content-disposition");
+    expect(disposition).toMatch(
+      /^attachment; filename="concept.png"; filename\*=UTF-8''/,
+    );
+    expect(decodeURIComponent(disposition!.split("UTF-8''")[1]!)).toBe(
+      `${"a".repeat(79)}😀-方案01-设计草图.png`,
+    );
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("content-security-policy")).toBe("sandbox");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("location")).toBeNull();
+  });
+
+  it.each(["\uD800", "\uDC00"])(
+    "sanitizes isolated surrogate metadata before encoding a download attachment",
+    async (surrogate) => {
+      // PostgreSQL JSON rejects isolated surrogates. Inject only the corrupt title at
+      // the repository result boundary, preserving the real complete owned row.
+      const stored = await repository.findOwnedConceptResource({
+        ownerId,
+        assetId,
+      });
+      vi.spyOn(repository, "findOwnedConceptResource").mockResolvedValue({
+        ...stored!,
+        directionTitle: `柔和${surrogate}通勤`,
+      });
+
+      const response = await download();
+
+      expect(response.status).toBe(200);
+      const disposition = response.headers.get("content-disposition")!;
+      expect(disposition).toMatch(
+        /^attachment; filename="concept.png"; filename\*=UTF-8''/,
+      );
+      const filename = decodeURIComponent(disposition.split("UTF-8''")[1]!);
+      expect(filename).toBe("柔和�通勤-方案01-设计草图.png");
+      expect(disposition).not.toContain(objectKey);
+      expect(disposition).not.toContain(ownerId);
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(response.headers.get("content-security-policy")).toBe("sandbox");
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(response.headers.get("location")).toBeNull();
+    },
+  );
   it("reads owned bytes only through the owned live set and returns no private identifiers", async () => {
     const resource = await owned(assetId.toUpperCase());
     expect(resource).toMatchObject({ bytes, contentType: "image/png" });

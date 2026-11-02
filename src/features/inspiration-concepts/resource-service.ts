@@ -85,11 +85,16 @@ export async function authorizeOwnedConceptResource(
       effect: "服装效果图",
       flat: "服装款式图",
     }[asset.outputKind];
+    // Keep the bounded filename well formed for RFC 5987 percent encoding.
     const title =
-      resource.directionTitle
-        .replace(/[\u0000-\u001f\u007f/\\:*?"<>|]/g, "")
-        .trim()
-        .slice(0, 80) || "设计方向";
+      Array.from(
+        resource.directionTitle
+          .toWellFormed()
+          .replace(/[\u0000-\u001f\u007f/\\:*?"<>|]/g, "")
+          .trim(),
+      )
+        .slice(0, 80)
+        .join("") || "设计方向";
     return {
       bytes: Uint8Array.from(object.bytes),
       contentType: asset.contentType,

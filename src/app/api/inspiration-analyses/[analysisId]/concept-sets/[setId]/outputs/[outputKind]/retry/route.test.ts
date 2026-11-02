@@ -148,7 +148,7 @@ describe("retryConceptDerivative route", () => {
     "null",
     JSON.stringify({ operationId, ownerId }),
     JSON.stringify({ operationId, prompt: "private" }),
-    JSON.stringify({ operationId, operationId: "bad" }),
+    JSON.stringify({ operationId: "bad" }),
     " ".repeat(16385),
   ])("rejects malformed, extra, or oversized input", async (body) => {
     const { POST } = await import("./route");
