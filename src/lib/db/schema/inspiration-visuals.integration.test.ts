@@ -586,4 +586,38 @@ describe("inspiration visual schema", () => {
         .where(eq(inspirationAnalyses.id, analysisA)),
     ).toEqual(before);
   });
+  it("applies the concept migration over legacy visual rows without rewriting them", async () => {
+    const [job] = await insertJob({ kind: "concept_image", directionIndex: 0, status: "completed", completedAt: new Date() });
+    await db.insert(inspirationVisualAssets).values({
+      id: randomUUID(), ownerId: ownerA, analysisId: analysisA, jobId: job!.id,
+      kind: "generated_concept", ordinal: 0, directionIndex: 0,
+      title: "Legacy concept", altText: "Original image", objectKey: "legacy-concept.webp",
+      contentType: "image/webp", width: 1200, height: 900,
+    });
+    const beforeJobs = await db.select().from(inspirationVisualJobs);
+    const beforeAssets = await db.select().from(inspirationVisualAssets);
+    const migration = await readFile("drizzle/0012_melon_inspiration_concept_sets.sql", "utf8");
+    const scope = `concept_migration_${randomUUID().replaceAll("-", "")}`;
+    await db.transaction(async tx => {
+      await tx.execute(sql.raw(`CREATE SCHEMA "${scope}"`));
+      await tx.execute(sql.raw(`SET LOCAL search_path TO "${scope}", public`));
+      // Copy legacy columns/checks, but not the new keys or any dependent concept tables.
+      for (const name of ["users", "inspiration_analyses", "inspiration_visual_jobs", "inspiration_visual_assets"]) {
+        await tx.execute(sql.raw(`CREATE TABLE "${scope}"."${name}" (LIKE "public"."${name}" INCLUDING DEFAULTS INCLUDING CONSTRAINTS)`));
+        await tx.execute(sql.raw(`ALTER TABLE "${scope}"."${name}" ADD PRIMARY KEY (id)`));
+        await tx.execute(sql.raw(`INSERT INTO "${scope}"."${name}" SELECT * FROM "public"."${name}"`));
+      }
+      for (const statement of migration.replaceAll('"public".', `"${scope}".`).split("--> statement-breakpoint")) {
+        if (statement.trim()) await tx.execute(sql.raw(statement));
+      }
+      const [legacy] = await tx.execute(sql`select kind, object_key, width, height from inspiration_visual_assets`);
+      expect(legacy).toMatchObject({ kind: "generated_concept", object_key: "legacy-concept.webp", width: 1200, height: 900 });
+      expect(await tx.execute(sql`select * from inspiration_concept_sets`)).toHaveLength(0);
+      expect(await tx.execute(sql`select * from inspiration_visual_jobs where kind = 'concept_image'`)).toHaveLength(1);
+      await tx.execute(sql.raw(`DROP SCHEMA "${scope}" CASCADE`));
+    });
+    expect(await db.select().from(inspirationVisualJobs)).toEqual(beforeJobs);
+    expect(await db.select().from(inspirationVisualAssets)).toEqual(beforeAssets);
+  });
+
 });

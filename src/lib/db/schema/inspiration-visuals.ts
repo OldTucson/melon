@@ -187,6 +187,9 @@ export const inspirationVisualAssets = pgTable(
       .defaultNow(),
   },
   (table) => [
+    unique("inspiration_visual_assets_owner_analysis_id_unique").on(
+      table.ownerId, table.analysisId, table.id,
+    ),
     foreignKey({
       columns: [table.ownerId, table.analysisId, table.jobId],
       foreignColumns: [

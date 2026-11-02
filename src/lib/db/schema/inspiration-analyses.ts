@@ -58,6 +58,7 @@ export const inspirationAnalyses = pgTable(
       .defaultNow(),
   },
   (table) => [
+    unique("inspiration_analyses_owner_id_unique").on(table.ownerId, table.id),
     unique("inspiration_analyses_owner_operation_unique").on(
       table.ownerId,
       table.operationId,
