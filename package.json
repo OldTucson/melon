@@ -15,6 +15,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "inspiration:configure": "node --import tsx scripts/import-inspiration-config.ts",
+    "inspiration:concept-worker": "node --conditions=react-server --import tsx scripts/run-inspiration-concept-worker.ts",
     "test:inspiration:real": "RUN_REAL_INSPIRATION_TESTS=1 vitest run src/features/inspiration/qwen-provider.real.test.ts",
     "test:inspiration:web-real": "RUN_REAL_INSPIRATION_WEB_TESTS=1 vitest run src/features/inspiration-visuals/web-agent-provider.real.test.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",

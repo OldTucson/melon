@@ -901,6 +901,7 @@ export async function claimDeletingSet(
         and(
           eq(sets.status, "deleting"),
           or(isNull(sets.deletionLeaseUntil), lt(sets.deletionLeaseUntil, now)),
+          sql`not exists (select 1 from ${tasks} where ${tasks.setId} = ${sets.id} and ${tasks.leaseUntil} > ${now.toISOString()}::timestamptz)`,
         ),
       )
       .orderBy(asc(sets.deletedAt), asc(sets.id))
@@ -937,4 +938,117 @@ export async function recordWorkerHeartbeat(input: {
     })
     .returning();
   return row!;
+}
+
+/** Recover a bounded batch without ever reissuing an uncertain paid submission. */
+export async function failExpiredSubmittingTasks(now: Date) {
+  const candidates = await db
+    .select({ id: tasks.id, setId: tasks.setId })
+    .from(tasks)
+    .where(
+      and(
+        eq(tasks.status, "submitting"),
+        isNull(tasks.providerTaskId),
+        or(isNull(tasks.leaseUntil), lte(tasks.leaseUntil, now)),
+      ),
+    )
+    .orderBy(asc(tasks.updatedAt), asc(tasks.id))
+    .limit(25);
+  let recovered = 0;
+  for (const candidate of candidates) {
+    recovered += await db.transaction(async (tx) => {
+      const [set] = await tx
+        .select()
+        .from(sets)
+        .where(eq(sets.id, candidate.setId))
+        .for("update", { skipLocked: true });
+      if (!set) return 0;
+      const changed = await tx
+        .update(tasks)
+        .set({
+          status: "failed",
+          errorCode: "INSPIRATION_CONCEPT_SUBMISSION_UNCERTAIN",
+          completedAt: now,
+          updatedAt: now,
+          ...clearLease,
+        })
+        .where(
+          and(
+            eq(tasks.id, candidate.id),
+            eq(tasks.status, "submitting"),
+            isNull(tasks.providerTaskId),
+            or(isNull(tasks.leaseUntil), lte(tasks.leaseUntil, now)),
+          ),
+        )
+        .returning({ id: tasks.id });
+      if (changed.length && !set.deletedAt) await deriveSet(tx, set.id, now);
+      return changed.length;
+    });
+  }
+  return recovered;
+}
+
+/** Resolve private inputs only through an unexpired, owned task and its frozen references. */
+export async function loadWorkerTaskContext(input: TaskLeaseInput) {
+  return withLeasedTask(input, async (tx, task, set) => {
+    const selected = await tx
+      .select({ asset: inspirationVisualAssets, ordinal: references.ordinal })
+      .from(references)
+      .innerJoin(
+        inspirationVisualAssets,
+        and(
+          eq(inspirationVisualAssets.id, references.visualAssetId),
+          eq(inspirationVisualAssets.ownerId, references.ownerId),
+          eq(inspirationVisualAssets.analysisId, references.analysisId),
+        ),
+      )
+      .where(
+        and(
+          eq(references.setId, set.id),
+          eq(references.ownerId, task.ownerId),
+          eq(references.analysisId, set.analysisId),
+        ),
+      )
+      .orderBy(asc(references.ordinal));
+    const [sketch] = await tx
+      .select()
+      .from(outputs)
+      .where(
+        and(
+          eq(outputs.setId, set.id),
+          eq(outputs.ownerId, task.ownerId),
+          eq(outputs.analysisId, set.analysisId),
+          eq(outputs.outputKind, "sketch"),
+        ),
+      );
+    return { set, references: selected.map(({ asset }) => asset), sketch };
+  });
+}
+
+/** Called only after prefix deletion succeeds; preserve tombstone on any lost lease. */
+export async function finishDeletingSet(input: ClaimInput & { setId: string }) {
+  return db.transaction(async (tx) => {
+    const [set] = await tx
+      .select()
+      .from(sets)
+      .where(
+        and(
+          eq(sets.id, input.setId),
+          eq(sets.status, "deleting"),
+          eq(sets.deletionLeaseOwner, input.workerId),
+          eq(sets.deletionLeaseUntil, input.leaseUntil),
+          gt(sets.deletionLeaseUntil, input.now),
+        ),
+      )
+      .for("update");
+    if (!set) return false;
+    const [live] = await tx
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(and(eq(tasks.setId, set.id), gt(tasks.leaseUntil, input.now)))
+      .limit(1);
+    if (live) return false;
+    await tx.delete(sets).where(eq(sets.id, set.id));
+    return true;
+  });
 }

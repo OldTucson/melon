@@ -1,0 +1,31 @@
+[Unit]
+Description=Melon inspiration concept image worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=melon
+Group=melon
+EnvironmentFile=/etc/melon/web.env
+Environment=NODE_ENV=production
+WorkingDirectory=/opt/melon/current
+ExecStart=/usr/bin/node --conditions=react-server --import tsx scripts/run-inspiration-concept-worker.ts
+Restart=on-failure
+RestartSec=5s
+# Allow non-abortable private OSS requests and compensation to drain.
+TimeoutStopSec=300s
+MemoryMax=768M
+TasksMax=128
+UMask=0077
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
