@@ -26,6 +26,19 @@ const withEnv = (patch: Partial<ServerEnv>): ServerEnv => ({
 });
 
 describe("validateProductionReadiness", () => {
+  it("requires explicit concept release approval", () => {
+    expect(validateProductionReadiness(withEnv({ INSPIRATION_CONCEPT_IMAGES_ENABLED: true, INSPIRATION_CONCEPT_RELEASE_APPROVED: false }))).toContain("INSPIRATION_CONCEPT_RELEASE_NOT_APPROVED");
+  });
+
+  it("accepts approved concepts and does not gate disabled concepts", () => {
+    expect(validateProductionReadiness(withEnv({ INSPIRATION_CONCEPT_IMAGES_ENABLED: true, INSPIRATION_CONCEPT_RELEASE_APPROVED: true }))).toEqual([]);
+    expect(validateProductionReadiness(withEnv({ INSPIRATION_CONCEPT_IMAGES_ENABLED: false, INSPIRATION_CONCEPT_RELEASE_APPROVED: false }))).toEqual([]);
+  });
+
+  it("requires real OSS for concept production", () => {
+    expect(validateProductionReadiness(withEnv({ INSPIRATION_CONCEPT_IMAGES_ENABLED: true, INSPIRATION_CONCEPT_RELEASE_APPROVED: true, OSS_ADAPTER: "fake" }))).toContain("REAL_OSS_REQUIRED");
+  });
+
   it("accepts released web visuals with exactly eight images independently of library search", () => {
     expect(validateProductionReadiness(withEnv({
       INSPIRATION_WEB_VISUALS_ENABLED: true,

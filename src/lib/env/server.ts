@@ -115,6 +115,14 @@ const serverEnvSchema = z
     ALIBABA_CLOUD_ACCESS_KEY_ID: optionalNonBlankString,
     ALIBABA_CLOUD_ACCESS_KEY_SECRET: optionalNonBlankString,
     INSPIRATION_ENABLED: optionalBoolean,
+    INSPIRATION_CONCEPT_IMAGES_ENABLED: optionalBoolean,
+    INSPIRATION_CONCEPT_RELEASE_APPROVED: optionalBoolean,
+    INSPIRATION_IMAGE_MODEL: z.enum(["qwen-image-3.0-pro"]).default("qwen-image-3.0-pro"),
+    INSPIRATION_CONCEPT_WORKER_ID: z.preprocess(
+      blankToUndefined,
+      z.string().trim().regex(/^[A-Za-z0-9._-]{1,64}$/).default("concept-worker-1"),
+    ),
+
     INSPIRATION_WEB_VISUALS_ENABLED: optionalBoolean,
     DASHSCOPE_WEB_SEARCH_AGENT_ID: optionalTrimmedNonBlankString,
     DASHSCOPE_WEB_SEARCH_AGENT_VERSION: z.preprocess(
@@ -219,6 +227,30 @@ const serverEnvSchema = z
           code: "custom",
           path: ["DASHSCOPE_NATIVE_BASE_URL"],
           message: "OpenAI and native provider URL hostnames must match",
+        });
+      }
+    }
+
+    if (value.INSPIRATION_CONCEPT_IMAGES_ENABLED) {
+      if (!value.INSPIRATION_ENABLED) {
+        context.addIssue({
+          code: "custom",
+          path: ["INSPIRATION_ENABLED"],
+          message: "INSPIRATION_ENABLED must be true when concept images are enabled",
+        });
+      }
+      if (value.OSS_ADAPTER !== "real") {
+        context.addIssue({
+          code: "custom",
+          path: ["OSS_ADAPTER"],
+          message: "Real OSS is required when concept images are enabled",
+        });
+      }
+      if (value.NODE_ENV === "production" && !value.INSPIRATION_CONCEPT_RELEASE_APPROVED) {
+        context.addIssue({
+          code: "custom",
+          path: ["INSPIRATION_CONCEPT_RELEASE_APPROVED"],
+          message: "Concept images release approval is required in production",
         });
       }
     }

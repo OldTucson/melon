@@ -34,6 +34,52 @@ const enabledInspirationEnv = {
 };
 
 describe("parseServerEnv", () => {
+  const enabledConceptEnv = { ...enabledInspirationEnv, INSPIRATION_CONCEPT_IMAGES_ENABLED: "true" };
+
+  it("defaults concepts off and accepts blank disabled provider configuration", () => {
+    expect(parseServerEnv({ ...validEnv, DASHSCOPE_API_KEY: "", DASHSCOPE_WORKSPACE_ID: " ", DASHSCOPE_NATIVE_BASE_URL: "", DASHSCOPE_OPENAI_BASE_URL: "", INSPIRATION_CONCEPT_WORKER_ID: " " })).toMatchObject({
+      INSPIRATION_CONCEPT_IMAGES_ENABLED: false,
+      INSPIRATION_CONCEPT_RELEASE_APPROVED: false,
+      INSPIRATION_IMAGE_MODEL: "qwen-image-3.0-pro",
+      INSPIRATION_CONCEPT_WORKER_ID: "concept-worker-1",
+    });
+  });
+
+  it("accepts configured concepts with a trimmed worker ID", () => {
+    expect(parseServerEnv({ ...validEnv, ...enabledConceptEnv, INSPIRATION_CONCEPT_WORKER_ID: " worker.A_1-2 " })).toMatchObject({
+      INSPIRATION_CONCEPT_IMAGES_ENABLED: true, INSPIRATION_CONCEPT_WORKER_ID: "worker.A_1-2",
+    });
+  });
+
+  it("requires inspiration and real OSS for concepts", () => {
+    expect(() => parseServerEnv({ ...validEnv, ...enabledConceptEnv, INSPIRATION_ENABLED: "false" })).toThrow(/INSPIRATION_ENABLED/);
+    expect(() => parseServerEnv({ ...validEnv, ...enabledConceptEnv, OSS_ADAPTER: "fake" })).toThrow(/OSS_ADAPTER/);
+  });
+
+  it.each(["DASHSCOPE_API_KEY", "DASHSCOPE_WORKSPACE_ID", "DASHSCOPE_NATIVE_BASE_URL"])("requires concept provider field %s", (field) => {
+    for (const missing of [undefined, "", " "]) {
+      expect(() => parseServerEnv({ ...validEnv, ...enabledConceptEnv, [field]: missing })).toThrow(new RegExp(field));
+    }
+  });
+
+  it.each(["qwen-image-plus", "qwen-image-3.0", ""])("rejects unsupported image model %j even while disabled", (model) => {
+    expect(() => parseServerEnv({ ...validEnv, INSPIRATION_IMAGE_MODEL: model })).toThrow(/INSPIRATION_IMAGE_MODEL/);
+  });
+
+  it.each(["worker id", "worker/id", "x".repeat(65), "工人"])("rejects invalid concept worker ID %j", (workerId) => {
+    expect(() => parseServerEnv({ ...validEnv, INSPIRATION_CONCEPT_WORKER_ID: workerId })).toThrow(/INSPIRATION_CONCEPT_WORKER_ID/);
+  });
+
+  it("requires production concept release approval only when enabled", () => {
+    expect(() => parseServerEnv({ ...validEnv, ...enabledConceptEnv, NODE_ENV: "production" })).toThrow(/release approval/i);
+    expect(parseServerEnv({ ...validEnv, ...enabledConceptEnv, NODE_ENV: "production", INSPIRATION_CONCEPT_RELEASE_APPROVED: "true" }).INSPIRATION_CONCEPT_RELEASE_APPROVED).toBe(true);
+    expect(parseServerEnv({ ...validEnv, NODE_ENV: "production" }).INSPIRATION_CONCEPT_IMAGES_ENABLED).toBe(false);
+  });
+
+  it.each(["INSPIRATION_CONCEPT_IMAGES_ENABLED", "INSPIRATION_CONCEPT_RELEASE_APPROVED"])("requires a literal boolean for %s", (field) => {
+    expect(() => parseServerEnv({ ...validEnv, [field]: "1" })).toThrow(new RegExp(field));
+  });
+
   const enabledWebVisualsEnv = {
     ...enabledInspirationEnv,
     INSPIRATION_WEB_VISUALS_ENABLED: "true",
