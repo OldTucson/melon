@@ -374,7 +374,12 @@ describe("durable concept worker", () => {
       now = new Date(now.getTime() + 2);
       return original(input);
     };
-    await step();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await step();
+    } finally {
+      vi.useRealTimers();
+    }
     expect((await rows())[0]).toMatchObject({
       status: "failed",
       errorCode: "INSPIRATION_CONCEPT_TIMEOUT",
@@ -400,6 +405,99 @@ describe("durable concept worker", () => {
       errorCode: "INSPIRATION_CONCEPT_TIMEOUT",
     });
   });
+  it("compensates an import crossing the lifetime deadline before publication under a live lease", async () => {
+    await create();
+    await step();
+    now = new Date(now.getTime() + 30 * 60_000 - 1000);
+    afterPut = async () => {
+      now = new Date(now.getTime() + 2000);
+      expect((await rows())[0]!.leaseUntil!.getTime()).toBeGreaterThan(
+        now.getTime(),
+      );
+    };
+    // Freeze timer delivery so this case proves the clock check independently of cancellation.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await step();
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(writes).toHaveLength(1);
+    expect(objects.has(writes[0]!)).toBe(false);
+    expect(await rows()).toMatchObject([
+      {
+        outputKind: "sketch",
+        status: "failed",
+        errorCode: "INSPIRATION_CONCEPT_TIMEOUT",
+        completedAt: now,
+        leaseOwner: null,
+        leaseUntil: null,
+      },
+    ]);
+    expect(await db.select().from(sets)).toMatchObject([
+      { status: "failed", completedAt: now },
+    ]);
+    expect(await db.select().from(outputs)).toHaveLength(0);
+    expect(await rows()).toHaveLength(1);
+    expect(submissions).toHaveLength(1);
+    expect(queries).toHaveLength(1);
+    expect(await step()).toEqual({ state: "idle" });
+    expect(submissions).toHaveLength(1);
+    expect(queries).toHaveLength(1);
+  });
+  it.each(["query", "put"] as const)(
+    "clamps external cancellation to remaining lifetime during %s",
+    async (boundary) => {
+      await create();
+      await step();
+      now = new Date(now.getTime() + 30 * 60_000 - 1000);
+      let operationSignal: AbortSignal | undefined;
+      const cancellation: boolean[] = [];
+      const reachDeadline = async () => {
+        now = new Date(now.getTime() + 999);
+        await vi.advanceTimersByTimeAsync(999);
+        cancellation.push(operationSignal!.aborted);
+        now = new Date(now.getTime() + 1);
+        await vi.advanceTimersByTimeAsync(1);
+        cancellation.push(operationSignal!.aborted);
+      };
+      const original = provider.queryTask;
+      provider.queryTask = async (input) => {
+        operationSignal = input.signal;
+        const result = await original(input);
+        if (boundary === "query") {
+          await reachDeadline();
+          input.signal.throwIfAborted();
+        }
+        return result;
+      };
+      if (boundary === "put") afterPut = reachDeadline;
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        await step();
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(cancellation).toEqual([false, true]);
+      expect(await rows()).toMatchObject([
+        {
+          outputKind: "sketch",
+          status: "failed",
+          errorCode: "INSPIRATION_CONCEPT_TIMEOUT",
+          completedAt: now,
+        },
+      ]);
+      expect(await rows()).toHaveLength(1);
+      expect(await db.select().from(sets)).toMatchObject([
+        { status: "failed", completedAt: now },
+      ]);
+      expect(await db.select().from(outputs)).toHaveLength(0);
+      expect(objects.size).toBe(0);
+      expect(writes).toHaveLength(boundary === "put" ? 1 : 0);
+      expect(submissions).toHaveLength(1);
+      expect(queries).toHaveLength(1);
+    },
+  );
   it("rejects invalid imported image dimensions without scheduling derivatives", async () => {
     await create();
     await step();

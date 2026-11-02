@@ -148,7 +148,14 @@ export async function advanceConceptWorkerOnce(deps: WorkerDependencies) {
     now: time(deps),
   });
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), STAGE_MS);
+  const deadline = task.submitStartedAt
+    ? task.submitStartedAt.getTime() + TASK_TIMEOUT_MS
+    : Infinity;
+  const lifetimeExpired = () => time(deps).getTime() >= deadline;
+  const timer = setTimeout(
+    () => controller.abort(),
+    Math.max(0, Math.min(STAGE_MS, deadline - started.getTime())),
+  );
   const signal = deps.signal
     ? AbortSignal.any([deps.signal, controller.signal])
     : controller.signal;
@@ -295,6 +302,10 @@ export async function advanceConceptWorkerOnce(deps: WorkerDependencies) {
         signal,
       });
     } catch {
+      if (lifetimeExpired()) {
+        await fail("INSPIRATION_CONCEPT_TIMEOUT");
+        return advanced;
+      }
       if (
         await repository.rescheduleTask({
           ...lease(),
@@ -354,12 +365,18 @@ export async function advanceConceptWorkerOnce(deps: WorkerDependencies) {
         { store: deps.store, remote: deps.remote },
       );
     } catch {
-      if (signal.aborted)
+      if (lifetimeExpired()) await fail("INSPIRATION_CONCEPT_TIMEOUT");
+      else if (signal.aborted)
         await repository.rescheduleTask({
           ...lease(),
           availableAt: nextPoll(deps, task),
         });
       else await fail("INSPIRATION_CONCEPT_IMPORT_FAILED");
+      return advanced;
+    }
+    if (lifetimeExpired()) {
+      await deleteSafely(deps, task.setId, [imported.writtenKey]);
+      await fail("INSPIRATION_CONCEPT_TIMEOUT");
       return advanced;
     }
     let published: Awaited<ReturnType<typeof repository.publishTaskOutput>>;
