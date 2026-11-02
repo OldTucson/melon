@@ -16,6 +16,8 @@ vi.mock("@/features/inspiration/analysis-service", () => ({
   parseInspirationStored: (schema: { parse: (x: unknown) => unknown }, value: unknown) => schema.parse(value),
   inspirationBusy: () => new Error("busy"),
 }));
+vi.mock("@/features/inspiration/analysis-repository", () => ({ deleteAnalysisWithObjectKeys: vi.fn() }));
+vi.mock("@/features/inspiration-concepts/service", () => ({ listConceptSets: async () => [] }));
 vi.mock("./library-matcher", () => ({ matchLibraryPatterns: vi.fn() }));
 vi.mock("./visual-repository", () => ({
   failStaleResearchJobs: vi.fn(), findJobByOperation: vi.fn(), createPendingResearchJob: vi.fn(),
@@ -64,7 +66,7 @@ beforeEach(() => {
       ...a, ownerId, analysisId, jobId, createdAt: new Date(), patternId: null, savedPatternId: null,
       saveOperationId: null, imageAssetId: null, palette: [],
     })) as repository.VisibleVisualAssetRow[]);
-    return { state: "completed", job: completed };
+    return { state: "completed", job: completed, supersededKeys: [] };
   });
 });
 
@@ -137,7 +139,8 @@ describe("visual orchestration compensation", () => {
 
   it("cleans superseded keys after commit and ignores cleanup failures", async () => {
     const deps = dependencies();
-    vi.mocked(repository.listObjectKeysForAnalysis).mockResolvedValue(["old-key"]);
+    const complete = vi.mocked(repository.completeResearchJob).getMockImplementation()!;
+    vi.mocked(repository.completeResearchJob).mockImplementation(async (...args) => ({ ...await complete(...args)!, state: "completed", job: job("completed"), supersededKeys: ["old-key"] }));
     deps.store.delete.mockImplementation(async () => { expect(repository.completeResearchJob).toHaveBeenCalledTimes(1); throw new Error("delete failed"); });
     const board = await run(deps);
     expect(board.activeJob!.status).toBe("completed");

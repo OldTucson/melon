@@ -308,3 +308,8 @@ describe("inspiration visual contracts", () => {
     ).toBe(false);
   });
 });
+
+it("carries existing concept sets while generation is unavailable", () => {
+  const input = { ...visualBoardFixture, conceptGenerationAvailable: false, conceptSets: [] };
+  expect(inspirationVisualBoardDtoSchema.parse(input)).toMatchObject({ conceptGenerationAvailable: false, conceptSets: [] });
+});

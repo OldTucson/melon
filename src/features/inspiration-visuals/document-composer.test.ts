@@ -1,3 +1,4 @@
+import { conceptSetFixture, conceptAssetFixture } from "@/features/inspiration-concepts/test-fixtures";
 import { describe, expect, it } from "vitest";
 
 import { inspirationResultFixture, inspirationSourceFixture } from "@/features/inspiration/test-fixtures";
@@ -148,4 +149,38 @@ describe("editorial document composition", () => {
     expect(publicInspirationDocumentDtoSchema.safeParse(ownerDocument).success).toBe(false);
   });
 
+});
+
+describe("concept set report composition", () => {
+  const set = (version: number, directionIndex = 0) => ({ ...conceptSetFixture,
+    id: `00000000-0000-4000-8000-${String(500 + version + directionIndex * 10).padStart(12, "0")}`,
+    version, directionIndex, slots: conceptSetFixture.slots.map((slot) => ({ ...slot,
+      asset: slot.asset ? { ...slot.asset, id: `00000000-0000-4000-8000-${String(600 + version + directionIndex * 10).padStart(12, "0")}` } : null,
+    })) as typeof conceptSetFixture.slots,
+  });
+  it("groups by direction, retains private tasks and caps newest versions at three", () => {
+    const document = composeInspirationDocument({ ...input, conceptSets: [set(1), set(2, 1), set(4), set(2), set(3)] });
+    expect(document.directions.map(({ conceptSets }) => conceptSets.map(({ version }) => version))).toEqual([[4, 3, 2], [2], []]);
+    expect(document.directions[0]!.conceptSets[0]!.slots[1].task).toEqual({ status: "failed", errorCode: "INSPIRATION_CONCEPT_TIMEOUT" });
+  });
+  it("rejects unmatched directions and duplicate set or output identities before truncation", () => {
+    for (const conceptSets of [[set(1, 4)], [set(1), set(1)], [set(1), { ...set(2), slots: set(1).slots }], [set(1), set(2), set(3), set(4), set(1)]]) {
+      expect(() => composeInspirationDocument({ ...input, conceptSets })).toThrow();
+    }
+    const document = composeInspirationDocument({ ...input, conceptSets: [set(1)] });
+    document.directions[1]!.conceptSets = document.directions[0]!.conceptSets;
+    expect(inspirationDocumentDtoSchema.safeParse(document).success).toBe(false);
+  });
+  it("projects public outputs field by field and enforces share-local paths", () => {
+    const shareId = "00000000-0000-4000-8000-000000000900";
+    const publicSet = { id: conceptSetFixture.id, directionIndex: 0, version: 1,
+      createdAt: conceptSetFixture.createdAt, outputs: [conceptAssetFixture],
+      task: "private", brief: "private", provider: "private", referenceAssetIds: ["private"],
+    };
+    const document = composePublicInspirationDocument({ ...input, shareId, conceptSets: [publicSet] });
+    expect(document.directions[0]!.conceptSets[0]!.outputs[0]!.imageUrl).toBe(`/share/inspiration/${shareId}/assets/${conceptAssetFixture.id}`);
+    expect(JSON.stringify(document)).not.toMatch(/task|errorCode|referenceAssetIds|brief|provider|model|\/api\//);
+    document.directions[0]!.conceptSets[0]!.outputs[0]!.imageUrl = conceptAssetFixture.imageUrl;
+    expect(publicInspirationDocumentDtoSchema.safeParse(document).success).toBe(false);
+  });
 });

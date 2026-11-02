@@ -453,6 +453,7 @@ export function InspirationView() {
         webEvidence: visuals.data?.webEvidence,
         libraryMatches: visuals.data?.libraryMatches,
         concepts: visuals.data?.concepts,
+        conceptSets: visuals.data?.conceptSets,
       })
     : null;
 

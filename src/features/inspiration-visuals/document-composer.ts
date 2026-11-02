@@ -1,3 +1,4 @@
+import { conceptSetDtoSchema, publicConceptSetDtoSchema, type ConceptSetDto, type PublicConceptSetDto } from "@/features/inspiration-concepts/contracts";
 import { z } from "zod";
 
 import type { InspirationAnalysisResult, InspirationSource } from "@/features/inspiration/contracts";
@@ -17,11 +18,13 @@ type CompositionInput = {
   webEvidence?: WebEvidenceAssetDto[];
   libraryMatches?: LibraryMatchAssetDto[];
   concepts?: GeneratedConceptAssetDto[];
+  conceptSets?: ConceptSetDto[];
 };
 
 type PublicConcept = PublicInspirationDocumentDto["directions"][number]["concepts"][number];
-type PublicCompositionInput = Omit<CompositionInput, "concepts"> & {
+type PublicCompositionInput = Omit<CompositionInput, "concepts" | "conceptSets"> & {
   shareId: string;
+  conceptSets?: PublicConceptSetDto[];
   concepts?: (GeneratedConceptAssetDto | PublicConcept)[];
 };
 
@@ -29,6 +32,16 @@ const dimensionLabels = { silhouettes: "款式", productTypes: "类型", styles:
 
 function ordered<T extends { ordinal: number; id: string }>(assets: T[]): T[] {
   return [...assets].sort((left, right) => left.ordinal - right.ordinal || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
+}
+
+function validateSets(sets: (ConceptSetDto | PublicConceptSetDto)[], directionCount: number, otherIds: string[]) {
+  if (sets.some(({ directionIndex }) => directionIndex >= directionCount)) throw new Error("Concept set has no matching direction");
+  if (new Set(sets.map(({ id }) => id)).size !== sets.length) throw new Error("Duplicate concept set");
+  const ids = [...otherIds, ...sets.flatMap((set) => "outputs" in set ? set.outputs.map(({ id }) => id) : set.slots.flatMap(({ asset }) => asset ? [asset.id] : []))];
+  if (new Set(ids).size !== ids.length) throw new Error("Duplicate document asset");
+}
+function directionSets<T extends { directionIndex: number; version: number }>(sets: T[], index: number): T[] {
+  return sets.filter(({ directionIndex }) => directionIndex === index).sort((a, b) => b.version - a.version).slice(0, 3);
 }
 
 /** Pure content composition. Job/refresh state belongs to the caller's envelope. */
@@ -43,6 +56,8 @@ export function composeInspirationDocument(input: CompositionInput): Inspiration
   const matches = z.array(libraryMatchAssetDtoSchema).max(20).parse(input.libraryMatches ?? []);
   const concepts = z.array(generatedConceptAssetDtoSchema).max(15).parse(input.concepts ?? []);
   const assets = [...web, ...matches, ...concepts];
+  const conceptSets = z.array(conceptSetDtoSchema).parse(input.conceptSets ?? []);
+  validateSets(conceptSets, result.inspirationPrompts.length, assets.map(({ id }) => id));
   if (new Set(assets.map(({ id }) => id)).size !== assets.length) throw new Error("Duplicate document asset");
   if (web.filter(({ role }) => role === "hero").length > 1) throw new Error("Multiple document heroes");
   if ([...matches, ...concepts].some(({ directionIndex }) => directionIndex !== null && directionIndex >= result.inspirationPrompts.length)) {
@@ -72,6 +87,7 @@ export function composeInspirationDocument(input: CompositionInput): Inspiration
       direction: withSources(direction),
       libraryMatches: ordered(matches).filter(({ directionIndex }) => directionIndex === index),
       concepts: ordered(concepts).filter(({ directionIndex }) => directionIndex === index),
+      conceptSets: directionSets(conceptSets, index),
     })),
     unassignedLibraryMatches: ordered(matches).filter(({ directionIndex }) => directionIndex === null),
     sources,
@@ -82,6 +98,12 @@ export function composeInspirationDocument(input: CompositionInput): Inspiration
 export function composePublicInspirationDocument(input: PublicCompositionInput): PublicInspirationDocumentDto {
   const shareId = normalizedUuidSchema.parse(input.shareId);
   const imageUrl = (assetId: string) => `/share/inspiration/${shareId}/assets/${normalizedUuidSchema.parse(assetId)}`;
+  const conceptSets = (input.conceptSets ?? []).map((set) => publicConceptSetDtoSchema.parse({
+    id: set.id, directionIndex: set.directionIndex, version: set.version, createdAt: set.createdAt,
+    outputs: set.outputs.map((asset) => ({ id: asset.id, kind: asset.kind, title: asset.title, altText: asset.altText,
+      imageUrl: imageUrl(asset.id), width: asset.width, height: asset.height, createdAt: asset.createdAt })),
+  }));
+  validateSets(conceptSets, input.result.inspirationPrompts.length, [...(input.webEvidence ?? []), ...(input.concepts ?? [])].map(({ id }) => id));
   const document = composeInspirationDocument({
     result: input.result,
     sources: input.sources,
@@ -95,8 +117,9 @@ export function composePublicInspirationDocument(input: PublicCompositionInput):
   });
   return publicInspirationDocumentDtoSchema.parse({
     ...document,
-    directions: document.directions.map(({ direction, concepts }) => ({
+    directions: document.directions.map(({ direction, concepts }, index) => ({
       direction, libraryMatches: [],
+      conceptSets: directionSets(conceptSets, index),
       concepts: concepts.map(({ id, kind, ordinal, directionIndex, title, altText, imageUrl, width, height }) => ({
         id, kind, ordinal, directionIndex, title, altText, imageUrl, width, height,
       })),

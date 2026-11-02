@@ -1,4 +1,5 @@
 import "server-only";
+import { lockConceptAnalysis } from "@/features/inspiration-concepts/repository";
 
 import {
   and,
@@ -18,7 +19,7 @@ import { alias } from "drizzle-orm/pg-core";
 
 import { getActiveVisualSearchIndexVersion } from "@/features/image-search/index-service";
 import { loadPatternPaletteStates } from "@/features/patterns/pattern-palette-repository";
-import { db } from "@/lib/db/client";
+import { db, type DbTransaction } from "@/lib/db/client";
 import { inspirationConceptReferences } from "@/lib/db/schema/inspiration-concepts";
 import {
   assets as storageAssets,
@@ -138,6 +139,9 @@ export async function completeResearchJob(
   completedAt: Date,
 ) {
   return db.transaction(async (tx) => {
+    const [identity] = await tx.select({ analysisId: visualJobs.analysisId }).from(visualJobs).where(ownedJob(ownerId, jobId));
+    if (!identity) return undefined;
+    await lockConceptAnalysis(tx, identity.analysisId);
     const libraryPatternIds = [
       ...new Set(
         assets.flatMap((asset) =>
@@ -248,7 +252,10 @@ export async function completeResearchJob(
         })),
       );
     }
-    return { state: "completed" as const, job };
+    // Select after publication, under the creation/refresh lock. Tombstoned sets
+    // still pin references until hard cleanup releases their relations.
+    const supersededKeys = await listObjectKeysForAnalysis(ownerId, job.analysisId, tx, job.id);
+    return { state: "completed" as const, job, supersededKeys };
   });
 }
 
@@ -455,8 +462,11 @@ export async function listObjectKeysForJob(ownerId: string, jobId: string) {
 export async function listObjectKeysForAnalysis(
   ownerId: string,
   analysisId: string,
+  connection: DbTransaction | typeof db = db,
+  excludeJobId?: string,
 ) {
-  const rows = await db
+  const pinnedAssets = alias(visualAssets, "pinned_research_assets");
+  const rows = await connection
     .select({ objectKey: visualAssets.objectKey })
     .from(visualAssets)
     .innerJoin(
@@ -473,21 +483,27 @@ export async function listObjectKeysForAnalysis(
       and(
         eq(visualAssets.ownerId, ownerId),
         eq(visualAssets.analysisId, analysisId),
+        excludeJobId ? ne(visualAssets.jobId, excludeJobId) : undefined,
         eq(visualAssets.kind, "web_evidence"),
         isNotNull(visualAssets.objectKey),
         notExists(
-          db
+          connection
             .select({ id: inspirationConceptReferences.visualAssetId })
             .from(inspirationConceptReferences)
+            .innerJoin(pinnedAssets, and(
+              eq(pinnedAssets.id, inspirationConceptReferences.visualAssetId),
+              eq(pinnedAssets.ownerId, inspirationConceptReferences.ownerId),
+              eq(pinnedAssets.analysisId, inspirationConceptReferences.analysisId),
+            ))
             .where(
               and(
                 eq(inspirationConceptReferences.ownerId, ownerId),
                 eq(inspirationConceptReferences.analysisId, analysisId),
-                eq(inspirationConceptReferences.visualAssetId, visualAssets.id),
+                eq(pinnedAssets.objectKey, visualAssets.objectKey),
               ),
             ),
         ),
       ),
     );
-  return rows.map(({ objectKey }) => objectKey!);
+  return [...new Set(rows.map(({ objectKey }) => objectKey!))];
 }

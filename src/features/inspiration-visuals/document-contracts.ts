@@ -1,3 +1,4 @@
+import { conceptSetDtoSchema, publicConceptSetDtoSchema, type ConceptSetDto, type PublicConceptSetDto } from "@/features/inspiration-concepts/contracts";
 import { z } from "zod";
 
 import {
@@ -31,6 +32,7 @@ const documentShape = {
     direction: inspirationPromptSchema,
     libraryMatches: z.array(libraryMatchAssetDtoSchema).max(20),
     concepts: z.array(generatedConceptAssetDtoSchema).max(15),
+    conceptSets: z.array(conceptSetDtoSchema).max(3),
   }).strict()).min(3).max(5),
   unassignedLibraryMatches: z.array(libraryMatchAssetDtoSchema).max(20),
   sources: inspirationSourcesSchema,
@@ -43,6 +45,7 @@ const publicDocumentSchema = z.object({
     direction: inspirationPromptSchema,
     libraryMatches: z.array(z.never()).max(0),
     concepts: z.array(publicGeneratedConceptAssetDtoSchema).max(15),
+    conceptSets: z.array(publicConceptSetDtoSchema).max(3),
   }).strict()).min(3).max(5),
   unassignedLibraryMatches: z.array(z.never()).max(0),
 }).strict();
@@ -67,7 +70,13 @@ function validateDocument(document: DocumentContent, context: z.RefinementCtx) {
   if (document.dimensions.some(({ key }, ordinal) => key !== inspirationDimensionKeys[ordinal])) {
     context.addIssue({ code: "custom", message: "invalid dimension order" });
   }
+  const sets = document.directions.flatMap<ConceptSetDto | PublicConceptSetDto>(({ conceptSets }) => conceptSets);
+  if (new Set(sets.map(({ id }) => id)).size !== sets.length) {
+    context.addIssue({ code: "custom", message: "duplicate document concept set" });
+  }
+  const outputs = sets.flatMap((set) => "outputs" in set ? set.outputs : set.slots.flatMap(({ asset }) => asset ? [asset] : []));
   const assets = [
+    ...outputs,
     ...(document.hero ? [document.hero] : []),
     ...document.marketSignals.flatMap(({ evidence }) => evidence),
     ...document.products,
@@ -80,8 +89,8 @@ function validateDocument(document: DocumentContent, context: z.RefinementCtx) {
   if (assets.filter(({ kind }) => kind === "web_evidence").length > 8) {
     context.addIssue({ code: "custom", message: "too many web assets" });
   }
-  document.directions.forEach(({ libraryMatches, concepts }, index) => {
-    if ([...libraryMatches, ...concepts].some(({ directionIndex }) => directionIndex !== index)) {
+  document.directions.forEach(({ libraryMatches, concepts, conceptSets }, index) => {
+    if ([...libraryMatches, ...concepts, ...conceptSets].some(({ directionIndex }) => directionIndex !== index)) {
       context.addIssue({ code: "custom", message: "asset direction does not match its section" });
     }
   });
@@ -97,7 +106,7 @@ export const publicInspirationDocumentDtoSchema = publicDocumentSchema.superRefi
     ...(document.hero ? [document.hero] : []),
     ...document.marketSignals.flatMap(({ evidence }) => evidence),
     ...document.products,
-    ...document.directions.flatMap(({ concepts }) => concepts),
+    ...document.directions.flatMap(({ concepts, conceptSets }) => [...concepts, ...conceptSets.flatMap(({ outputs }) => outputs)]),
   ];
   for (const asset of publicAssets) {
     const route = /^\/share\/inspiration\/([^/]+)\/assets\/([^/]+)$/.exec(asset.imageUrl);

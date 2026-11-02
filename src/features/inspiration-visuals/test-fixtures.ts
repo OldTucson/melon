@@ -80,6 +80,8 @@ export const generatedConceptAssetFixture = {
 
 export const visualBoardFixture = {
   refreshAvailable: true,
+  conceptGenerationAvailable: false,
+  conceptSets: [],
   activeJob: visualJobFixture,
   refreshJob: null,
   webEvidence: [webEvidenceAssetFixture],

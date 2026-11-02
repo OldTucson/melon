@@ -1,8 +1,13 @@
 import "server-only";
 
-import { and, desc, eq, getTableColumns, isNotNull, isNull, lt, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, isNotNull, isNull, lt, ne, sql } from "drizzle-orm";
 import { db } from "@/lib/db/client";
 import { inspirationAnalyses as analyses } from "@/lib/db/schema";
+import { inspirationVisualAssets as visualAssets } from "@/lib/db/schema/inspiration-visuals";
+import { inspirationConceptSets as sets, inspirationConceptOutputs as outputs } from "@/lib/db/schema/inspiration-concepts";
+import { lockConceptAnalysis } from "@/features/inspiration-concepts/repository";
+import { parseConceptObjectKey } from "@/features/inspiration-concepts/object-keys";
+import { parseVisualObjectKey } from "@/features/inspiration-visuals/visual-object-keys";
 import type { InspirationErrorCode } from "./contracts";
 import type { InspirationCursor } from "./inspiration-cursor";
 import type { InspirationProviderOutput } from "./qwen-provider";
@@ -75,9 +80,44 @@ export async function renameAnalysisRow(ownerId: string, analysisId: string, ver
   return row;
 }
 
+/** Authorize, fence publishers, snapshot exact owned keys, and cascade atomically. */
+export async function deleteAnalysisWithObjectKeys(ownerId: string, analysisId: string) {
+  return db.transaction(async (tx) => {
+    await lockConceptAnalysis(tx, analysisId);
+    // NO KEY UPDATE allows an already-running output publication's FK key-share
+    // check to finish while we wait for its set lock; UPDATE here would deadlock.
+    const [ownedAnalysis] = await tx.select().from(analyses)
+      .where(and(owned(ownerId, analysisId), ne(analyses.status, "pending"))).for("no key update");
+    if (!ownedAnalysis) return undefined;
+    await tx.select({ id: sets.id }).from(sets)
+      .where(and(eq(sets.ownerId, ownerId), eq(sets.analysisId, analysisId)))
+      .orderBy(asc(sets.id)).for("update");
+    const visuals = await tx.select({ id: visualAssets.id, jobId: visualAssets.jobId, objectKey: visualAssets.objectKey }).from(visualAssets)
+      .where(and(eq(visualAssets.ownerId, ownerId), eq(visualAssets.analysisId, analysisId), isNotNull(visualAssets.objectKey)));
+    const concepts = await tx.select({ id: outputs.id, setId: outputs.setId, outputKind: outputs.outputKind, objectKey: outputs.objectKey }).from(outputs)
+      .where(and(eq(outputs.ownerId, ownerId), eq(outputs.analysisId, analysisId)));
+    const visualKeys = visuals.flatMap((asset) => {
+      try {
+        const key = parseVisualObjectKey(asset.objectKey!);
+        return key.ownerId === ownerId && key.analysisId === analysisId && key.jobId === asset.jobId && key.assetId === asset.id ? [asset.objectKey!] : [];
+      } catch { return []; }
+    });
+    const conceptKeys = concepts.flatMap((asset) => {
+      try {
+        const key = parseConceptObjectKey(asset.objectKey);
+        return key.ownerId === ownerId && key.analysisId === analysisId && key.setId === asset.setId && key.outputId === asset.id && key.outputKind === asset.outputKind ? [asset.objectKey] : [];
+      } catch { return []; }
+    });
+    // Reference -> visual uses RESTRICT: retire sets/references before the
+    // analysis cascade reaches visual assets, within the same transaction.
+    await tx.delete(sets).where(and(eq(sets.ownerId, ownerId), eq(sets.analysisId, analysisId)));
+    const [row] = await tx.delete(analyses).where(and(owned(ownerId, analysisId), ne(analyses.status, "pending"))).returning();
+    if (!row) throw new Error("Locked analysis disappeared");
+    return { row, visualKeys: [...new Set(visualKeys)], conceptKeys: [...new Set(conceptKeys)] };
+  });
+}
 export async function deleteAnalysisRow(ownerId: string, analysisId: string) {
-  const [row] = await db.delete(analyses).where(and(owned(ownerId, analysisId), ne(analyses.status, "pending"))).returning();
-  return row;
+  return (await deleteAnalysisWithObjectKeys(ownerId, analysisId))?.row;
 }
 
 export async function enableShareRow(ownerId: string, analysisId: string, shareId: string, now: Date, version: number) {

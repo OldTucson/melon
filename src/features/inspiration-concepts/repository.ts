@@ -1094,3 +1094,27 @@ export async function findOwnedConceptResource(input: {
     .limit(1);
   return resource;
 }
+
+/** Dedicated public projection: no task, brief, provider, storage or model fields. */
+export async function listSharedConceptOutputs(shareId: string) {
+  return db.select({
+    setId: sets.id, directionIndex: sets.directionIndex, version: sets.version, setCreatedAt: sets.createdAt,
+    id: outputs.id, kind: outputs.outputKind, title: outputs.title, altText: outputs.altText,
+    width: outputs.width, height: outputs.height, createdAt: outputs.createdAt,
+  }).from(outputs).innerJoin(sets, and(eq(sets.id, outputs.setId), eq(sets.ownerId, outputs.ownerId), eq(sets.analysisId, outputs.analysisId)))
+    .innerJoin(inspirationAnalyses, and(eq(inspirationAnalyses.id, sets.analysisId), eq(inspirationAnalyses.ownerId, sets.ownerId)))
+    .where(and(eq(inspirationAnalyses.shareId, shareId), eq(inspirationAnalyses.status, "completed"), isNull(sets.deletedAt)))
+    .orderBy(asc(sets.directionIndex), desc(sets.version), asc(outputs.outputKind));
+}
+
+/** Capability-only byte projection; never load private generation metadata. */
+export async function findSharedConceptOutput(input: { shareId: string; assetId: string }) {
+  const [resource] = await db.select({
+    id: outputs.id, ownerId: outputs.ownerId, analysisId: outputs.analysisId, setId: outputs.setId,
+    objectKey: outputs.objectKey, outputKind: outputs.outputKind, contentType: outputs.contentType,
+  }).from(outputs).innerJoin(sets, and(eq(sets.id, outputs.setId), eq(sets.ownerId, outputs.ownerId), eq(sets.analysisId, outputs.analysisId)))
+    .innerJoin(inspirationAnalyses, and(eq(inspirationAnalyses.id, sets.analysisId), eq(inspirationAnalyses.ownerId, sets.ownerId)))
+    .where(and(eq(outputs.id, input.assetId), eq(inspirationAnalyses.shareId, input.shareId), eq(inspirationAnalyses.status, "completed"), isNull(sets.deletedAt)))
+    .limit(1);
+  return resource;
+}

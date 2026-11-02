@@ -1,9 +1,11 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ findCompletedVisualResource: vi.fn(), get: vi.fn() }));
+const mocks = vi.hoisted(() => ({ findCompletedVisualResource: vi.fn(), findSharedConceptOutput: vi.fn(), get: vi.fn() }));
 vi.mock("@/features/inspiration-visuals/visual-repository", () => ({ findCompletedVisualResource: mocks.findCompletedVisualResource }));
 vi.mock("@/features/inspiration-visuals/visual-object-store", () => ({ createVisualObjectStore: () => ({ get: mocks.get }) }));
+vi.mock("@/features/inspiration-concepts/repository", () => ({ findSharedConceptOutput: mocks.findSharedConceptOutput }));
+vi.mock("@/features/inspiration-concepts/object-store", () => ({ createConceptObjectStore: () => ({ get: mocks.get }) }));
 vi.mock("@/lib/env/server", () => ({ getServerEnv: () => ({}) }));
 
 const shareId = "abcdef00-0000-4000-8000-000000000002";
@@ -83,4 +85,20 @@ describe("live share inspiration image bytes", () => {
     });
     if (failure !== "missing object") expect(mocks.get).not.toHaveBeenCalled();
   });
+  it("routes a completed concept through the same share image endpoint", async () => {
+    const ownerId = "00000000-0000-4000-8000-000000000010";
+    const analysisId = "00000000-0000-4000-8000-000000000020";
+    const setId = "00000000-0000-4000-8000-000000000030";
+    const key = `users/${ownerId}/inspiration/${analysisId}/concept-sets/${setId}/sketch/${assetId}.png`;
+    mocks.findSharedConceptOutput.mockResolvedValue({ id: assetId, ownerId, analysisId, setId, objectKey: key, outputKind: "sketch", contentType: "image/png" });
+    mocks.findCompletedVisualResource.mockResolvedValue(undefined);
+    const { GET } = await import("./route");
+    const response = await GET(request(), context());
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("location")).toBeNull();
+    expect(mocks.get).toHaveBeenCalledExactlyOnceWith(key);
+  });
+
 });

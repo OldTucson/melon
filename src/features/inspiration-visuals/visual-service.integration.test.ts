@@ -1,6 +1,9 @@
+import { createSetAndSketchTask, lockConceptAnalysis, softDeleteSet } from "@/features/inspiration-concepts/repository";
+import { conceptBriefFixture } from "@/features/inspiration-concepts/test-fixtures";
+import { seedReportConcept } from "@/features/inspiration-concepts/integration-fixtures";
 import { randomUUID } from "node:crypto";
 
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import {
   afterAll,
   afterEach,
@@ -827,6 +830,76 @@ describe("inspiration visual service", () => {
     expect(web.webProvider.search).not.toHaveBeenCalled();
     expect(web.importWeb).not.toHaveBeenCalled();
     expect(web.matchLibrary).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("preserves evidence pinned during provider work, tombstoned=%s", async (tombstone) => {
+    const web = webHarness();
+    const old = await web.run();
+    const pinned = old.webEvidence[0]!;
+    const keys = await repository.listObjectKeysForJob(ownerId, old.activeJob!.id);
+    const pinnedKey = keys.find((key) => parseVisualObjectKey(key).assetId === pinned.id)!;
+    const started = deferred(), release = deferred();
+    web.matchLibrary.mockImplementationOnce(async () => { started.resolve(); await release.promise; return { assets: [], warnings: [] }; });
+    const refresh = web.run();
+    try {
+      await started.promise;
+      const { set } = await createSetAndSketchTask({ ownerId, analysisId, operationId: randomUUID(), directionIndex: 0,
+        visualJobId: old.activeJob!.id, referenceAssetIds: [pinned.id], now: new Date(),
+        briefSnapshot: { ...conceptBriefFixture, referenceAssetIds: [pinned.id] } });
+      if (tombstone) await softDeleteSet({ ownerId, analysisId, setId: set.id, now: new Date() });
+    } finally { release.resolve(); }
+    await refresh;
+    expect(web.objects.has(pinnedKey)).toBe(true);
+    expect(web.deleted.flat()).toEqual(keys.filter((key) => key !== pinnedKey));
+  });
+
+  it("waits for the concept analysis advisory lock before publishing refresh completion", async () => {
+    const web = webHarness();
+    const old = await web.run();
+    const held = deferred(), release = deferred();
+    let holderPid = 0;
+    const holder = db.transaction(async (tx) => {
+      await lockConceptAnalysis(tx, analysisId);
+      holderPid = Number((await tx.execute(sql`select pg_backend_pid() as pid`))[0]!.pid);
+      held.resolve(); await release.promise;
+    });
+    await held.promise;
+    const refresh = web.run();
+    try {
+      let waiting = false;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const rows = await db.execute(sql`select pid from pg_stat_activity where ${holderPid} = any(pg_blocking_pids(pid)) and wait_event = 'advisory'`);
+        if (rows.length) { waiting = true; break; }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(waiting).toBe(true);
+      expect((await repository.findLatestCompletedResearchJob(ownerId, analysisId))!.id).toBe(old.activeJob!.id);
+      expect(web.deleted).toEqual([]);
+    } finally { release.resolve(); await holder; await refresh; }
+    expect((await repository.findLatestCompletedResearchJob(ownerId, analysisId))!.id).not.toBe(old.activeJob!.id);
+  });
+
+  it.each([[false, true], [true, false], [true, true]])("keeps concept sets with concept flag=%s and core flag=%s", async (concept, core) => {
+    const seeded = await seedReportConcept({ ownerId, analysisId });
+    vi.mocked(environment.getServerEnv).mockReturnValue({ ...environment.getServerEnv(), INSPIRATION_CONCEPT_IMAGES_ENABLED: concept, INSPIRATION_ENABLED: core });
+    const board = await getInspirationVisualBoard({ ownerId, analysisId });
+    expect(board.conceptGenerationAvailable).toBe(concept && core);
+    expect(board.conceptSets.map(({ id }) => id)).toEqual([seeded.setId]);
+    expect(board.conceptSets[0]!.slots[0].asset!.id).toBe(seeded.assets[0]!.id);
+  });
+
+  it("never deletes an evidence key still pinned through another visual relation", async () => {
+    const web = webHarness();
+    const old = await web.run();
+    const pinned = old.webEvidence[0]!;
+    const [row] = await db.select().from(inspirationVisualAssets).where(eq(inspirationVisualAssets.id, pinned.id));
+    await db.insert(inspirationVisualAssets).values({ ...row!, id: randomUUID(), ordinal: 7, documentRole: "evidence" });
+    await createSetAndSketchTask({ ownerId, analysisId, operationId: randomUUID(), directionIndex: 0,
+      visualJobId: old.activeJob!.id, referenceAssetIds: [pinned.id], now: new Date(),
+      briefSnapshot: { ...conceptBriefFixture, referenceAssetIds: [pinned.id] } });
+    await web.run();
+    expect(web.objects.has(row!.objectKey!)).toBe(true);
+    expect(web.deleted.flat()).not.toContain(row!.objectKey);
   });
 
 });

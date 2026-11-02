@@ -1,3 +1,4 @@
+import { conceptSetDtoSchema } from "@/features/inspiration-concepts/contracts";
 import { z } from "zod";
 
 import { paletteHexSchema } from "@/features/palette-search/contracts";
@@ -260,6 +261,8 @@ function validateDocumentRoleCounts(
 export const inspirationVisualBoardDtoSchema = z
   .object({
     refreshAvailable: z.boolean(),
+    conceptGenerationAvailable: z.boolean().default(false),
+    conceptSets: z.array(conceptSetDtoSchema).max(15).default([]),
     activeJob: activeResearchJobSchema.nullable(),
     refreshJob: refreshResearchJobSchema.nullable(),
     webEvidence: z.array(webEvidenceAssetDtoSchema).max(8),

@@ -4,13 +4,14 @@ import { z } from "zod";
 import { normalizedUuidSchema } from "@/features/storage/identifiers";
 import { getServerEnv } from "@/lib/env/server";
 import { AppError } from "@/lib/http/app-error";
+import { authorizeSharedVisualResource } from "@/features/inspiration-visuals/visual-resource-service";
 import { conceptOutputKindSchema } from "./contracts";
 import { parseConceptObjectKey } from "./object-keys";
 import {
   createConceptObjectStore,
   type ConceptObjectStore,
 } from "./object-store";
-import { findOwnedConceptResource } from "./repository";
+import { findOwnedConceptResource, findSharedConceptOutput } from "./repository";
 
 const identitySchema = z
   .object({ ownerId: normalizedUuidSchema, assetId: normalizedUuidSchema })
@@ -54,32 +55,8 @@ export async function authorizeOwnedConceptResource(
       await findOwnedConceptResource(identity),
     );
     const { asset } = resource;
-    const key = parseConceptObjectKey(asset.objectKey);
-    if (
-      key.ownerId !== identity.ownerId ||
-      key.analysisId !== asset.analysisId ||
-      key.setId !== asset.setId ||
-      key.outputId !== identity.assetId ||
-      key.outputKind !== asset.outputKind
-    )
-      throw notFound();
-    let store = dependencies.store;
-    if (!store) {
-      const env = getServerEnv();
-      store = createConceptObjectStore({
-        region: env.ALIYUN_OSS_REGION,
-        bucket: env.ALIYUN_OSS_BUCKET,
-        endpoint: env.ALIYUN_OSS_ENDPOINT,
-        cname: env.ALIYUN_OSS_CNAME,
-      });
-    }
-    const object = await store.get(asset.objectKey);
-    if (
-      object.contentType !== asset.contentType ||
-      !object.bytes.byteLength ||
-      object.bytes.byteLength > 16 * 1024 * 1024
-    )
-      throw notFound();
+    if (asset.ownerId !== identity.ownerId || asset.id !== identity.assetId) throw notFound();
+    const object = await readConceptObject(asset, dependencies);
     const label = {
       sketch: "设计草图",
       effect: "服装效果图",
@@ -105,6 +82,39 @@ export async function authorizeOwnedConceptResource(
     throw notFound();
   }
 }
+async function readConceptObject(
+  input: z.input<typeof metadataSchema.shape.asset>,
+  dependencies: { store?: Pick<ConceptObjectStore, "get"> },
+) {
+  const asset = metadataSchema.shape.asset.parse(input);
+  const key = parseConceptObjectKey(asset.objectKey);
+  if (key.ownerId !== asset.ownerId || key.analysisId !== asset.analysisId || key.setId !== asset.setId || key.outputId !== asset.id || key.outputKind !== asset.outputKind) throw notFound();
+  let store = dependencies.store;
+  if (!store) {
+    const env = getServerEnv();
+    store = createConceptObjectStore({ region: env.ALIYUN_OSS_REGION, bucket: env.ALIYUN_OSS_BUCKET, endpoint: env.ALIYUN_OSS_ENDPOINT, cname: env.ALIYUN_OSS_CNAME });
+  }
+  const object = await store.get(asset.objectKey);
+  if (object.contentType !== asset.contentType || !object.bytes.byteLength || object.bytes.byteLength > 16 * 1024 * 1024) throw notFound();
+  return { bytes: Uint8Array.from(object.bytes), contentType: asset.contentType };
+}
+
+/** One live capability gate for both concept output and research image routes. */
+export async function authorizeSharedInspirationResource(
+  input: { shareId: string; assetId: string },
+  dependencies: { store?: Pick<ConceptObjectStore, "get"> } = {},
+) {
+  try {
+    const identity = z.object({ shareId: normalizedUuidSchema, assetId: normalizedUuidSchema }).strict().parse(input);
+    const concept = await findSharedConceptOutput(identity);
+    if (concept) {
+      if (concept.id !== identity.assetId) throw notFound();
+      return { ...await readConceptObject(metadataSchema.shape.asset.parse(concept), dependencies), filename: "concept.png" };
+    }
+    return await authorizeSharedVisualResource(identity);
+  } catch { throw notFound(); }
+}
+
 export function privateConceptResourceResponse(response: Response) {
   response.headers.set("Cache-Control", "private, no-store");
   response.headers.set("Content-Security-Policy", "sandbox");

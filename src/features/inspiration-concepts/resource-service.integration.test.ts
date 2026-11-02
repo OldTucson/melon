@@ -28,6 +28,7 @@ import * as objectStore from "./object-store";
 import * as repository from "./repository";
 import {
   authorizeOwnedConceptResource,
+  authorizeSharedInspirationResource,
   conceptResourceResponse,
 } from "./resource-service";
 const denied = {
@@ -327,4 +328,18 @@ describe("private owned concept resources", () => {
     );
     expect(response.headers.get("location")).toBeNull();
   });
+  it("serves live concept bytes through the unified share capability and denies cross-share/revoked/tombstoned reads", async () => {
+    const shareId = randomUUID();
+    await db.update(inspirationAnalyses).set({ shareId }).where(eq(inspirationAnalyses.id, analysisId));
+    const shared = (token = shareId) => authorizeSharedInspirationResource({ shareId: token, assetId }, { store: { get } });
+    expect(await shared()).toMatchObject({ bytes, contentType: "image/png" });
+    await expect(shared(randomUUID())).rejects.toMatchObject(denied);
+    await db.update(inspirationAnalyses).set({ shareId: null }).where(eq(inspirationAnalyses.id, analysisId));
+    await expect(shared()).rejects.toMatchObject(denied);
+    await db.update(inspirationAnalyses).set({ shareId }).where(eq(inspirationAnalyses.id, analysisId));
+    await db.update(sets).set({ status: "deleting", deletedAt: new Date() }).where(eq(sets.id, setId));
+    await expect(shared()).rejects.toMatchObject(denied);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
 });

@@ -1,12 +1,16 @@
 import "server-only";
 
+import { createConceptObjectStore, type ConceptObjectStore } from "@/features/inspiration-concepts/object-store";
+import { normalizedUuidSchema } from "@/features/storage/identifiers";
+import { deleteAnalysisWithObjectKeys } from "@/features/inspiration/analysis-repository";
+import { listConceptSets } from "@/features/inspiration-concepts/service";
+
 import { randomUUID } from "node:crypto";
 
 import { z } from "zod";
 
 import { inspirationAnalysisResultSchema, inspirationSourcesSchema } from "@/features/inspiration/contracts";
 import {
-  deleteInspirationAnalysis,
   inspirationBusy,
   parseInspirationInput,
   parseInspirationStored,
@@ -33,8 +37,8 @@ const STALE_RESEARCH_JOB_MS = 3 * 60_000;
 
 const visualIdentitySchema = z
   .object({
-    ownerId: z.string().uuid(),
-    analysisId: z.string().uuid(),
+    ownerId: normalizedUuidSchema,
+    analysisId: normalizedUuidSchema,
   })
   .strict();
 
@@ -125,9 +129,10 @@ const isLaterThan = (
     candidate.id > baseline.id);
 
 async function assembleBoard(ownerId: string, analysisId: string) {
-  const [active, refreshCandidate] = await Promise.all([
+  const [active, refreshCandidate, conceptSets] = await Promise.all([
     repository.findLatestCompletedResearchJob(ownerId, analysisId),
     repository.findLatestResearchRefreshJob(ownerId, analysisId),
+    listConceptSets({ ownerId, analysisId }),
   ]);
   const refresh =
     refreshCandidate && (!active || isLaterThan(refreshCandidate, active))
@@ -139,6 +144,8 @@ async function assembleBoard(ownerId: string, analysisId: string) {
 
   return parseInspirationStored(inspirationVisualBoardDtoSchema, {
     refreshAvailable: getServerEnv().INSPIRATION_WEB_VISUALS_ENABLED || getServerEnv().IMAGE_SEARCH_ENABLED,
+    conceptGenerationAvailable: getServerEnv().INSPIRATION_ENABLED && getServerEnv().INSPIRATION_CONCEPT_IMAGES_ENABLED,
+    conceptSets,
     activeJob: active ? toJobDto(active) : null,
     refreshJob: refresh ? toJobDto(refresh) : null,
     webEvidence: visible
@@ -317,15 +324,6 @@ export async function createResearchVisuals(
     try { await objectStore().delete(keys); } catch { /* Never replace the job outcome with a cleanup error. */ }
   };
 
-  // Snapshot prior committed keys before external work. Never collect keys after
-  // commit: another refresh may already own the target by then.
-  let supersededKeys: string[];
-  try {
-    supersededKeys = await repository.listObjectKeysForAnalysis(parsed.ownerId, parsed.analysisId);
-  } catch {
-    return failAttempt(parsed.ownerId, parsed.analysisId, job.id, "INSPIRATION_VISUALS_UNAVAILABLE", [], now());
-  }
-
   const buildAndImportWebEvidence = async (): Promise<WebEvidenceImportResult> => {
     if (!env.INSPIRATION_WEB_VISUALS_ENABLED) {
       return { assets: [], writtenKeys: [], warnings: ["INSPIRATION_WEB_VISUALS_DISABLED"] };
@@ -406,35 +404,39 @@ export async function createResearchVisuals(
     throw visualFailure(unavailable ? "INSPIRATION_VISUALS_UNAVAILABLE" : "INSPIRATION_VISUALS_EMPTY", completion.job.id);
   }
 
-  await deleteBestEffort(supersededKeys);
+  await deleteBestEffort(completion.supersededKeys);
   return assembleBoard(parsed.ownerId, parsed.analysisId);
 }
 
 /** Database deletion authorizes cleanup; captured keys alone never authorize it. */
 export async function deleteInspirationWithVisualAssets(
   input: z.input<typeof visualIdentitySchema>,
-  dependencies: Pick<VisualServiceDependencies, "store"> = {},
+  dependencies: Pick<VisualServiceDependencies, "store"> & { conceptStore?: Pick<ConceptObjectStore, "delete"> } = {},
 ) {
   const parsed = parseInspirationInput(visualIdentitySchema, input);
-  const keys = await repository.listObjectKeysForAnalysis(parsed.ownerId, parsed.analysisId);
-  // A foreign, pending, or concurrently deleted analysis must never reach storage cleanup.
-  const result = await deleteInspirationAnalysis(parsed);
-  if (keys.length > 0) {
+  const deletion = await deleteAnalysisWithObjectKeys(parsed.ownerId, parsed.analysisId);
+  if (!deletion) { await requireOwnedInspiration(parsed.ownerId, parsed.analysisId); throw inspirationBusy(); }
+  const remove = async (
+    keys: string[],
+    suppliedStore: Pick<VisualObjectStore, "delete"> | undefined,
+    createStore: typeof createVisualObjectStore | typeof createConceptObjectStore,
+  ) => {
+    if (keys.length === 0) return;
     try {
-      let store = dependencies.store;
+      let store = suppliedStore;
       if (!store) {
         const env = getServerEnv();
-        store = createVisualObjectStore({
-          region: env.ALIYUN_OSS_REGION,
-          bucket: env.ALIYUN_OSS_BUCKET,
-          endpoint: env.ALIYUN_OSS_ENDPOINT,
-          cname: env.ALIYUN_OSS_CNAME,
+        store = createStore({
+          region: env.ALIYUN_OSS_REGION, bucket: env.ALIYUN_OSS_BUCKET,
+          endpoint: env.ALIYUN_OSS_ENDPOINT, cname: env.ALIYUN_OSS_CNAME,
         });
       }
       await store.delete(keys);
     } catch {
-      // Storage/configuration failure cannot undo the committed database deletion.
+      // Each namespace cleans independently after commit; failures leave orphans.
     }
-  }
-  return result;
+  };
+  await remove(deletion.visualKeys, dependencies.store, createVisualObjectStore);
+  await remove(deletion.conceptKeys, dependencies.conceptStore, createConceptObjectStore);
+  return { id: deletion.row.id, deleted: true as const };
 }

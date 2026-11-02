@@ -1,3 +1,4 @@
+import { seedReportConcept } from "@/features/inspiration-concepts/integration-fixtures";
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -229,6 +230,24 @@ describe("inspiration shares", () => {
     await expect(getSharedInspirationDocument(newToken)).rejects.toMatchObject({ code: "INSPIRATION_NOT_FOUND", status: 404 });
     await deleteInspirationAnalysis(identity);
     await expect(getSharedInspirationDocument(newToken)).rejects.toMatchObject({ code: "INSPIRATION_NOT_FOUND", status: 404 });
+  });
+
+  it("shares only live completed concept outputs with no private generation graph", async () => {
+    const row = await create();
+    const first = await seedReportConcept({ ownerId, analysisId: row.id });
+    const latest = await seedReportConcept({ ownerId, analysisId: row.id, version: 2 });
+    const deleted = await seedReportConcept({ ownerId, analysisId: row.id, version: 3, deleted: true });
+    const empty = await seedReportConcept({ ownerId, analysisId: row.id, directionIndex: 1, kinds: [] });
+    const other = await create();
+    const foreign = await seedReportConcept({ ownerId, analysisId: other.id });
+    const token = shareId((await enableInspirationShare({ ownerId, analysisId: row.id })).shareUrl);
+    const page = await getSharedInspirationDocument(token);
+    expect(page.document.directions[0]!.conceptSets.map(({ id }) => id)).toEqual([latest.setId, first.setId]);
+    expect(page.document.directions[0]!.conceptSets[0]!.outputs).toHaveLength(2);
+    expect(page.document.directions[1]!.conceptSets).toEqual([]);
+    expect(page.document.directions[0]!.conceptSets[0]!.outputs.map(({ imageUrl }) => imageUrl)).toEqual(latest.assets.map(({ id }) => `/share/inspiration/${token}/assets/${id}`));
+    const json = JSON.stringify(page);
+    for (const secret of ["task", "errorCode", "referenceAssetIds", "brief", "provider", "model", "/api/", "objectKey", ownerId, row.id, deleted.setId, empty.setId, foreign.setId]) expect(json).not.toContain(secret);
   });
 
 });

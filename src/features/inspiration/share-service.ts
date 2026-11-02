@@ -1,5 +1,8 @@
 import "server-only";
 
+import { listSharedConceptOutputs } from "@/features/inspiration-concepts/repository";
+import { publicConceptSetDtoSchema, type PublicConceptSetDto } from "@/features/inspiration-concepts/contracts";
+
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { and, desc, eq } from "drizzle-orm";
@@ -84,15 +87,27 @@ export async function getSharedInspirationDocument(shareId: string) {
     .where(and(eq(visualJobs.id, activeJob), eq(visualAssets.kind, "web_evidence")));
   const visuals = parseInspirationStored(publicInspirationVisualBoardDtoSchema, {
     webEvidence: webEvidence.map((asset) => ({ ...asset, imageUrl: `/share/inspiration/${shareId}/assets/${asset.id}` })),
-    // Concept generation and concept byte routes are disabled in phase one.
+    // Legacy generated concepts remain empty; new output sets are projected below.
     concepts: [],
   });
+  const sets = new Map<string, PublicConceptSetDto>();
+  for (const asset of await listSharedConceptOutputs(shareId)) {
+    let set = sets.get(asset.setId);
+    if (!set) {
+      set = { id: asset.setId, directionIndex: asset.directionIndex, version: asset.version, createdAt: asset.setCreatedAt.toISOString(), outputs: [] };
+      sets.set(set.id, set);
+    }
+    set.outputs.push({ id: asset.id, kind: asset.kind, title: asset.title, altText: asset.altText,
+      width: asset.width, height: asset.height, createdAt: asset.createdAt.toISOString(),
+      imageUrl: `/share/inspiration/${shareId}/assets/${asset.id}` });
+  }
+  const conceptSets = [...sets.values()].map((set) => parseInspirationStored(publicConceptSetDtoSchema, set));
   // Recheck the capability after the visual read so concurrent revocation cannot return stale text.
   const text = await getSharedInspirationAnalysis(shareId);
   return parseInspirationStored(inspirationSharedDocumentDtoSchema, {
     title: text.title, prompt: text.prompt, completedAt: text.completedAt,
     document: composePublicInspirationDocument({
-      shareId, result: text.result, sources: text.sources, ...visuals,
+      shareId, result: text.result, sources: text.sources, ...visuals, conceptSets,
     }),
   });
 }
