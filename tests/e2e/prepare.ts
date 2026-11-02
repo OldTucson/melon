@@ -5,6 +5,7 @@ import postgres from "postgres";
 
 import {
   E2E_DATABASE_URL,
+  E2E_CONCEPTS,
   E2E_IMAGE_SEARCH,
   E2E_METADATA_ONLY,
   E2E_USERS,
@@ -19,7 +20,7 @@ await resetAndSeed();
 
 const client = postgres(E2E_DATABASE_URL, { max: 1 });
 try {
-  const seeds = E2E_IMAGE_SEARCH
+  const seeds = E2E_IMAGE_SEARCH || E2E_CONCEPTS
     ? []
     : [...E2E_PATTERN_SEEDS.folderWorkflow, E2E_PATTERN_SEEDS.isolationActor];
   for (const seed of seeds) {

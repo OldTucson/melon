@@ -470,3 +470,42 @@ sudo systemctl disable melon-inspiration-concept-worker.service
 ```
 
 需要重启 worker 恢复导入时，保持公开 web 生成开关 false，完整执行上文「Worker 临时开关、无请求验证与撤销」中的专用文件创建（root:root 0600）、`90-` 追加文件与 `99-` 探针安装、Linux verify/reload/有效标志检查；通过后撤掉探针、reload，再启动已批准的真实 worker。worker 没有“仅导入”模式，也可能处理已有 queued 任务；若不批准这些任务继续提交，应登记状态并保持停止。恢复完成后执行该节的停止、移除 drop-in、daemon-reload、删除专用文件及检查命令，确认仅加载共享文件且保持 worker 停止。不要使用 inline `Environment=` 代替这套文件顺序。必要时停止正在执行的 cleanup service（未完成事务回滚，下次可重试），然后切回上一 web release。保留 additive 表、任务记录、引用、已完成 OSS 产物以及已有分享/下载数据；事故期间绝不执行破坏性降级 SQL、全 bucket 清理或删除既有输出。回滚前版本若不显示新概念卡片，数据仍保留供修复后恢复展示。
+
+### 概念套图 Task 11 发布验收记录要求
+
+先完成下列离线门禁；它们不启动生成 worker、不访问真实 provider/OSS、不产生费用：
+
+```bash
+npm test -- src/features/inspiration-concepts src/features/inspiration src/features/inspiration-visuals 'src/app/api/inspiration-analyses/[analysisId]/concept-sets' 'src/app/api/inspiration-concept-assets' 'src/app/(share)/share/inspiration/[shareId]/assets/[assetId]/route.test.ts' scripts/run-inspiration-concept-worker.test.ts scripts/cleanup-inspiration-concept-objects.test.ts scripts/check-inspiration-concept-worker.test.ts scripts/check-production.test.ts
+npm run test:integration -- src/lib/db/schema/inspiration-concepts.integration.test.ts src/features/inspiration-concepts/service.integration.test.ts src/features/inspiration-concepts/worker.integration.test.ts src/features/inspiration-concepts/resource-service.integration.test.ts src/features/inspiration-concepts/cleanup.integration.test.ts src/features/inspiration/share-service.integration.test.ts src/features/inspiration/analysis-service.integration.test.ts
+npm run typecheck
+npm run lint
+npm run build
+E2E_METADATA_ONLY=1 npm run test:e2e -- tests/e2e/inspiration-concepts.spec.ts --project=chromium
+npm run test:e2e:concepts-disabled
+git diff --check
+```
+
+概念 E2E 默认仅使用端口 3214、`melon_concepts_e2e` 隔离测试库（可通过 `E2E_PORT`、`E2E_DATABASE_URL` 覆盖，库名必须以 `_e2e` 结尾），metadata-only 模式包含直接调用 spec 的子进程。不要复用生产数据库，不要启动真实 worker。测试专用虚拟 provider/OSS 配置不得复制到生产。测试前后删除该报告的套图记录再清理报告，遵守参考资产 FK，不放宽鉴权。所有浏览器外部请求都被拦截并视为失败。图片与下载为同源拦截本地字节；这证明 UI 渲染与链接契约，真实存储字节需以下外部门禁确认。
+
+截图覆盖 owner/shared 的 1512×982、1440×900、768×1024、390×844，需人工检查 `test-results/concepts-enabled/` 与 `test-results/concepts-disabled/` 中代表性的 completed、partial、drawer 和 output-dialog 图片。共享页面对 queued/partial/retrying 仅展示已完成输出，不展示控制与私有字段；无完成图时不展示任务占位。保存截图到受控验收附件后再运行同一模式的后续 Playwright（对应输出会重建）。
+
+以下门禁当前仍为 **待执行**，不得把本地离线结果写成生产/真实计费通过：
+
+1. 目标 Linux 上完整执行前文 systemd verify、环境文件顺序和无网络探针，确认 web readiness 不依赖 worker 存活；macOS 本地测试不替代该证据。
+2. 另获明确计费授权后执行 `RUN_REAL_INSPIRATION_CONCEPT_TESTS=1 npm run test:inspiration:concept-real`。最多三次 paid create，24 次/阶段有界查询，无自动重新提交；验证三张尺寸正确的 PNG、私有 OSS 导入及 finally 删除。固定失败码包括清理失败；失败后停止，诊断后重新授权，不能循环重跑。测试不输出可定位 smoke 对象的 ID/key，运维应依赖受控 bucket 审计确认清理，不能公开原始 provider/OSS 日志。
+3. 代码以两个概念开关 false 部署；在隔离且已获批准的候选入口/worker 配置中，由一个内部账户只创建一套。草图提交后重启 worker，确认不重复提交/计费、两张衍生图仍完成。检查三张 durable asset、3:4/3:4/4:3、至多三输入、父草图与首两张参考的顺序、owner/download/share 私有字节响应、撤销和跨租户 404、删除清理、关闭开关后的历史可读、worker 状态、脱敏日志及实际 DashScope workspace 账单。
+4. 保存发布 SHA、执行时间、数量/费用和通过/失败结论，绝不记录提示词、凭据、provider IDs、URL、对象键、Base64 或私人内容。任一门禁未通过，公开 web 保持 `INSPIRATION_CONCEPT_IMAGES_ENABLED=false`、`INSPIRATION_CONCEPT_RELEASE_APPROVED=false`；全部通过后才按前文严格发布顺序启用。
+
+新隔离工作树没有 `.env.local` 时，原样 build 会因缺少必填服务端配置失败。离线制品验证可以仅为这一次进程注入下面的非秘密占位配置，仍保留 schema 校验和 false 发布开关；这不是生产配置或上线批准：
+
+```bash
+DATABASE_URL=postgres://melon:melon@127.0.0.1:55432/melon_concepts_e2e \
+AUTH_SECRET=offline-build-secret-at-least-32-characters APP_ORIGIN=http://127.0.0.1:3214 \
+ALIYUN_OSS_REGION=oss-cn-hangzhou ALIYUN_OSS_BUCKET=metadata-e2e-no-assets \
+ALIYUN_OSS_ENDPOINT=https://assets.example.test ALIYUN_OSS_CNAME=true \
+ALIYUN_STS_ROLE_ARN=acs:ram::123456789012:role/test-only \
+INSPIRATION_ENABLED=false INSPIRATION_CONCEPT_IMAGES_ENABLED=false \
+INSPIRATION_CONCEPT_RELEASE_APPROVED=false INSPIRATION_WEB_VISUALS_ENABLED=false \
+IMAGE_SEARCH_ENABLED=false npm run build
+```

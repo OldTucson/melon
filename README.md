@@ -235,3 +235,24 @@ npm run inspiration:concept-cleanup
 ```
 
 状态命令仅返回心跳年龄、健康状态、队列计数和最老排队年龄；超过 90 秒或缺失心跳返回非零。清理命令仅接受无参数或 `--dry-run`，保留至少 24 小时，默认每批最多 25 个集合和 25 个研究对象键；dry-run 不修改数据库或对象。生产使用 `/etc/melon/web.env` 与每日 systemd timer。完整安装、灰度验收、费用核对和非破坏回滚步骤见[概念套图上线与运行](docs/operations/web-production.md#概念套图上线与运行)。既有阶段“生成禁用”要求在该独立门禁完成前继续生效。
+
+### 概念套图验证：离线与计费严格分开
+
+离线浏览器门禁使用独立 `melon_concepts_e2e` 数据库和默认端口 3214。直接指定 `inspiration-concepts.spec.ts` 自动选择 metadata-only，绝不运行 legacy OSS setup。创建、重试、版本上限、删除、分享撤销和跨租户拒绝走真实应用/API/数据库；worker 阶段由测试数据库推进，图片/下载响应使用本地非均匀 PNG。没有生成 worker、真实提供方请求或 OSS 请求。浏览器拒绝任何外部请求并要求零 page/console error。
+
+```bash
+E2E_METADATA_ONLY=1 npm run test:e2e -- tests/e2e/inspiration-concepts.spec.ts --project=chromium
+npm run test:e2e:concepts-disabled
+```
+
+第一条覆盖 1512×982、1440×900、768×1024、390×844 的 owner/share、零方案、排队、部分失败、重试、完成、三版本、抽屉和预览；第二条以关闭生成开关的独立服务器启动验证历史成图仍可读。截图在 `test-results/concepts-enabled/` 与 `test-results/concepts-disabled/`，同一模式的后一次 Playwright 运行会覆盖对应输出目录，保存验收资料后再重跑。图片解码/像素、3:4/3:4/4:3 比例、稳定几何、阅读宽度、溢出、焦点可见与恢复均自动检查。浏览器下载使用拦截字节；真实下载鉴权和响应头由路由/资源集成测试验证，真实 OSS/账单不属于这条门禁。
+
+真实三阶段测试默认跳过，包括常规 `npm test`。只有另外获得一次计费授权、在受控环境核对私有 OSS 权限后才能执行：
+
+```bash
+npm run test:inspiration:concept-real
+```
+
+脚本显式设置 `RUN_REAL_INSPIRATION_CONCEPT_TESTS=1`，最多提交一张草图、一张效果图和一张款式图，不重试付费提交；每阶段最多 24 次有界退避查询，总请求阶段预算 12 分钟。固定本地参考图最多两张，衍生输入为已持久化草图加这两张参考。模型固定 `qwen-image-3.0-pro`，尺寸为 1536×2048、1536×2048、2048×1536，导入后解码验证并在 finally 删除烟测对象。失败仅输出固定错误，不打印提示词、provider ID、URL、凭据、对象键或 Base64；清理失败同样使测试失败。配置在 opt-in 后才读取环境及 `.env.local` 白名单，进程环境优先；凭据存在不代表计费授权。
+
+**待发布门禁：**目标 Linux systemd verify/实际环境探针、上述真实提供方与私有 OSS/账单烟测、一次受控生产套图（草图提交后重启 worker，两个衍生图仍完成）均须另行执行并留存脱敏证据。离线 PASS 不允许打开生产 UI；在这些门禁完成前保持 `INSPIRATION_CONCEPT_IMAGES_ENABLED=false` 和 `INSPIRATION_CONCEPT_RELEASE_APPROVED=false`。

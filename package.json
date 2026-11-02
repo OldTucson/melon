@@ -32,7 +32,10 @@
     "prod:check": "node --conditions=react-server --import tsx scripts/check-production.ts",
     "image-search:backfill": "node --conditions=react-server --import tsx scripts/backfill-image-search.ts",
     "inspiration:concept-cleanup": "node --conditions=react-server --import tsx scripts/cleanup-inspiration-concept-objects.ts",
-    "inspiration:concept-status": "node --conditions=react-server --import tsx scripts/check-inspiration-concept-worker.ts"
+    "inspiration:concept-status": "node --conditions=react-server --import tsx scripts/check-inspiration-concept-worker.ts",
+    "test:inspiration:concept-real": "RUN_REAL_INSPIRATION_CONCEPT_TESTS=1 vitest run src/features/inspiration-concepts/qwen-image-provider.real.test.ts",
+    "test:e2e:concepts": "E2E_METADATA_ONLY=1 playwright test tests/e2e/inspiration-concepts.spec.ts --project=chromium",
+    "test:e2e:concepts-disabled": "E2E_METADATA_ONLY=1 E2E_CONCEPTS_DISABLED=1 playwright test tests/e2e/inspiration-concepts.spec.ts --project=chromium"
   },
   "dependencies": {
     "@alicloud/credentials": "^2.4.7",

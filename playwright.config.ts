@@ -2,6 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 import {
   E2E_BASE_URL,
+  E2E_CONCEPTS,
   E2E_DATABASE_URL,
   E2E_IMAGE_SEARCH,
   E2E_IMAGE_SEARCH_STUB_PORT,
@@ -13,6 +14,7 @@ import {
 const inspirationDocument = process.argv.some((argument) => argument.includes("inspiration-document.spec"));
 const E2E_METADATA_ONLY = metadataOnly || inspirationDocument;
 if (E2E_METADATA_ONLY) process.env.E2E_METADATA_ONLY = "1";
+if (E2E_CONCEPTS) process.env.E2E_CONCEPTS = "1";
 
 // Playwright workers reload this config without the original spec path in argv.
 if (E2E_IMAGE_SEARCH) process.env.E2E_IMAGE_SEARCH = "1";
@@ -36,8 +38,11 @@ const metadataEnvironment = {
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  ...(E2E_CONCEPTS ? { outputDir: `./test-results/concepts-${process.env.E2E_CONCEPTS_DISABLED === "1" ? "disabled" : "enabled"}` } : {}),
   // Commercial fixtures contain metadata only; legacy uploads require real OSS.
-  ...(E2E_IMAGE_SEARCH
+  ...(E2E_CONCEPTS
+    ? { testMatch: ["inspiration-concepts.spec.ts"] }
+    : E2E_IMAGE_SEARCH
     ? { testMatch: ["image-search.spec.ts", "palette-search.spec.ts"] }
     : E2E_METADATA_ONLY
       ? {
@@ -51,6 +56,7 @@ export default defineConfig({
       : {
           testIgnore: [
             "inspiration-document.spec.ts",
+            "inspiration-concepts.spec.ts",
             "commercial-authorizations.spec.ts",
             "dashboard.spec.ts",
             "image-search.spec.ts",
@@ -82,7 +88,7 @@ export default defineConfig({
       ]
     : [
         {
-          name: "chromium-desktop",
+          name: E2E_CONCEPTS ? "chromium" : "chromium-desktop",
           use: {
             ...devices["Desktop Chrome"],
             channel: "chrome",
@@ -128,7 +134,16 @@ export default defineConfig({
             APP_ORIGIN: E2E_BASE_URL,
             DATABASE_URL: E2E_DATABASE_URL,
             MELON_E2E_SERVER: "1",
-            INSPIRATION_ENABLED: "false",
+            INSPIRATION_ENABLED: E2E_CONCEPTS ? "true" : "false",
+            INSPIRATION_CONCEPT_IMAGES_ENABLED: E2E_CONCEPTS && process.env.E2E_CONCEPTS_DISABLED !== "1" ? "true" : "false",
+            INSPIRATION_CONCEPT_RELEASE_APPROVED: "false",
+            ...(E2E_CONCEPTS ? {
+              OSS_ADAPTER: "real",
+              DASHSCOPE_API_KEY: "offline-no-provider-credentials",
+              DASHSCOPE_WORKSPACE_ID: "offline",
+              DASHSCOPE_OPENAI_BASE_URL: "https://offline.maas.aliyuncs.com/compatible-mode/v1",
+              DASHSCOPE_NATIVE_BASE_URL: "https://offline.maas.aliyuncs.com/api/v1",
+            } : {}),
             INSPIRATION_WEB_VISUALS_ENABLED: "false",
             IMAGE_SEARCH_ENABLED: E2E_IMAGE_SEARCH ? "true" : "false",
             ...(E2E_METADATA_ONLY ? metadataEnvironment : {}),
