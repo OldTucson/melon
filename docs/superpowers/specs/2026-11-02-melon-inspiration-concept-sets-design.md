@@ -234,6 +234,8 @@ This supporting relation normalizes selected inputs:
 
 Every referenced asset must be a completed `web_evidence` asset from the same owner, analysis, and active research-visual job. `library_match` and generated assets are rejected.
 
+Research-visual completion and concept-set creation use the same transaction-scoped analysis lock. A visual refresh may delete a superseded evidence object only when no non-deleted concept set references that asset. This prevents refresh/create races from leaving queued generation or later derivative retries with a missing reference. Once the final referencing set is deleted, scheduled cleanup may remove the now-unreferenced superseded evidence object.
+
 ### 8.3 `inspiration_concept_tasks`
 
 Fields:
