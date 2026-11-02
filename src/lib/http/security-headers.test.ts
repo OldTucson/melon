@@ -31,6 +31,17 @@ describe("SECURITY_HEADERS", () => {
     expect(csp).not.toContain("'unsafe-eval'");
   });
 
+  it("allows WebAssembly upload hashing without allowing JavaScript eval", () => {
+    const headers = Object.fromEntries(
+      SECURITY_HEADERS.map(({ key, value }) => [key, value]),
+    );
+
+    expect(headers["Content-Security-Policy"]).toContain(
+      "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'",
+    );
+    expect(headers["Content-Security-Policy"]).not.toContain("'unsafe-eval'");
+  });
+
   it("allows React debugging eval only in the development policy", () => {
     const headers = Object.fromEntries(
       createSecurityHeaders({ allowUnsafeEval: true }).map(({ key, value }) => [

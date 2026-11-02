@@ -7,6 +7,7 @@ export function createSecurityHeaders(
 ) {
   const scriptSources = ["'self'", "'unsafe-inline'"];
   if (options.allowUnsafeEval) scriptSources.push("'unsafe-eval'");
+  scriptSources.push("'wasm-unsafe-eval'");
 
   const contentSecurityPolicy = [
     "base-uri 'self'",
