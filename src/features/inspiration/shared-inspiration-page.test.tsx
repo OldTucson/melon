@@ -7,6 +7,7 @@ import { generatedConceptAssetFixture, libraryMatchAssetFixture, webEvidenceAsse
 import { InspirationDocument } from "./inspiration-document";
 import { SharedInspirationPage } from "./shared-inspiration-page";
 import { inspirationResultFixture, inspirationSourceFixture } from "./test-fixtures";
+import { conceptAssetFixture, conceptSetFixture } from "@/features/inspiration-concepts/test-fixtures";
 
 const shareId = "00000000-0000-4000-8000-000000000009";
 const analysis: InspirationSharedDocumentDto = {
@@ -22,6 +23,19 @@ const analysis: InspirationSharedDocumentDto = {
 afterEach(cleanup);
 
 describe("public inspiration report", () => {
+  it("renders completed set outputs in their direction using only shared resources and AI labels", () => {
+    const document = composePublicInspirationDocument({ shareId, sources: [inspirationSourceFixture], result: inspirationResultFixture,
+      conceptSets: [{ id: conceptSetFixture.id, directionIndex: 0, version: 2, createdAt: conceptSetFixture.createdAt, outputs: [conceptAssetFixture] }] });
+    const { container } = render(<SharedInspirationPage analysis={{ ...analysis, document }} />);
+    const direction = screen.getByRole("region", { name: "柔和通勤" });
+    expect(within(direction).getByRole("img")).toHaveAttribute("src", `/share/inspiration/${shareId}/assets/${conceptAssetFixture.id}`);
+    expect(within(direction).getByText("AI 生成")).toBeVisible();
+    expect(within(direction).getAllByRole("figure")).toHaveLength(1);
+    expect(container.querySelector('img[src^="/api/"], form')).toBeNull();
+    for (const name of [/生成整套/, /重试/, /方案操作/, /删除/]) expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+    expect(container.innerHTML).not.toMatch(/errorCode|provider|oss|operationId|等待草图/);
+  });
+
   it("renders the continuous editorial document and attributed share-local hero, evidence and products", () => {
     render(<SharedInspirationPage analysis={analysis} />);
     expect(screen.getByRole("main")).toBeVisible();

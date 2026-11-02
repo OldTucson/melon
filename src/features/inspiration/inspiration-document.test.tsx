@@ -21,6 +21,7 @@ import {
 import { EvidenceImage } from "./inspiration-evidence-dialog";
 import { InspirationDocument } from "./inspiration-document";
 import { InspirationVisualStatus } from "./inspiration-visual-status";
+import { conceptSetFixture } from "@/features/inspiration-concepts/test-fixtures";
 import {
   inspirationResultFixture as result,
   inspirationSourceFixture as source,
@@ -44,6 +45,16 @@ const compose = (
 afterEach(cleanup);
 
 describe("continuous inspiration document", () => {
+  it("places persisted concept sets in their direction and counts completed outputs even without paid controls", () => {
+    const document = composeInspirationDocument({ result, sources: [source], conceptSets: [conceptSetFixture] });
+    render(<InspirationDocument document={document} title="研究" prompt="需求" />);
+    const direction = screen.getByRole("region", { name: "柔和通勤" });
+    expect(within(direction).getByRole("img", { name: "柔和通勤设计草图" })).toBeVisible();
+    expect(within(direction).getByText("AI 生成")).toBeVisible();
+    expect(screen.getByText("1 个来源 · 1 张视觉素材")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "生成整套成图" })).not.toBeInTheDocument();
+  });
+
   it("reserves bounded media within readable editorial sections during initial enrichment", () => {
     const { rerender } = render(<InspirationDocument document={compose([])} title="研究" prompt="需求" initialEnrichment />);
     expect(screen.getByText(result.summary)).toBeVisible();

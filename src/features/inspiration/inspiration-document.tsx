@@ -8,6 +8,7 @@ import {
 import { InspirationDimensionSections } from "./inspiration-dimension-sections";
 import { InspirationProductReferences } from "./inspiration-product-references";
 import { InspirationDirectionSection } from "./inspiration-direction-section";
+import type { InspirationConceptControls } from "./inspiration-concept-controller";
 import styles from "./inspiration.module.css";
 
 type InspirationDocumentProps = {
@@ -15,7 +16,7 @@ type InspirationDocumentProps = {
   prompt: string;
   completedAt?: string | null;
 } & (
-  | { mode?: "private"; document: InspirationDocumentDto; headerActions?: ReactNode; initialEnrichment?: boolean }
+  | { mode?: "private"; document: InspirationDocumentDto; headerActions?: ReactNode; initialEnrichment?: boolean; conceptControls?: InspirationConceptControls; activeVisualJobId?: string | null }
   | { mode: "public"; document: PublicInspirationDocumentDto; headerActions?: never }
 );
 
@@ -26,7 +27,7 @@ export function InspirationDocument(props: InspirationDocumentProps) {
   const visualCount = (document.hero ? 1 : 0)
     + document.marketSignals.reduce((count, { evidence }) => count + evidence.length, 0)
     + document.products.length
-    + document.directions.reduce((count, { libraryMatches, concepts }) => count + libraryMatches.length + concepts.length, 0)
+    + document.directions.reduce((count, { libraryMatches, concepts, conceptSets }) => count + libraryMatches.length + concepts.length + conceptSets.reduce((total, set) => total + ("outputs" in set ? set.outputs.length : set.slots.filter(({ asset }) => asset).length), 0), 0)
     + document.unassignedLibraryMatches.length;
   return (
     <article className={styles.document} aria-label={title}>
@@ -72,7 +73,9 @@ export function InspirationDocument(props: InspirationDocumentProps) {
       <InspirationDirectionSection
         {...(props.mode === "public"
           ? { mode: "public" as const, directions: props.document.directions, sources: props.document.sources }
-          : { mode: "private" as const, directions: props.document.directions, unassignedLibraryMatches: props.document.unassignedLibraryMatches, sources: props.document.sources, loading: initialEnrichment })}
+          : { mode: "private" as const, directions: props.document.directions, unassignedLibraryMatches: props.document.unassignedLibraryMatches, sources: props.document.sources, loading: initialEnrichment,
+            conceptControls: props.conceptControls, activeVisualJobId: props.activeVisualJobId ?? null,
+            referenceAssets: [...(document.hero ? [document.hero] : []), ...document.marketSignals.flatMap(({ evidence }) => evidence), ...document.products] })}
       />
       <section className={styles.documentSection} aria-label="研究来源">
         <h3>研究来源</h3>

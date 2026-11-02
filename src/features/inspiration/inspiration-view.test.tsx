@@ -41,6 +41,7 @@ import {
 } from "./test-fixtures";
 import { inspirationKeys } from "./query-keys";
 import { inspirationApi } from "./inspiration-api";
+import { conceptSetFixture } from "@/features/inspiration-concepts/test-fixtures";
 
 const pageMocks = vi.hoisted(() => ({
   requireUser: vi.fn(),
@@ -1763,6 +1764,53 @@ describe("review regressions: missing detail retry recovery", () => {
       await historyRecord(user, /夏日材质研究/),
     ).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByText("研究详情加载失败")).not.toBeInTheDocument();
+  });
+});
+
+describe("concept sets in the research workspace", () => {
+  it("creates from a direction's drawer with only completed external references and no report spinner", async () => {
+    record = completed;
+    visualMocks.get.mockResolvedValue({ ...visualBoardFixture, conceptGenerationAvailable: true, concepts: [] });
+    const originalFetch = globalThis.fetch;
+    let concepts: unknown[] = [];
+    let submitted: unknown;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input) === `${endpoint}/concept-sets`) {
+        if (init?.method === "POST") {
+          submitted = JSON.parse(String(init.body));
+          const queued = { ...conceptSetFixture, status: "queued", slots: [{ kind: "sketch", asset: null, task: { status: "queued", errorCode: null } }, { kind: "effect", asset: null, task: null }, { kind: "flat", asset: null, task: null }] };
+          concepts = [queued]; return json(queued, 201);
+        }
+        return json(concepts);
+      }
+      return originalFetch(input, init);
+    }));
+    const user = userEvent.setup(); renderWorkspace();
+    const direction = await screen.findByRole("region", { name: "柔和通勤" });
+    await user.click(await within(direction).findByRole("button", { name: "生成整套成图" }));
+    const drawer = screen.getByRole("dialog", { name: "生成整套成图" });
+    expect(within(drawer).getAllByRole("checkbox")).toHaveLength(1);
+    expect(within(drawer).queryByText("雨后花园")).not.toBeInTheDocument();
+    await user.click(within(drawer).getByRole("button", { name: "生成整套成图" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(submitted).toEqual({ operationId: expect.any(String), directionIndex: 0, visualJobId: visualBoardFixture.activeJob.id, referenceAssetIds: [visualBoardFixture.webEvidence[0]!.id] });
+    expect(within(direction).getByText("排队中")).toBeVisible();
+    expect(within(direction).getByRole("button", { name: "生成整套成图" })).toBeDisabled();
+    expect(screen.getByText(completed.result!.summary)).toBeVisible();
+    expect(screen.queryByText("正在分析…")).not.toBeInTheDocument();
+  });
+
+  it("reloads feature-off persisted results without generation or retry controls", async () => {
+    record = completed;
+    visualMocks.get.mockResolvedValue({ ...visualBoardFixture, conceptSets: [conceptSetFixture], concepts: [], libraryMatches: [] });
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", vi.fn((input: string | URL | Request, init?: RequestInit) => String(input) === `${endpoint}/concept-sets` ? Promise.resolve(json([conceptSetFixture])) : originalFetch(input, init)));
+    renderWorkspace();
+    const direction = await screen.findByRole("region", { name: "柔和通勤" });
+    expect(await within(direction).findByRole("img", { name: "柔和通勤设计草图" })).toBeVisible();
+    expect(within(direction).getByText("AI 生成")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "生成整套成图" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /重试服装/ })).not.toBeInTheDocument();
   });
 });
 

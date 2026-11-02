@@ -1074,6 +1074,290 @@
   margin-inline: auto;
 }
 
+.conceptCreate {
+  margin-top: 20px;
+}
+.conceptCreate > p {
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+.conceptSection {
+  margin-top: 22px;
+  container-type: inline-size;
+}
+.conceptTabs {
+  display: flex;
+  gap: 20px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.conceptTab {
+  flex-shrink: 0;
+  padding: 10px 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.conceptTab[data-state="active"] {
+  border-bottom-color: var(--text-primary);
+  color: var(--text-primary);
+}
+.conceptPanel {
+  position: relative;
+  padding-top: 16px;
+}
+.conceptSetActions {
+  display: flex;
+  justify-content: flex-end;
+  min-height: 32px;
+  margin-bottom: 8px;
+}
+.conceptSlots {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+.conceptFigure {
+  min-width: 0;
+  margin: 0;
+}
+.conceptMedia {
+  position: relative;
+  min-height: 160px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--surface-hover);
+}
+.conceptMedia > button,
+.conceptMedia .evidenceMedia {
+  width: 100%;
+  height: 100%;
+}
+.conceptMedia .evidenceMedia {
+  position: absolute;
+  inset: 0;
+}
+.conceptPlaceholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  padding: 20px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+.conceptCaption {
+  padding-top: 10px;
+  font-size: 12px;
+}
+.conceptCaption > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+}
+.conceptCaption strong {
+  font-weight: 500;
+}
+.conceptCaption span {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.conceptSlotStatus {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 40px;
+}
+.conceptSlotStatus > span {
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.conceptSlotStatus .iconButton {
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.conceptMenu {
+  z-index: 70;
+  min-width: 190px;
+  padding: 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-panel);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-overlay);
+}
+.conceptMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px;
+  border-radius: 4px;
+  outline: none;
+  font-size: 12px;
+  cursor: pointer;
+}
+.conceptMenuItem svg {
+  width: 14px;
+  height: 14px;
+}
+.conceptMenuItem[data-highlighted] {
+  background: var(--surface-hover);
+}
+.conceptMenuItem[data-disabled] {
+  opacity: 0.45;
+  cursor: default;
+}
+.conceptDrawer {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: auto;
+  transform: none;
+  width: min(520px, 100%);
+  max-height: 100dvh;
+  border-radius: 0;
+  padding: 28px;
+}
+.conceptDrawer h2 {
+  font-size: 20px;
+  font-weight: 500;
+}
+.conceptDirectionSummary {
+  margin: 28px 0;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.conceptDirectionSummary > strong {
+  font-size: 16px;
+  font-weight: 500;
+}
+.conceptDirectionSummary .directionDetails {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.conceptReferenceHeading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+.conceptReferenceHeading strong {
+  font-weight: 500;
+}
+.conceptReferenceHeading > span {
+  color: var(--text-secondary);
+}
+.conceptReferences {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.conceptReference {
+  min-width: 0;
+  cursor: pointer;
+}
+.conceptReference > .evidenceMedia {
+  aspect-ratio: 3 / 4 !important;
+  border-radius: 6px;
+}
+.conceptReference > span:last-child {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding-top: 10px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.conceptCheckbox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--border-strong, var(--text-secondary));
+  border-radius: 3px;
+  background: transparent;
+  color: var(--surface-panel);
+  cursor: pointer;
+}
+.conceptCheckbox[data-state="checked"] {
+  background: var(--text-primary);
+  border-color: var(--text-primary);
+}
+.conceptCheckbox svg {
+  display: block;
+  width: 12px;
+  height: 12px;
+}
+.conceptDrawerFooter {
+  margin-top: 32px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border-subtle);
+}
+.conceptDrawerFooter > p {
+  font-size: 12px;
+  line-height: 1.6;
+}
+.conceptDrawerFooter > button {
+  width: 100%;
+  justify-content: center;
+  margin-top: 12px;
+}
+.conceptOutputDialog .evidenceMedia {
+  width: auto;
+  max-width: 100%;
+  max-height: 64dvh;
+  height: min(64dvh, 680px);
+}
+.conceptOutputDialog footer {
+  margin-top: 18px;
+  justify-content: flex-end;
+}
+.conceptOutputDialog a {
+  text-decoration: none;
+}
+
+@container (max-width: 900px) {
+  .conceptSlots {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@container (max-width: 520px) {
+  .conceptSlots {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 520px) {
+  .conceptDrawer {
+    padding: 22px;
+  }
+  .conceptReferences {
+    gap: 8px;
+  }
+}
+.conceptLocalError {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+}
+
 @media (max-width: 1280px) {
   .productGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

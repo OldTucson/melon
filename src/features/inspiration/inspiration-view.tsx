@@ -29,6 +29,7 @@ import { InspirationHistoryDialog } from "./inspiration-history-dialog";
 import { InspirationNewDialog } from "./inspiration-new-dialog";
 import { InspirationPromptForm } from "./inspiration-prompt-form";
 import { InspirationDocument } from "./inspiration-document";
+import { InspirationConceptController } from "./inspiration-concept-controller";
 import { composeInspirationDocument } from "@/features/inspiration-visuals/document-composer";
 import { InspirationShareDialog } from "./inspiration-share-dialog";
 import { InspirationVisualStatus } from "./inspiration-visual-status";
@@ -572,15 +573,19 @@ export function InspirationView() {
                     refreshing={selectedVisualPending}
                     onRefresh={refreshSelectedVisuals}
                   />
-                  <InspirationDocument
-                    key={selected.id}
-                    document={document}
+                  <InspirationConceptController key={selected.id} analysisId={selected.id}
+                    available={visuals.data?.conceptGenerationAvailable === true} initialSets={visuals.data?.conceptSets ?? []}>
+                    {(conceptControls) => <InspirationDocument
+                    document={{ ...document, directions: document.directions.map((entry, directionIndex) => ({ ...entry, conceptSets: conceptControls.sets.filter((set) => set.directionIndex === directionIndex) })) }}
                     title={selected.title}
                     prompt={selected.prompt}
                     completedAt={selected.completedAt}
                     initialEnrichment={!visuals.data?.activeJob && (selectedVisualPending || visuals.data?.refreshJob?.status === "pending")}
                     headerActions={recordActions}
-                  />
+                    conceptControls={conceptControls}
+                    activeVisualJobId={visuals.data?.activeJob?.status === "completed" ? visuals.data.activeJob.id : null}
+                  />}
+                  </InspirationConceptController>
                 </>
               )}
               {activeDialog?.kind === "share" && (

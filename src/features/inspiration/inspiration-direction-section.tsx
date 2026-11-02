@@ -1,9 +1,12 @@
 import type { InspirationDocumentDto, PublicInspirationDocumentDto } from "@/features/inspiration-visuals/document-contracts";
-import type { LibraryMatchAssetDto } from "@/features/inspiration-visuals/contracts";
+import type { LibraryMatchAssetDto, WebEvidenceAssetDto } from "@/features/inspiration-visuals/contracts";
 import type { InspirationSource } from "./contracts";
 import { EvidenceImage } from "./inspiration-evidence-dialog";
 import { EvidenceLoadingFigure } from "./inspiration-hero-evidence";
 import { DocumentSourceLinks } from "./inspiration-signal-section";
+import type { InspirationConceptControls } from "./inspiration-concept-controller";
+import { InspirationConceptDrawer } from "./inspiration-concept-drawer";
+import { conceptCreationDisabledReason, InspirationConceptSection } from "./inspiration-concept-section";
 import styles from "./inspiration.module.css";
 
 function PrivateMatches({ matches }: { matches: LibraryMatchAssetDto[] }) {
@@ -38,7 +41,8 @@ function PrivateMatches({ matches }: { matches: LibraryMatchAssetDto[] }) {
 }
 
 type DirectionSectionProps = { sources: InspirationSource[] } & (
-  | { mode?: "private"; directions: InspirationDocumentDto["directions"]; unassignedLibraryMatches: LibraryMatchAssetDto[]; loading?: boolean }
+  | { mode?: "private"; directions: InspirationDocumentDto["directions"]; unassignedLibraryMatches: LibraryMatchAssetDto[]; loading?: boolean;
+      conceptControls?: InspirationConceptControls; activeVisualJobId?: string | null; referenceAssets?: WebEvidenceAssetDto[] }
   | { mode: "public"; directions: PublicInspirationDocumentDto["directions"] }
 );
 
@@ -94,6 +98,22 @@ export function InspirationDirectionSection(props: DirectionSectionProps) {
               indexes={direction.sourceIndexes}
               sources={sources}
             />
+            {props.mode !== "public" && props.conceptControls && <InspirationConceptDrawer
+              direction={direction} directionIndex={index} available={props.conceptControls.available}
+              activeVisualJobId={props.activeVisualJobId ?? null} assets={props.referenceAssets ?? []}
+              disabledReason={conceptCreationDisabledReason(props.directions[index]!.conceptSets)}
+              pending={props.conceptControls.pending} error={props.conceptControls.error}
+              onGenerate={props.conceptControls.onCreate}
+            />}
+            {props.mode !== "public" && index === 0 && props.conceptControls?.error && <div className={styles.conceptLocalError}>
+              <p role="alert">{props.conceptControls.error}</p>
+              <button className={styles.button} onClick={props.conceptControls.onReload}>重新加载成图</button>
+            </div>}
+            {props.mode === "public"
+              ? <InspirationConceptSection mode="public" sets={props.directions[index]!.conceptSets} />
+              : <InspirationConceptSection sets={props.directions[index]!.conceptSets}
+                available={props.conceptControls?.available} pending={props.conceptControls?.pending}
+                onRetry={props.conceptControls?.onRetry} onRegenerate={props.conceptControls?.onRegenerate} onDelete={props.conceptControls?.onDelete} />}
             {concepts.length > 0 && (
               <div className={styles.conceptGrid}>
                 {concepts.map((asset, conceptIndex) => (
